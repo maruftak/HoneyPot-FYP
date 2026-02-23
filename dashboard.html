@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>honeyPot — IoT Threat Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:      #040608;
+  --surface: #0a0d12;
+  --card:    #0e1218;
+  --raised:  #131820;
+  --border:  rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.13);
+  --green:   #00ff88;
+  --green2:  rgba(0,255,136,0.12);
+  --red:     #ff3054;
+  --red2:    rgba(255,48,84,0.12);
+  --orange:  #ff8c00;
+  --orange2: rgba(255,140,0,0.12);
+  --yellow:  #ffd60a;
+  --blue:    #0a84ff;
+  --blue2:   rgba(10,132,255,0.12);
+  --purple:  #bf5af2;
+  --text:    rgba(255,255,255,0.9);
+  --muted:   rgba(255,255,255,0.4);
+  --dim:     rgba(255,255,255,0.2);
+  --mono:    'JetBrains Mono', monospace;
+  --sans:    'Inter', sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{height:100%}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--sans);
+  height:100%;
+  overflow-x:hidden;
+  font-size:13px;
+}
+/* scanline */
+body::before{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:9998;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);
+}
+
+/* ─── LAYOUT ─────────────────────────────── */
+.layout{display:grid;grid-template-columns:200px 1fr;grid-template-rows:52px 1fr;min-height:100vh}
+
+/* ─── TOPBAR ─────────────────────────────── */
+.topbar{
+  grid-column:1/-1;
+  background:rgba(10,13,18,0.97);
+  backdrop-filter:blur(20px);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 20px;gap:24px;
+  position:sticky;top:0;z-index:200;
+}
+.brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.brand-hex{
+  width:30px;height:30px;background:var(--green);
+  clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+  display:flex;align-items:center;justify-content:center;font-size:14px;
+  box-shadow:0 0 16px rgba(0,255,136,0.5);
+}
+.brand-name{font-family:var(--mono);font-weight:700;font-size:16px;letter-spacing:2px;color:#fff}
+.brand-name span{color:var(--green)}
+.live-pill{
+  display:flex;align-items:center;gap:6px;
+  padding:4px 10px;border:1px solid rgba(0,255,136,0.3);border-radius:20px;
+  font-family:var(--mono);font-size:10px;color:var(--green);letter-spacing:1px;
+}
+.live-dot{
+  width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 6px var(--green);animation:blink 1.4s ease infinite;
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+.topbar-mid{display:flex;gap:28px;margin:0 auto}
+.tstat{display:flex;flex-direction:column;align-items:center}
+.tstat-lbl{font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px}
+.tstat-val{font-family:var(--mono);font-size:15px;font-weight:700;color:#fff}
+.tstat-val.red{color:var(--red)} .tstat-val.green{color:var(--green)}
+.tstat-val.orange{color:var(--orange)}
+.device-tag{
+  font-family:var(--mono);font-size:10px;color:var(--green);
+  background:var(--green2);border:1px solid rgba(0,255,136,0.2);
+  padding:4px 10px;border-radius:4px;white-space:nowrap;
+}
+#refreshBtn{
+  margin-left:auto;background:none;border:1px solid var(--border2);color:var(--muted);
+  font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;cursor:pointer;
+  transition:.2s;
+}
+#refreshBtn:hover{border-color:var(--green);color:var(--green)}
+
+/* ─── SIDEBAR ────────────────────────────── */
+.sidebar{
+  background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;padding:16px 0;
+  position:sticky;top:52px;height:calc(100vh - 52px);overflow-y:auto;
+}
+.nav-group-label{
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+  letter-spacing:2px;text-transform:uppercase;padding:12px 16px 6px;
+}
+.nav-item{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 16px;margin:1px 8px;border-radius:6px;cursor:pointer;
+  transition:.15s;color:var(--muted);font-size:12px;font-weight:500;
+  border:1px solid transparent;position:relative;
+}
+.nav-item:hover{background:var(--card);color:var(--text)}
+.nav-item.active{
+  background:var(--green2);color:var(--green);
+  border-color:rgba(0,255,136,0.2);
+}
+.nav-item .ni-icon{font-size:14px;width:18px;text-align:center}
+.nav-item .ni-badge{
+  margin-left:auto;font-family:var(--mono);font-size:9px;
+  background:rgba(255,48,84,0.15);color:var(--red);
+  padding:2px 6px;border-radius:10px;border:1px solid rgba(255,48,84,0.2);
+}
+.nav-item .ni-badge.green{background:var(--green2);color:var(--green);border-color:rgba(0,255,136,0.2)}
+.sidebar-footer{
+  margin-top:auto;padding:16px;border-top:1px solid var(--border);
+  font-family:var(--mono);font-size:9px;color:var(--muted);text-align:center;
+}
+
+/* ─── MAIN CONTENT ───────────────────────── */
+.main{padding:20px;overflow-y:auto;display:flex;flex-direction:column;gap:20px}
+
+/* ─── TICKER ─────────────────────────────── */
+.ticker{
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  overflow:hidden;display:flex;align-items:center;height:32px;flex-shrink:0;
+}
+.ticker-label{
+  background:var(--red);color:#fff;font-family:var(--mono);font-size:9px;
+  font-weight:700;letter-spacing:2px;padding:0 12px;height:100%;
+  display:flex;align-items:center;white-space:nowrap;flex-shrink:0;
+}
+.ticker-wrap{flex:1;overflow:hidden;position:relative}
+.ticker-track{
+  display:flex;gap:40px;white-space:nowrap;
+  animation:scroll 40s linear infinite;
+}
+@keyframes scroll{from{transform:translateX(100%)}to{transform:translateX(-100%)}}
+.ticker-event{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.ticker-sep{color:var(--border2);margin:0 8px}
+
+/* ─── PANELS ─────────────────────────────── */
+.panel{display:none}
+.panel.active{display:contents}
+
+/* ─── METRIC CARDS ───────────────────────── */
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.metric-card{
+  background:var(--card);border:1px solid var(--border);border-radius:8px;
+  padding:16px;position:relative;overflow:hidden;transition:.2s;
+}
+.metric-card:hover{border-color:var(--border2);transform:translateY(-2px)}
+.metric-card::before{
+  content:'';position:absolute;top:0;right:0;width:40%;height:1px;
+  background:linear-gradient(90deg,transparent,var(--border2));
+}
+.mc-label{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px}
+.mc-val{font-family:var(--mono);font-size:28px;font-weight:700;color:#fff;line-height:1}
+.mc-sub{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px}
+.mc-icon{position:absolute;top:12px;right:14px;font-size:20px;opacity:.25}
+.mc-bar{height:2px;border-radius:1px;margin-top:12px;background:var(--border)}
+.mc-bar-fill{height:100%;border-radius:1px;transition:width .8s ease}
+
+/* accent colours per card */
+.mc-green  .mc-val{color:var(--green)}  .mc-green  .mc-bar-fill{background:var(--green)}
+.mc-red    .mc-val{color:var(--red)}    .mc-red    .mc-bar-fill{background:var(--red)}
+.mc-orange .mc-val{color:var(--orange)} .mc-orange .mc-bar-fill{background:var(--orange)}
+.mc-blue   .mc-val{color:var(--blue)}   .mc-blue   .mc-bar-fill{background:var(--blue)}
+.mc-purple .mc-val{color:var(--purple)} .mc-purple .mc-bar-fill{background:var(--purple)}
+.mc-yellow .mc-val{color:var(--yellow)} .mc-yellow .mc-bar-fill{background:var(--yellow)}
+
+/* ─── SECTION HEADERS ────────────────────── */
+.section-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px;
+}
+.section-title{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:2px;text-transform:uppercase}
+.section-actions{display:flex;gap:8px;align-items:center}
+.btn-sm{
+  font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;
+  border:1px solid var(--border2);background:none;color:var(--muted);cursor:pointer;transition:.15s;
+}
+.btn-sm:hover{border-color:var(--green);color:var(--green)}
+.btn-sm.active{background:var(--green2);border-color:rgba(0,255,136,0.3);color:var(--green)}
+
+/* ─── GRID LAYOUTS ───────────────────────── */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+.grid-60-40{display:grid;grid-template-columns:60fr 40fr;gap:16px}
+.grid-40-60{display:grid;grid-template-columns:40fr 60fr;gap:16px}
+
+/* ─── CARD ───────────────────────────────── */
+.card{
+  background:var(--card);border:1px solid var(--border);border-radius:8px;padding:18px;
+}
+.card-title{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between}
+
+/* ─── MAP ─────────────────────────────────── */
+#map{
+  width:100%;height:400px;border-radius:6px;
+  background:#0a0d12;z-index:1;
+}
+/* Override Leaflet tiles for dark theme — better contrast */
+.leaflet-tile{filter:brightness(.45) contrast(1.2) saturate(.3)}
+.leaflet-container{background:#0a0d12 !important}
+.leaflet-control-zoom{display:none}
+.leaflet-control-attribution{display:none}
+
+/* ─── CHART WRAPPER ──────────────────────── */
+.chart-wrap{position:relative;width:100%}
+.chart-wrap canvas{max-width:100%}
+
+/* ─── TABLE ──────────────────────────────── */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{
+  font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);
+  text-align:left;white-space:nowrap;
+}
+td{padding:9px 12px;border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:middle;color:var(--text)}
+tr:hover td{background:rgba(255,255,255,0.02)}
+.mono{font-family:var(--mono)}
+.truncate{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ─── BADGES ─────────────────────────────── */
+.badge{
+  display:inline-flex;align-items:center;font-family:var(--mono);font-size:9px;
+  padding:2px 7px;border-radius:3px;font-weight:700;letter-spacing:.5px;border:1px solid;
+  white-space:nowrap;
+}
+.b-crit{background:var(--red2);color:var(--red);border-color:rgba(255,48,84,.3)}
+.b-high{background:var(--orange2);color:var(--orange);border-color:rgba(255,140,0,.3)}
+.b-med{background:rgba(255,214,10,.1);color:var(--yellow);border-color:rgba(255,214,10,.2)}
+.b-low{background:var(--green2);color:var(--green);border-color:rgba(0,255,136,.2)}
+.b-blue{background:var(--blue2);color:var(--blue);border-color:rgba(10,132,255,.2)}
+.b-purple{background:rgba(191,90,242,.1);color:var(--purple);border-color:rgba(191,90,242,.2)}
+
+/* ─── RANK LIST ──────────────────────────── */
+.rank-list{list-style:none;display:flex;flex-direction:column;gap:8px}
+.rank-item{display:flex;align-items:center;gap:10px}
+.rank-num{font-family:var(--mono);font-size:10px;color:var(--muted);width:16px;text-align:right;flex-shrink:0}
+.rank-info{flex:1;min-width:0}
+.rank-label{font-family:var(--mono);font-size:11px;color:var(--text);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rank-bar-wrap{height:3px;background:var(--border);border-radius:2px;margin-top:4px}
+.rank-bar-fill{height:100%;border-radius:2px;background:var(--green);transition:width .6s}
+.rank-count{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--orange);flex-shrink:0}
+
+/* ─── LOG STREAM ─────────────────────────── */
+#logStream{
+  height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;
+  font-family:var(--mono);font-size:11px;
+}
+#logStream::-webkit-scrollbar{width:4px}
+#logStream::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+.log-line{
+  display:grid;grid-template-columns:70px 70px 110px 1fr 80px;
+  gap:8px;padding:5px 8px;border-radius:4px;align-items:center;
+  border-left:2px solid transparent;
+}
+.log-line:hover{background:var(--raised)}
+.log-line.crit{border-left-color:var(--red)}
+.log-line.high{border-left-color:var(--orange)}
+.log-line.med{border-left-color:var(--yellow)}
+.log-line.low{border-left-color:var(--green)}
+.log-time{color:var(--muted);font-size:10px}
+.log-svc{font-weight:700}
+.log-ip{color:var(--blue)}
+.log-msg{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ─── FILTER BAR ─────────────────────────── */
+.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.filter-bar input,.filter-bar select{
+  background:var(--raised);border:1px solid var(--border2);color:var(--text);
+  font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:4px;
+}
+.filter-bar input:focus,.filter-bar select:focus{outline:none;border-color:var(--green)}
+
+/* ─── SERVICES GRID ──────────────────────── */
+.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}
+.svc-tile{
+  background:var(--raised);border:1px solid var(--border);border-radius:6px;
+  padding:14px 10px;text-align:center;position:relative;transition:.2s;
+}
+.svc-tile:hover{border-color:var(--border2)}
+.svc-tile.active{border-color:rgba(0,255,136,0.2)}
+.svc-tile.attacked{border-color:rgba(255,48,84,0.2)}
+.svc-dot{width:7px;height:7px;border-radius:50%;background:var(--border2);margin:0 auto 8px;position:absolute;top:8px;right:8px}
+.svc-tile.active .svc-dot{background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2s infinite}
+.svc-tile.attacked .svc-dot{background:var(--red);box-shadow:0 0 6px var(--red)}
+.svc-icon{font-size:20px;margin-bottom:6px}
+.svc-name{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text);margin-bottom:2px}
+.svc-port{font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:6px}
+.svc-hits{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--red)}
+.svc-hits.few{color:var(--orange)} .svc-hits.none{color:var(--muted)}
+
+/* ─── REPORT ─────────────────────────────── */
+.report-card{
+  background:var(--raised);border:1px solid var(--border);border-radius:8px;padding:20px;
+  font-family:var(--mono);font-size:12px;line-height:1.8;color:var(--text);
+  white-space:pre-wrap;
+}
+.report-meta{font-size:10px;color:var(--muted);margin-bottom:16px}
+
+/* ─── EMPTY STATE ────────────────────────── */
+.empty-state{
+  text-align:center;padding:60px 20px;color:var(--muted);
+  font-family:var(--mono);font-size:12px;
+}
+.empty-state .es-icon{font-size:40px;margin-bottom:12px;opacity:.4}
+
+/* ─── LEAFLET CUSTOM MARKERS ─────────────── */
+.attack-dot{
+  border-radius:50%;border:2px solid;
+  animation:ripple 2s ease-out infinite;
+}
+@keyframes ripple{
+  0%{box-shadow:0 0 0 0 rgba(255,48,84,.4)}
+  100%{box-shadow:0 0 0 12px rgba(255,48,84,0)}
+}
+.honeypot-marker{
+  font-size:22px;filter:drop-shadow(0 0 8px rgba(0,255,136,0.7));
+}
+
+/* ─── SCROLLBAR ──────────────────────────── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--surface)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ─── RESPONSIVE ─────────────────────────── */
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .grid-2,.grid-3,.grid-60-40,.grid-40-60{grid-template-columns:1fr}
+}
+
+/* ─── LOADING ────────────────────────────── */
+.loading{
+  display:flex;align-items:center;justify-content:center;
+  height:60px;color:var(--muted);font-family:var(--mono);font-size:11px;gap:8px;
+}
+.spin{animation:spin 1s linear infinite;display:inline-block}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- ═══ TOPBAR ═══ -->
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-hex">🍯</div>
+    <span class="brand-name">honey<span>Pot</span></span>
+  </div>
+  <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+  <div class="topbar-mid">
+    <div class="tstat"><div class="tstat-lbl">Total Attacks</div><div class="tstat-val red" id="tb-attacks">—</div></div>
+    <div class="tstat"><div class="tstat-lbl">Unique IPs</div><div class="tstat-val" id="tb-ips">—</div></div>
+    <div class="tstat"><div class="tstat-lbl">Countries</div><div class="tstat-val" id="tb-countries">—</div></div>
+    <div class="tstat"><div class="tstat-lbl">Uptime</div><div class="tstat-val green" id="tb-uptime">—</div></div>
+  </div>
+  <div class="device-tag">Hikvision DS-2CD2043G2-I | V5.7.15</div>
+  <button id="refreshBtn" onclick="refresh()">↺ Refresh</button>
+</header>
+
+<!-- ═══ SIDEBAR ═══ -->
+<nav class="sidebar">
+  <div class="nav-group-label">MONITORING</div>
+  <div class="nav-section">
+    <div class="nav-item active" onclick="showPanel('overview',this)"><span class="ni-icon">📊</span>Overview<span class="ni-badge green" id="sn-total">0</span></div>
+    <div class="nav-item" onclick="showPanel('map',this)"><span class="ni-icon">🗺️</span>Attack Map</div>
+    <div class="nav-item" onclick="showPanel('log',this)"><span class="ni-icon">📡</span>Live Log<span class="ni-badge" id="sn-log" style="display:none">NEW</span></div>
+  </div>
+  <div class="nav-group-label">INTELLIGENCE</div>
+  <div class="nav-section">
+    <div class="nav-item" onclick="showPanel('sessions',this)"><span class="ni-icon">🔍</span>Sessions<span class="ni-badge" id="sn-sess">0</span></div>
+    <div class="nav-item" onclick="showPanel('cve',this)"><span class="ni-icon">💀</span>CVE Exploits<span class="ni-badge" id="sn-cve">0</span></div>
+    <div class="nav-item" onclick="showPanel('creds',this)"><span class="ni-icon">🔑</span>Credentials</div>
+    <div class="nav-item" onclick="showPanel('malware',this)"><span class="ni-icon">☣️</span>Malware URLs</div>
+    <div class="nav-item" onclick="showPanel('honeytokens',this)"><span class="ni-icon">🍯</span>Honeytokens</div>
+  </div>
+  <div class="nav-group-label">ANALYSIS</div>
+  <div class="nav-section">
+    <div class="nav-item" onclick="showPanel('services',this)"><span class="ni-icon">⚡</span>Services</div>
+    <div class="nav-item" onclick="showPanel('report',this)"><span class="ni-icon">📄</span>Report</div>
+  </div>
+  <div class="sidebar-footer">
+    honeyPot v1.0.0<br>
+    <span id="sf-uptime">—</span>
+  </div>
+</nav>
+
+<!-- ═══ MAIN ═══ -->
+<main class="main">
+
+<!-- Ticker -->
+<div class="ticker">
+  <div class="ticker-label">⚡ LIVE FEED</div>
+  <div class="ticker-wrap"><div class="ticker-track" id="tickerTrack">Waiting for data…</div></div>
+</div>
+
+<!-- ══ PANEL: OVERVIEW ══ -->
+<div class="panel active" id="panel-overview">
+
+  <div class="metric-grid">
+    <div class="metric-card mc-red">
+      <div class="mc-icon">💥</div>
+      <div class="mc-label">Total Attacks</div>
+      <div class="mc-val" id="m-total">—</div>
+      <div class="mc-sub" id="m-total-sub">last 24 hours</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-total-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-orange">
+      <div class="mc-icon">🌍</div>
+      <div class="mc-label">Unique IPs</div>
+      <div class="mc-val" id="m-ips">—</div>
+      <div class="mc-sub" id="m-ips-sub">from <span id="m-countries">—</span> countries</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-ips-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-red">
+      <div class="mc-icon">💀</div>
+      <div class="mc-label">CVE Exploits</div>
+      <div class="mc-val" id="m-cve">—</div>
+      <div class="mc-sub">known vulnerabilities</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-cve-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-orange">
+      <div class="mc-icon">🤖</div>
+      <div class="mc-label">Botnets</div>
+      <div class="mc-val" id="m-botnet">—</div>
+      <div class="mc-sub">known botnet creds</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-botnet-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-yellow">
+      <div class="mc-icon">☣️</div>
+      <div class="mc-label">Malware DLs</div>
+      <div class="mc-val" id="m-malware">—</div>
+      <div class="mc-sub">wget/curl captures</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-malware-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-green">
+      <div class="mc-icon">🍯</div>
+      <div class="mc-label">Honeytokens</div>
+      <div class="mc-val" id="m-honey">—</div>
+      <div class="mc-sub">traps triggered</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-honey-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-blue">
+      <div class="mc-icon">🌐</div>
+      <div class="mc-label">HTTP Attacks</div>
+      <div class="mc-val" id="m-http">—</div>
+      <div class="mc-sub">ports 80/443/8080</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-http-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-purple">
+      <div class="mc-icon">📟</div>
+      <div class="mc-label">Telnet Attacks</div>
+      <div class="mc-val" id="m-telnet">—</div>
+      <div class="mc-sub">port 23</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-telnet-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-orange">
+      <div class="mc-icon">📹</div>
+      <div class="mc-label">RTSP Attacks</div>
+      <div class="mc-val" id="m-rtsp">—</div>
+      <div class="mc-sub">port 554 camera</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-rtsp-bar" style="width:0%"></div></div>
+    </div>
+    <div class="metric-card mc-red">
+      <div class="mc-icon">🐳</div>
+      <div class="mc-label">Docker Probes</div>
+      <div class="mc-val" id="m-docker">—</div>
+      <div class="mc-sub">container escape</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-docker-bar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <!-- Timeline + Countries -->
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">
+        Attack Timeline
+        <div style="display:flex;gap:6px">
+          <button class="btn-sm active" id="tl-24h" onclick="setTimeRange('24h',this)">24H</button>
+          <button class="btn-sm" id="tl-7d"  onclick="setTimeRange('7d',this)">7D</button>
+          <button class="btn-sm" id="tl-30d" onclick="setTimeRange('30d',this)">30D</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:220px"><canvas id="timelineChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Top Countries</div>
+      <ul class="rank-list" id="countryList"><li class="loading"><span class="spin">◌</span> Loading…</li></ul>
+    </div>
+  </div>
+
+  <!-- Service chart + Top IPs -->
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">Attacks by Service</div>
+      <div class="chart-wrap" style="height:200px"><canvas id="serviceChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Top Attacking IPs</div>
+      <ul class="rank-list" id="ipList"><li class="loading"><span class="spin">◌</span> Loading…</li></ul>
+    </div>
+  </div>
+
+  <!-- Hourly Heatmap + Botnet Distribution -->
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">Attack Frequency by Hour (UTC, last 7d)</div>
+      <div id="heatmap" style="display:grid;grid-template-columns:repeat(24,1fr);gap:4px;padding:8px 0"></div>
+      <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px">
+        <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Botnet Family Distribution</div>
+      <div class="chart-wrap" style="height:180px"><canvas id="botnetChart"></canvas></div>
+    </div>
+  </div>
+
+</div><!-- /panel-overview -->
+
+<!-- ══ PANEL: MAP ══ -->
+<div class="panel" id="panel-map">
+  <div class="card" style="padding:14px">
+    <div class="card-title">
+      Global Attack Map
+      <div class="section-actions">
+        <select id="mapHours" onchange="loadMap()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
+          <option value="1">Last 1h</option>
+          <option value="6">Last 6h</option>
+          <option value="24" selected>Last 24h</option>
+          <option value="168">Last 7d</option>
+        </select>
+      </div>
+    </div>
+    <div id="map"></div>
+    <div style="display:flex;gap:16px;margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--muted)">
+      <span>🔴 Critical (&gt;500)</span>
+      <span>🟠 High (&gt;100)</span>
+      <span>🟡 Medium (&gt;20)</span>
+      <span>🟢 Low</span>
+      <span>🍯 honeyPot sensor</span>
+      <span id="map-count" style="margin-left:auto">0 sources</span>
+    </div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Country Distribution</div>
+      <div class="chart-wrap" style="height:220px"><canvas id="countryChartMap"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Top Sources</div>
+      <ul class="rank-list" id="mapCountryList"></ul>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: LIVE LOG ══ -->
+<div class="panel" id="panel-log">
+  <div class="card">
+    <div class="card-title">
+      Live Attack Log
+      <div class="section-actions">
+        <button class="btn-sm" id="logPauseBtn" onclick="toggleLogPause()">⏸ Pause</button>
+        <button class="btn-sm" onclick="clearLog()">✕ Clear</button>
+      </div>
+    </div>
+    <div id="logStream"></div>
+  </div>
+</div>
+
+<!-- ══ PANEL: SESSIONS ══ -->
+<div class="panel" id="panel-sessions">
+  <div class="card">
+    <div class="card-title">
+      <span>Attack Sessions &nbsp;<span class="badge b-blue" id="session-count">0</span></span>
+      <div class="section-actions">
+        <button class="btn-sm" onclick="exportSessionsCSV()">↓ Export CSV</button>
+        <button class="btn-sm" onclick="loadSessions()">↺ Refresh</button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <input type="text" id="sessSearch" placeholder="Search IP, country, CVE…" oninput="filterSessions()" style="flex:1">
+      <select id="sessSvc" onchange="filterSessions()"><option value="">All Services</option></select>
+      <select id="sessThreat" onchange="filterSessions()">
+        <option value="">All Threats</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Time</th><th>IP</th><th>Country</th><th>Service</th>
+          <th>Username</th><th>Password</th><th>Path</th>
+          <th>CVE</th><th>Threat</th><th>Flags</th>
+        </tr></thead>
+        <tbody id="sessionsBody"><tr><td colspan="10" class="loading"><span class="spin">◌</span> Loading sessions…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: CVE ══ -->
+<div class="panel" id="panel-cve">
+  <div class="grid-3">
+    <div class="metric-card mc-red"><div class="mc-label">Total Attempts</div><div class="mc-val" id="cve-total">—</div></div>
+    <div class="metric-card mc-red"><div class="mc-label">Critical Severity</div><div class="mc-val" id="cve-critical">—</div></div>
+    <div class="metric-card mc-orange"><div class="mc-label">Unique CVEs</div><div class="mc-val" id="cve-unique">—</div></div>
+  </div>
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">CVE Exploit Log</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>CVE ID</th><th>Name</th><th>Service</th><th>Severity</th><th>Attempts</th><th>Unique IPs</th><th>Last Seen</th></tr></thead>
+          <tbody id="cveBody"><tr><td colspan="7" class="loading"><span class="spin">◌</span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Severity Distribution</div>
+      <div class="chart-wrap" style="height:220px"><canvas id="cveSevChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: CREDENTIALS ══ -->
+<div class="panel" id="panel-creds">
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">Top Credential Pairs</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Username</th><th>Password</th><th>Count</th><th>Botnet</th></tr></thead>
+          <tbody id="credBody"><tr><td colspan="5" class="loading"><span class="spin">◌</span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Attack Distribution</div>
+      <div class="chart-wrap" style="height:240px"><canvas id="credChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: MALWARE ══ -->
+<div class="panel" id="panel-malware">
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">Captured Malware Download URLs</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>URL</th><th>Family</th><th>Arch</th><th>Hits</th><th>Unique IPs</th><th>Last Seen</th></tr></thead>
+          <tbody id="malwareBody"><tr><td colspan="7" class="loading"><span class="spin">◌</span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Botnet Family Classification</div>
+      <div class="chart-wrap" style="height:240px"><canvas id="malwareBotnetChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: HONEYTOKENS ══ -->
+<div class="panel" id="panel-honeytokens">
+  <div class="grid-3">
+    <div class="metric-card mc-green"><div class="mc-label">Total Triggers</div><div class="mc-val" id="ht-total">—</div></div>
+    <div class="metric-card mc-orange"><div class="mc-label">Unique IPs</div><div class="mc-val" id="ht-ips">—</div></div>
+    <div class="metric-card mc-purple"><div class="mc-label">Most Hit File</div><div class="mc-val" style="font-size:14px" id="ht-top">—</div></div>
+  </div>
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">Honeytoken Trigger Log</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>IP</th><th>Country</th><th>Type</th><th>Value</th><th>Service</th></tr></thead>
+          <tbody id="htBody"><tr><td colspan="6" class="loading"><span class="spin">◌</span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">By File / Credential</div>
+      <ul class="rank-list" id="htFileList"></ul>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: SERVICES ══ -->
+<div class="panel" id="panel-services">
+  <div class="card">
+    <div class="card-title">Active Services & Attack Distribution</div>
+    <div class="svc-grid" id="svcGrid"></div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Hits by Service</div>
+      <div class="chart-wrap" style="height:260px"><canvas id="svcBarChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Protocol Distribution</div>
+      <div class="chart-wrap" style="height:260px"><canvas id="protoChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: REPORT ══ -->
+<div class="panel" id="panel-report">
+  <div class="card">
+    <div class="card-title">
+      Threat Intelligence Report
+      <div class="section-actions">
+        <select id="reportHours" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
+          <option value="1">Last 1h</option>
+          <option value="6">Last 6h</option>
+          <option value="24" selected>Last 24h</option>
+          <option value="168">Last 7d</option>
+          <option value="720">Last 30d</option>
+        </select>
+        <button class="btn-sm" onclick="generateReport()">Generate</button>
+        <button class="btn-sm" onclick="printReport()">🖨 Print</button>
+      </div>
+    </div>
+    <div id="reportOutput" class="report-card">Select a time range and click Generate.</div>
+  </div>
+</div>
+
+</main>
+</div><!-- /layout -->
+
+<script>
+'use strict';
+// ═══════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════
+const S = {
+  panel:      'overview',
+  timeRange:  '24h',
+  stats:      {},
+  sessions:   [],
+  sessions_all:[],
+  charts:     {},
+  map:        null,
+  mapMarkers: null,
+  logPaused:  false,
+  logSeen:    new Set(),
+};
+
+// ═══════════════════════════════════════════════════════════
+// UTILS
+// ═══════════════════════════════════════════════════════════
+function fmt(n) {
+  if (n === null || n === undefined || n === '—') return '—';
+  n = parseInt(n, 10);
+  if (isNaN(n)) return '—';
+  return n >= 1000000 ? (n/1e6).toFixed(1)+'M' :
+         n >= 1000    ? (n/1e3).toFixed(1)+'K' : String(n);
+}
+function fmtUptime(s) {
+  if (!s) return '—';
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+  return d>0 ? `${d}d ${h}h ${m}m` : h>0 ? `${h}h ${m}m` : `${m}m`;
+}
+function fmtTime(ts) {
+  if (!ts) return '—';
+  try { return new Date(ts).toLocaleTimeString(); } catch { return ts.slice(11,19); }
+}
+function fmtDate(ts) {
+  if (!ts) return '—';
+  try { return new Date(ts).toLocaleString(); } catch { return ts; }
+}
+
+// Animated counter
+function animCount(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const target = parseInt(val, 10) || 0;
+  const cur    = parseInt(el.textContent.replace(/[^0-9]/g, ''), 10) || 0;
+  if (cur === target) { el.textContent = fmt(target); return; }
+  let start = null;
+  const dur = 600;
+  function step(ts) {
+    if (!start) start = ts;
+    const p = Math.min((ts - start) / dur, 1);
+    el.textContent = fmt(Math.round(cur + (target - cur) * p));
+    if (p < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function badge(threat) {
+  const map = { critical:'b-crit', high:'b-high', medium:'b-med', low:'b-low' };
+  return `<span class="badge ${map[threat]||'b-low'}">${threat||'low'}</span>`;
+}
+
+function svcBadge(svc) {
+  const colors = {
+    HTTP:'#0a84ff',HTTPS:'#30d158',TELNET:'#ff9f0a',SSH:'#ff2d55',
+    RTSP:'#bf5af2',ONVIF:'#00ff88',FTP:'#ffd60a',REDIS:'#ff6b35',
+    MYSQL:'#0091ff',DOCKER:'#2496ed',MQTT:'#660066',MODBUS:'#8b4513',
+    VNC:'#9b59b6',RDP:'#e74c3c',SMTP:'#27ae60',MEMCACHED:'#f39c12',
+  };
+  const c = colors[svc] || '#555';
+  return `<span class="badge" style="background:${c}22;color:${c};border-color:${c}44">${svc}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════
+function showPanel(name, el) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  if (el) el.classList.add('active');
+  S.panel = name;
+
+  // Load data on demand
+  if (name === 'map')         { initMap(); loadMap(); }
+  if (name === 'log')         { startLiveLog(); document.getElementById('sn-log').style.display='none'; }
+  if (name === 'sessions')    loadSessions();
+  if (name === 'cve')         loadCVE();
+  if (name === 'creds')       loadCreds();
+  if (name === 'malware')     loadMalware();
+  if (name === 'honeytokens') loadHoneytokens();
+  if (name === 'services')    loadServices();
+}
+
+// ═══════════════════════════════════════════════════════════
+// API
+// ═══════════════════════════════════════════════════════════
+async function api(endpoint) {
+  try {
+    const r = await fetch(endpoint);
+    if (!r.ok) return null;
+    return r.json();
+  } catch { return null; }
+}
+
+// ═══════════════════════════════════════════════════════════
+// CHART DEFAULTS
+// ═══════════════════════════════════════════════════════════
+const CD = {
+  responsive: true, maintainAspectRatio: false,
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { grid: { color:'rgba(255,255,255,0.04)' }, ticks: { color:'rgba(255,255,255,0.4)', font:{family:"'JetBrains Mono'",size:9} } },
+    y: { grid: { color:'rgba(255,255,255,0.04)' }, ticks: { color:'rgba(255,255,255,0.4)', font:{family:"'JetBrains Mono'",size:9} } },
+  }
+};
+function mkChart(id, type, data, opts={}) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return null;
+  if (S.charts[id]) S.charts[id].destroy();
+  S.charts[id] = new Chart(ctx, { type, data, options: { ...CD, ...opts }});
+  return S.charts[id];
+}
+
+// ═══════════════════════════════════════════════════════════
+// OVERVIEW
+// ═══════════════════════════════════════════════════════════
+async function loadOverview() {
+  const [s, countries, ips, tl, heatmap, botnet] = await Promise.all([
+    api('/api/stats'),
+    api('/api/countries?hours=24'),
+    api('/api/top-ips?hours=24&limit=10'),
+    api('/api/chart-data?range=' + S.timeRange),
+    api('/api/hourly-heatmap'),
+    api('/api/botnet-distribution'),
+  ]);
+
+  if (!s) return;
+  S.stats = s;
+
+  // Topbar
+  document.getElementById('tb-attacks').textContent  = fmt(s.total_attacks);
+  document.getElementById('tb-ips').textContent      = fmt(s.unique_ips);
+  document.getElementById('tb-countries').textContent= fmt(s.country_count);
+  document.getElementById('tb-uptime').textContent   = fmtUptime(s.uptime_seconds);
+  document.getElementById('sf-uptime').textContent   = fmtUptime(s.uptime_seconds);
+  document.getElementById('sn-total').textContent    = fmt(s.total_attacks);
+
+  // Metric cards
+  animCount('m-total',  s.total_attacks);
+  animCount('m-ips',    s.unique_ips);
+  animCount('m-countries', s.country_count);
+  animCount('m-cve',    s.cve_exploits);
+  animCount('m-botnet', s.botnet_count);
+  animCount('m-malware',s.malware_downloads);
+  animCount('m-honey',  s.honeytokens_triggered);
+  animCount('m-http',   s.http_attacks);
+  animCount('m-telnet', s.telnet_attacks);
+  animCount('m-rtsp',   s.rtsp_attacks);
+  animCount('m-docker', s.docker_attacks);
+
+  // Bar fills (max arbitrary for visual)
+  const max = s.total_attacks || 1;
+  [['m-total',s.total_attacks],['m-ips',s.unique_ips*20],['m-cve',s.cve_exploits*100],
+   ['m-botnet',s.botnet_count*50],['m-malware',s.malware_downloads*200],
+   ['m-honey',s.honeytokens_triggered*500],['m-http',s.http_attacks],
+   ['m-telnet',s.telnet_attacks*2],['m-rtsp',s.rtsp_attacks*3],['m-docker',s.docker_attacks*100]
+  ].forEach(([id, val]) => {
+    const el = document.getElementById(id+'-bar');
+    if (el) el.style.width = Math.min(val/max*100, 100)+'%';
+  });
+
+  // Timeline
+  if (tl && tl.labels) {
+    const labels = tl.labels.map(l => l.slice(-5));
+    mkChart('timelineChart','line',{
+      labels,
+      datasets:[
+        { label:'All', data:tl.datasets.connections, borderColor:'#0a84ff', backgroundColor:'rgba(10,132,255,.08)', tension:.3, fill:true, pointRadius:0, borderWidth:2 },
+        { label:'Botnet', data:tl.datasets.malicious, borderColor:'#ff8c00', backgroundColor:'rgba(255,140,0,.08)', tension:.3, fill:true, pointRadius:0, borderWidth:1.5 },
+        { label:'CVE', data:tl.datasets.cve_exploits, borderColor:'#ff3054', backgroundColor:'rgba(255,48,84,.08)', tension:.3, fill:true, pointRadius:0, borderWidth:1.5 },
+      ]
+    },{
+      plugins:{ legend:{ display:true, labels:{ color:'rgba(255,255,255,.5)', font:{family:"'JetBrains Mono'",size:9} } } }
+    });
+  }
+
+  // Countries
+  if (countries && countries.countries) {
+    const cs = countries.countries;
+    const max_c = cs[0]?.count || 1;
+    document.getElementById('countryList').innerHTML = cs.length ? cs.map((c,i) => `
+      <li class="rank-item">
+        <span class="rank-num">${i+1}</span>
+        <div class="rank-info">
+          <span class="rank-label">${c.name}</span>
+          <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(c.count/max_c*100).toFixed(1)}%"></div></div>
+        </div>
+        <span class="rank-count">${fmt(c.count)}</span>
+      </li>`).join('') :
+      '<li style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:12px 0">No data yet</li>';
+  }
+
+  // Service chart
+  const svcLabels = ['HTTP','Telnet','SSH','RTSP','FTP','MySQL','Redis','Docker','MQTT','VNC','RDP','Modbus'];
+  const svcData   = [
+    (s.http_attacks||0), s.telnet_attacks||0, s.ssh_attacks||0, s.rtsp_attacks||0,
+    s.ftp_attacks||0, s.mysql_attacks||0, s.redis_attacks||0, s.docker_attacks||0,
+    s.mqtt_attacks||0, s.vnc_attacks||0, s.rdp_attacks||0, s.modbus_attacks||0,
+  ];
+  const svcColors = ['#0a84ff','#ff9f0a','#ff2d55','#bf5af2','#ffd60a','#0091ff','#ff6b35','#2496ed','#660066','#9b59b6','#e74c3c','#8b4513'];
+  mkChart('serviceChart','bar',{
+    labels: svcLabels,
+    datasets:[{ data:svcData, backgroundColor:svcColors.map(c=>c+'88'), borderColor:svcColors, borderWidth:1, borderRadius:3 }]
+  });
+
+  // Top IPs
+  if (ips && ips.top_ips) {
+    const ti = ips.top_ips;
+    const max_i = ti[0]?.count || 1;
+    document.getElementById('ipList').innerHTML = ti.length ? ti.map((ip,i) => `
+      <li class="rank-item">
+        <span class="rank-num">${i+1}</span>
+        <div class="rank-info">
+          <span class="rank-label" style="color:var(--blue)">${ip.ip}${ip.is_botnet ? ' 🤖':''}</span>
+          <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(ip.count/max_i*100).toFixed(1)}%;background:var(--blue)"></div></div>
+        </div>
+        <span class="rank-count" style="color:var(--blue)">${fmt(ip.count)}</span>
+      </li>`).join('') :
+      '<li style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:12px 0">No data yet</li>';
+  }
+
+  // Ticker from real alerts
+  updateTicker(s);
+
+  // Hourly heatmap
+  if (heatmap && heatmap.buckets) {
+    renderHeatmap(heatmap.buckets);
+  }
+
+  // Botnet distribution donut
+  if (botnet && botnet.families) {
+    const fams = botnet.families;
+    const labels = Object.keys(fams).filter(k => fams[k] > 0);
+    const vals   = labels.map(k => fams[k]);
+    const colors = ['#ff3054','#ff8c00','#ffd60a','#0a84ff','#bf5af2','#00ff88'];
+    if (labels.length) {
+      mkChart('botnetChart','doughnut',{
+        labels,
+        datasets:[{ data:vals, backgroundColor:colors.slice(0,labels.length).map(c=>c+'aa'),
+                    borderColor:colors.slice(0,labels.length), borderWidth:1 }]
+      },{
+        plugins:{ legend:{ display:true, position:'right',
+          labels:{ color:'rgba(255,255,255,.5)', font:{family:"'JetBrains Mono'",size:9}, boxWidth:10 } } }
+      });
+    } else {
+      const ctx = document.getElementById('botnetChart');
+      if (ctx && ctx.parentElement) ctx.parentElement.innerHTML =
+        '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;text-align:center;padding:40px">No botnet sessions yet</div>';
+    }
+  }
+}
+
+function updateTicker(s) {
+  const events = [];
+  if (s.total_attacks)         events.push(`💥 ${fmt(s.total_attacks)} total attacks captured`);
+  if (s.cve_exploits)          events.push(`💀 ${s.cve_exploits} CVE exploit attempts detected`);
+  if (s.botnet_count)          events.push(`🤖 ${s.botnet_count} botnet credential sprays`);
+  if (s.malware_downloads)     events.push(`☣️ ${s.malware_downloads} malware URLs captured`);
+  if (s.honeytokens_triggered) events.push(`🍯 ${s.honeytokens_triggered} honeytokens triggered`);
+  if (s.country_count)         events.push(`🌍 Attacks from ${s.country_count} countries`);
+  if (s.docker_attacks)        events.push(`🐳 ${s.docker_attacks} Docker API escape attempts`);
+  if (s.rtsp_attacks)          events.push(`📹 ${fmt(s.rtsp_attacks)} RTSP camera probes`);
+
+  if (!events.length) { document.getElementById('tickerTrack').textContent = 'Waiting for attacks…'; return; }
+  document.getElementById('tickerTrack').innerHTML =
+    events.map(e => `<span class="ticker-event">${e}</span><span class="ticker-sep"> /// </span>`).join('');
+}
+
+function renderHeatmap(buckets) {
+  const container = document.getElementById('heatmap');
+  if (!container) return;
+  const max = Math.max(...buckets, 1);
+  container.innerHTML = buckets.map((val, i) => {
+    const pct = val / max;
+    const bg = pct > 0.7 ? `rgba(255,48,84,${0.3+pct*0.65})` :
+               pct > 0.4 ? `rgba(255,140,0,${0.3+pct*0.55})` :
+               pct > 0.1 ? `rgba(0,255,136,${0.2+pct*0.4})` :
+                            'rgba(255,255,255,0.06)';
+    return `<div title="${i.toString().padStart(2,'0')}:00 — ${val} attacks"
+      style="height:40px;border-radius:3px;background:${bg};cursor:help;transition:.2s"
+      onmouseover="this.style.transform='scaleY(1.2)'" onmouseout="this.style.transform=''"
+    ></div>`;
+  }).join('');
+}
+
+async function setTimeRange(r, btn) {
+  S.timeRange = r;
+  document.querySelectorAll('#panel-overview .btn-sm').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const tl = await api('/api/chart-data?range=' + r);
+  if (tl && tl.labels) {
+    const labels = tl.labels.map(l => l.slice(-5));
+    const c = S.charts['timelineChart'];
+    if (c) {
+      c.data.labels                     = labels;
+      c.data.datasets[0].data          = tl.datasets.connections;
+      c.data.datasets[1].data          = tl.datasets.malicious;
+      c.data.datasets[2].data          = tl.datasets.cve_exploits;
+      c.update();
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// MAP
+// ═══════════════════════════════════════════════════════════
+let _mapInited = false;
+
+function initMap() {
+  if (_mapInited) return;
+  _mapInited = true;
+
+  const el = document.getElementById('map');
+  if (!el) return;
+
+  S.map = L.map('map', {
+    center: [20, 10], zoom: 2,
+    zoomControl: true,
+    attributionControl: false,
+    preferCanvas: true,
+    renderer: L.canvas(),
+  });
+
+  // Dark tile layer — OpenStreetMap with CORS support
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    subdomains: 'abc',
+    maxZoom: 19,
+    errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+  }).addTo(S.map);
+
+  S.mapMarkers = L.layerGroup().addTo(S.map);
+
+  // Force correct sizing after container is visible
+  setTimeout(() => S.map.invalidateSize({ animate:false }), 100);
+  setTimeout(() => S.map.invalidateSize({ animate:false }), 500);
+}
+
+async function loadMap() {
+  const hours = document.getElementById('mapHours')?.value || 24;
+  const data  = await api(`/api/geo-data?hours=${hours}`);
+  if (!data) return;
+
+  // Ensure map exists
+  initMap();
+  if (!S.map) return;
+  S.map.invalidateSize({ animate:false });
+
+  // Clear markers
+  if (S.mapMarkers) S.mapMarkers.clearLayers();
+
+  const markers = data.markers || [];
+  document.getElementById('map-count').textContent = markers.length + ' sources';
+
+  const severityConfig = {
+    critical: { color:'#ff3054', size:22, opacity:.9 },
+    high:     { color:'#ff8c00', size:16, opacity:.8 },
+    medium:   { color:'#ffd60a', size:11, opacity:.7 },
+    low:      { color:'#00ff88', size:7,  opacity:.6 },
+  };
+
+  markers.forEach(m => {
+    if (!m.lat || !m.lon) return;
+    const cfg   = severityConfig[m.severity] || severityConfig.low;
+    const icon  = L.divIcon({
+      className: '',
+      html: `<div style="
+        width:${cfg.size}px;height:${cfg.size}px;
+        background:${cfg.color};border-radius:50%;
+        border:2px solid ${cfg.color};
+        opacity:${cfg.opacity};
+        box-shadow:0 0 ${cfg.size}px ${cfg.color}88;
+        cursor:pointer;
+      "></div>`,
+      iconSize:  [cfg.size, cfg.size],
+      iconAnchor:[cfg.size/2, cfg.size/2],
+    });
+
+    L.marker([m.lat, m.lon], { icon })
+      .bindPopup(`
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;background:#0e1218;color:#fff;padding:8px;border-radius:4px;min-width:160px">
+          <b style="color:${cfg.color}">${m.country}</b><br>
+          <span style="color:#888">Attacks:</span> <b>${fmt(m.count)}</b><br>
+          ${m.bots ? `<span style="color:#ff8c00">🤖 Botnet: ${m.bots}</span><br>` : ''}
+          ${m.tors ? `<span style="color:#bf5af2">🔒 Tor: ${m.tors}</span><br>` : ''}
+          <span style="color:#888">Severity:</span> <b style="color:${cfg.color}">${m.severity.toUpperCase()}</b>
+        </div>
+      `, { className:'dark-popup' })
+      .addTo(S.mapMarkers);
+  });
+
+  // Honeypot marker
+  if (data.honeypot) {
+    const hpIcon = L.divIcon({
+      className: '',
+      html: '<div style="font-size:22px;filter:drop-shadow(0 0 8px rgba(0,255,136,.8));cursor:default">🍯</div>',
+      iconSize: [28, 28], iconAnchor: [14, 14],
+    });
+    L.marker([data.honeypot.lat, data.honeypot.lon], { icon: hpIcon })
+      .bindPopup(`<div style="font-family:'JetBrains Mono',monospace;font-size:11px;background:#0e1218;color:#00ff88;padding:8px;border-radius:4px"><b>🍯 honeyPot Sensor</b><br>${data.honeypot.label}</div>`)
+      .addTo(S.mapMarkers);
+  }
+
+  // Country chart on map panel
+  const countries = await api(`/api/countries?hours=${hours}`);
+  if (countries && countries.countries) {
+    const cs = countries.countries.slice(0,8);
+    mkChart('countryChartMap','doughnut',{
+      labels: cs.map(c=>c.name),
+      datasets:[{ data:cs.map(c=>c.count), backgroundColor:['#ff3054','#ff8c00','#ffd60a','#0a84ff','#00ff88','#bf5af2','#ff6b35','#2496ed'], borderWidth:0 }]
+    },{
+      plugins:{ legend:{ display:true, position:'right', labels:{ color:'rgba(255,255,255,.5)', font:{family:"'JetBrains Mono'",size:9}, boxWidth:10 } } }
+    });
+
+    const max_c = cs[0]?.count || 1;
+    document.getElementById('mapCountryList').innerHTML = cs.map((c,i) => `
+      <li class="rank-item">
+        <span class="rank-num">${i+1}</span>
+        <div class="rank-info">
+          <span class="rank-label">${c.name}</span>
+          <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(c.count/max_c*100).toFixed(1)}%"></div></div>
+        </div>
+        <span class="rank-count">${fmt(c.count)}</span>
+      </li>`).join('');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LIVE LOG
+// ═══════════════════════════════════════════════════════════
+let _logInterval = null;
+
+function startLiveLog() {
+  if (_logInterval) return;
+  pollLog();
+  _logInterval = setInterval(pollLog, 3000);
+}
+
+async function pollLog() {
+  if (S.logPaused) return;
+  const data = await api('/api/live-log');
+  if (!data || !data.events) return;
+
+  const el  = document.getElementById('logStream');
+  const svcColors = {
+    HTTP:'#0a84ff',HTTPS:'#30d158',TELNET:'#ff9f0a',SSH:'#ff2d55',
+    RTSP:'#bf5af2',ONVIF:'#00ff88',FTP:'#ffd60a',REDIS:'#ff6b35',
+    MYSQL:'#0091ff',DOCKER:'#2496ed',MODBUS:'#8b4513',VNC:'#9b59b6',RDP:'#e74c3c',
+  };
+
+  let added = 0;
+  for (const ev of data.events.slice(0,30)) {
+    const key = ev.ts + ev.ip + ev.service;
+    if (S.logSeen.has(key)) continue;
+    S.logSeen.add(key);
+    added++;
+
+    const c   = svcColors[ev.service] || '#888';
+    const cls = ev.threat === 'critical' ? 'crit' : ev.threat === 'high' ? 'high' : ev.threat === 'medium' ? 'med' : 'low';
+    const msg = ev.cve ? `CVE ${ev.cve}` : ev.is_botnet ? `Botnet cred attempt` : (ev.path ? `${ev.method} ${ev.path}` : ev.service + ' probe');
+
+    const div = document.createElement('div');
+    div.className = `log-line ${cls}`;
+    div.innerHTML = `
+      <span class="log-time">${fmtTime(ev.ts)}</span>
+      <span class="log-svc" style="color:${c}">${ev.service}</span>
+      <span class="log-ip">${ev.ip}</span>
+      <span class="log-msg">${ev.country ? '['+ev.country+'] ' : ''}${msg}</span>
+      <span>${badge(ev.threat)}</span>
+    `;
+    el.insertBefore(div, el.firstChild);
+    while (el.children.length > 200) el.removeChild(el.lastChild);
+  }
+
+  if (added > 0 && S.panel !== 'log') {
+    const badge = document.getElementById('sn-log');
+    badge.style.display = '';
+  }
+}
+
+function toggleLogPause() {
+  S.logPaused = !S.logPaused;
+  const btn = document.getElementById('logPauseBtn');
+  btn.textContent = S.logPaused ? '▶ Resume' : '⏸ Pause';
+  btn.classList.toggle('active', S.logPaused);
+}
+function clearLog() {
+  document.getElementById('logStream').innerHTML = '';
+  S.logSeen.clear();
+}
+
+// ═══════════════════════════════════════════════════════════
+// SESSIONS
+// ═══════════════════════════════════════════════════════════
+async function loadSessions() {
+  document.getElementById('sessionsBody').innerHTML =
+    '<tr><td colspan="10" class="loading"><span class="spin">◌</span> Loading…</td></tr>';
+
+  const data = await api('/api/sessions?limit=200');
+  if (!data) {
+    document.getElementById('sessionsBody').innerHTML =
+      '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:20px">No data — start honeypot.py first</td></tr>';
+    return;
+  }
+  S.sessions_all = data.sessions || [];
+  S.sessions = [...S.sessions_all];
+
+  // Populate service filter
+  const svcs = [...new Set(S.sessions_all.map(s=>s.service).filter(Boolean))].sort();
+  const sel  = document.getElementById('sessSvc');
+  sel.innerHTML = '<option value="">All Services</option>' + svcs.map(s=>`<option>${s}</option>`).join('');
+
+  document.getElementById('session-count').textContent = fmt(data.total || S.sessions.length);
+  document.getElementById('sn-sess').textContent = fmt(data.total || S.sessions.length);
+  renderSessions(S.sessions);
+}
+
+function filterSessions() {
+  const q   = (document.getElementById('sessSearch').value || '').toLowerCase();
+  const svc = (document.getElementById('sessSvc').value || '').toLowerCase();
+  const thr = document.getElementById('sessThreat').value || '';
+  S.sessions = S.sessions_all.filter(s =>
+    (!q   || [s.ip,s.country,s.service,s.username,s.password,s.cve,s.path].join(' ').toLowerCase().includes(q)) &&
+    (!svc || (s.service||'').toLowerCase() === svc) &&
+    (!thr || s.threat === thr)
+  );
+  renderSessions(S.sessions);
+}
+
+function renderSessions(rows) {
+  if (!rows.length) {
+    document.getElementById('sessionsBody').innerHTML =
+      '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No sessions found</td></tr>';
+    return;
+  }
+  document.getElementById('sessionsBody').innerHTML = rows.map(s => `
+    <tr>
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
+      <td class="mono" style="color:var(--blue)">${s.ip}</td>
+      <td>${s.country || '—'}${s.city ? '<br><span style="color:var(--muted);font-size:10px">'+s.city+'</span>' : ''}</td>
+      <td>${svcBadge(s.service)}</td>
+      <td class="mono">${s.username || '—'}</td>
+      <td class="mono">${s.password || '—'}</td>
+      <td class="mono truncate" style="font-size:10px;color:var(--muted)">${s.path || s.method || '—'}</td>
+      <td>${s.cve ? `<span class="badge b-crit" style="font-size:9px">${s.cve}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
+      <td>${badge(s.threat)}</td>
+      <td style="font-size:10px">${s.is_botnet ? '<span style="color:var(--orange)">🤖</span>' : ''}${s.is_tor ? '<span style="color:var(--purple)">🔒</span>' : ''}</td>
+    </tr>`).join('');
+}
+
+function exportSessionsCSV() {
+  if (!S.sessions.length) return;
+  const hdr = 'Timestamp,IP,Country,City,Service,Username,Password,Path,CVE,Threat,Botnet,TOR\n';
+  const rows = S.sessions.map(s =>
+    `${s.ts},${s.ip},"${s.country}","${s.city||''}",${s.service},"${s.username||''}","${s.password||''}","${s.path||''}",${s.cve||''},${s.threat},${s.is_botnet},${s.is_tor}`
+  ).join('\n');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([hdr+rows],{type:'text/csv'})),
+    download: `honeypot_sessions_${Date.now()}.csv`,
+  });
+  a.click();
+}
+
+// ═══════════════════════════════════════════════════════════
+// CVE
+// ═══════════════════════════════════════════════════════════
+async function loadCVE() {
+  const data = await api('/api/cve-exploits?hours=168');
+  if (!data) return;
+
+  animCount('cve-total',    data.total);
+  animCount('cve-critical', data.critical);
+  document.getElementById('cve-unique').textContent = data.unique_cves;
+  document.getElementById('sn-cve').textContent     = data.total;
+
+  const cves = data.cves || [];
+  document.getElementById('cveBody').innerHTML = cves.length ? cves.map(c => `
+    <tr>
+      <td class="mono" style="color:var(--red)">${c.cve_id}</td>
+      <td>${c.name}</td>
+      <td>${svcBadge(c.service)}</td>
+      <td>${badge(c.severity)}</td>
+      <td class="mono" style="color:var(--orange);font-weight:700">${fmt(c.count)}</td>
+      <td class="mono" style="color:var(--muted)">${c.unique_ips}</td>
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(c.last)}</td>
+    </tr>`).join('') :
+    '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No CVE attempts recorded yet</td></tr>';
+
+  // Severity chart
+  const sev = {critical:0,high:0,medium:0,low:0};
+  cves.forEach(c => { if (sev[c.severity] !== undefined) sev[c.severity] += c.count; });
+  mkChart('cveSevChart','bar',{
+    labels:['Critical','High','Medium','Low'],
+    datasets:[{ data:Object.values(sev), backgroundColor:['#ff3054aa','#ff8c00aa','#ffd60aaa','#00ff88aa'], borderColor:['#ff3054','#ff8c00','#ffd60a','#00ff88'], borderWidth:1, borderRadius:4 }]
+  },{plugins:{legend:{display:false}}});
+}
+
+// ═══════════════════════════════════════════════════════════
+// CREDENTIALS
+// ═══════════════════════════════════════════════════════════
+async function loadCreds() {
+  const data = await api('/api/top-credentials?hours=168');
+  if (!data) return;
+
+  const creds = data.credentials || [];
+  document.getElementById('credBody').innerHTML = creds.length ? creds.map((c,i) => `
+    <tr>
+      <td class="mono" style="color:var(--muted)">${i+1}</td>
+      <td class="mono" style="color:var(--orange)">${c.username}</td>
+      <td class="mono">${c.password || '<span style="color:var(--muted)">(empty)</span>'}</td>
+      <td class="mono" style="color:var(--text);font-weight:700">${fmt(c.count)}</td>
+      <td>${c.is_botnet ? '<span class="badge b-crit">🤖 BOTNET</span>' : '<span class="badge b-low">normal</span>'}</td>
+    </tr>`).join('') :
+    '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No credentials captured yet</td></tr>';
+
+  const botnet = creds.filter(c=>c.is_botnet).reduce((a,c)=>a+c.count,0);
+  const normal = creds.filter(c=>!c.is_botnet).reduce((a,c)=>a+c.count,0);
+  mkChart('credChart','doughnut',{
+    labels:['Botnet Listed','Normal Attempt'],
+    datasets:[{ data:[botnet,normal], backgroundColor:['#ff305488','#0a84ff88'], borderColor:['#ff3054','#0a84ff'], borderWidth:1 }]
+  },{
+    plugins:{ legend:{ display:true, position:'right', labels:{ color:'rgba(255,255,255,.5)', font:{family:"'JetBrains Mono'",size:10}, boxWidth:12 } } }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// MALWARE
+// ═══════════════════════════════════════════════════════════
+async function loadMalware() {
+  const [data, botnet] = await Promise.all([
+    api('/api/malware-urls?hours=168'),
+    api('/api/botnet-distribution'),
+  ]);
+
+  if (data) {
+    const urls = data.urls || [];
+    document.getElementById('malwareBody').innerHTML = urls.length ? urls.map((u,i) => `
+      <tr>
+        <td class="mono" style="color:var(--muted)">${i+1}</td>
+        <td class="mono truncate" style="color:var(--red);font-size:10px;max-width:300px">${u.url}</td>
+        <td><span class="badge b-crit">${u.family}</span></td>
+        <td class="mono" style="color:var(--muted)">${u.arch || '?'}</td>
+        <td class="mono" style="color:var(--orange);font-weight:700">${fmt(u.count)}</td>
+        <td class="mono" style="color:var(--muted)">${u.unique_ips}</td>
+        <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(u.last)}</td>
+      </tr>`).join('') :
+      '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No malware URLs captured yet.<br>Start the honeypot and wait for Telnet/SSH sessions with wget/curl commands.</td></tr>';
+  }
+
+  if (botnet && botnet.families) {
+    const fams = botnet.families;
+    const labels = Object.keys(fams).filter(k => fams[k] > 0);
+    const vals   = labels.map(k => fams[k]);
+    const colors = ['#ff3054','#ff8c00','#ffd60a','#0a84ff','#bf5af2','#00ff88'];
+    if (labels.length) {
+      mkChart('malwareBotnetChart','doughnut',{
+        labels,
+        datasets:[{ data:vals, backgroundColor:colors.slice(0,labels.length).map(c=>c+'aa'),
+                    borderColor:colors.slice(0,labels.length), borderWidth:1 }]
+      },{
+        plugins:{ legend:{ display:true, position:'right',
+          labels:{ color:'rgba(255,255,255,.5)', font:{family:"'JetBrains Mono'",size:9}, boxWidth:10 } } }
+      });
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// HONEYTOKENS
+// ═══════════════════════════════════════════════════════════
+async function loadHoneytokens() {
+  const data = await api('/api/honeytokens?hours=168');
+  if (!data) return;
+
+  animCount('ht-total', data.total);
+  animCount('ht-ips',   data.unique_ips);
+  document.getElementById('ht-top').textContent = data.by_file?.[0]?.path || '—';
+
+  const recent = data.recent || [];
+  document.getElementById('htBody').innerHTML = recent.length ? recent.map(r => `
+    <tr>
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(r.timestamp)}</td>
+      <td class="mono" style="color:var(--blue)">${r.source_ip}</td>
+      <td>${r.country || '—'}</td>
+      <td><span class="badge b-crit">${r.token_type}</span></td>
+      <td class="mono truncate" style="font-size:10px;color:var(--red)">${r.token_value}</td>
+      <td>${svcBadge(r.service)}</td>
+    </tr>`).join('') :
+    '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No honeytokens triggered yet.<br>They fire when attackers access fake files or use bait credentials.</td></tr>';
+
+  const files = data.by_file || [];
+  const max_f = files[0]?.count || 1;
+  document.getElementById('htFileList').innerHTML = files.length ? files.map((f,i) => `
+    <li class="rank-item">
+      <span class="rank-num">${i+1}</span>
+      <div class="rank-info">
+        <span class="rank-label" style="color:var(--red)">${f.path}</span>
+        <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(f.count/max_f*100).toFixed(1)}%;background:var(--red)"></div></div>
+      </div>
+      <span class="rank-count" style="color:var(--red)">${f.count}</span>
+    </li>`).join('') :
+    '<li style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:12px 0">No honeytoken hits yet</li>';
+}
+
+// ═══════════════════════════════════════════════════════════
+// SERVICES
+// ═══════════════════════════════════════════════════════════
+async function loadServices() {
+  const data = await api('/api/service-stats?hours=24');
+  if (!data) return;
+
+  const svcs = data.services || [];
+  const icons = {
+    HTTP:'🌐',HTTPS:'🔒',TELNET:'📟',SSH:'🔑',FTP:'📁',SMTP:'📧',
+    RTSP:'📹',ONVIF:'📡',MQTT:'📡',REDIS:'🗄️',MYSQL:'🗃️',
+    DOCKER:'🐳',MEMCACHED:'💾',VNC:'🖥️',RDP:'🖥️',MODBUS:'⚙️',
+    HTTP_ALT:'🌐',
+  };
+
+  document.getElementById('svcGrid').innerHTML = svcs.map(s => {
+    const cls = s.hits > 100 ? 'attacked' : 'active';
+    const hiCls= s.hits > 1000 ? '' : s.hits > 100 ? 'few' : 'none';
+    return `
+      <div class="svc-tile ${cls}">
+        <div class="svc-dot"></div>
+        <div class="svc-icon">${icons[s.service] || '🔌'}</div>
+        <div class="svc-name">${s.service}</div>
+        <div class="svc-port">:${s.port}</div>
+        <div class="svc-hits ${hiCls}">${fmt(s.hits)}</div>
+        ${s.is_botnet ? '<div style="font-size:9px;color:var(--orange);margin-top:2px">🤖 BOTNET</div>' : ''}
+      </div>`;
+  }).join('');
+
+  const active = svcs.filter(s=>s.hits>0);
+  mkChart('svcBarChart','bar',{
+    labels: active.map(s=>s.service),
+    datasets:[{
+      data:  active.map(s=>s.hits),
+      backgroundColor: active.map(s=>s.hits>1000?'rgba(255,48,84,.7)':s.hits>100?'rgba(255,140,0,.7)':'rgba(0,255,136,.4)'),
+      borderRadius:3,
+    }]
+  });
+
+  // Protocol donut — all TCP for this honeypot
+  const total = svcs.reduce((a,s)=>a+s.hits,0);
+  mkChart('protoChart','doughnut',{
+    labels:['TCP','UDP','ICMP'],
+    datasets:[{ data:[total, 0, 0], backgroundColor:['#0a84ffaa','#ff8c00aa','#00ff88aa'], borderWidth:0 }]
+  },{
+    plugins:{ legend:{ display:true, position:'right', labels:{ color:'rgba(255,255,255,.5)', font:{family:"'JetBrains Mono'",size:10}, boxWidth:10 } } }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// REPORT
+// ═══════════════════════════════════════════════════════════
+async function generateReport() {
+  const hours = document.getElementById('reportHours').value;
+  const el    = document.getElementById('reportOutput');
+  el.textContent = '◌ Generating report…';
+
+  const data = await api(`/api/report?hours=${hours}`);
+  if (!data) {
+    el.textContent = '✗ Failed to fetch report data. Is the honeypot running?';
+    return;
+  }
+
+  const s  = data.stats || {};
+  const ts = new Date(data.generated_at).toLocaleString();
+  const top_c  = (data.top_countries || []).slice(0,5);
+  const top_ip = (data.top_ips || []).slice(0,5);
+  const cves   = (data.cve_data || []).slice(0,5);
+  const svcs   = (data.services || []).slice(0,5);
+
+  const pct = (n,total) => total ? `${((n/total)*100).toFixed(1)}%` : '0%';
+  const total = s.total_attacks || 0;
+
+  let report = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  honeyPot — Threat Intelligence Report
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Generated:    ${ts}
+  Period:       Last ${hours}h
+  Device:       Hikvision DS-2CD2043G2-I (V5.7.15)
+
+━━━ EXECUTIVE SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Total Attacks:         ${total.toLocaleString()}
+  Unique Source IPs:     ${(s.unique_ips||0).toLocaleString()}
+  Countries:             ${s.country_count || 0}
+  CVE Exploits:          ${s.cve_exploits || 0}
+  Botnet Credentials:    ${s.botnet_count || 0}
+  Malware URLs Captured: ${s.malware_downloads || 0}
+  Honeytokens Triggered: ${s.honeytokens_triggered || 0}
+
+━━━ TOP ATTACKING COUNTRIES ━━━━━━━━━━━━━━━━━━━━━━━━
+`;
+  top_c.forEach((c,i) => {
+    const n = c.cnt || c.count || 0;
+    report += `  ${i+1}. ${c.country||c.name}  ${n.toLocaleString()} attacks (${pct(n,total)})\n`;
+  });
+
+  if (!top_c.length) report += '  No country data yet.\n';
+
+  report += `\n━━━ TOP ATTACKING IPs ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  top_ip.forEach((ip,i) => {
+    const n = ip.cnt || ip.count || 0;
+    report += `  ${i+1}. ${ip.source_ip||ip.ip}  ${n.toLocaleString()} hits  (${ip.country||'Unknown'})\n`;
+  });
+  if (!top_ip.length) report += '  No IP data yet.\n';
+
+  report += `\n━━━ CVE EXPLOITS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  cves.forEach((c,i) => {
+    report += `  ${i+1}. ${c.cve_id}  [${(c.severity||'').toUpperCase()}]  ${c.cnt||c.count} attempts  — ${c.cve_name||c.name}\n`;
+  });
+  if (!cves.length) report += '  No CVE attempts recorded.\n';
+
+  report += `\n━━━ TOP SERVICES ATTACKED ━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  svcs.filter(s=>s.cnt>0 || s.hits>0).forEach((s,i) => {
+    const n = s.cnt || s.hits || 0;
+    report += `  ${i+1}. ${s.service}  :${s.dest_port||s.port}  ${n.toLocaleString()} hits  (${pct(n,total)})\n`;
+  });
+
+  report += `
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  honeyPot v1.0.0  |  Research & Threat Intelligence
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+  el.textContent = report;
+}
+
+function printReport() {
+  const el = document.getElementById('reportOutput');
+  const w  = window.open('','_blank');
+  w.document.write(`<html><head><title>honeyPot Report</title>
+    <style>body{background:#040608;color:#fff;font-family:'Courier New',monospace;font-size:12px;padding:30px;white-space:pre-wrap}</style>
+    </head><body>${el.textContent}</body></html>`);
+  w.print();
+}
+
+// ═══════════════════════════════════════════════════════════
+// GLOBAL REFRESH
+// ═══════════════════════════════════════════════════════════
+async function refresh() {
+  await loadOverview();
+  if (S.panel === 'map')         loadMap();
+  if (S.panel === 'sessions')    loadSessions();
+  if (S.panel === 'cve')         loadCVE();
+  if (S.panel === 'creds')       loadCreds();
+  if (S.panel === 'malware')     loadMalware();
+  if (S.panel === 'honeytokens') loadHoneytokens();
+  if (S.panel === 'services')    loadServices();
+}
+
+// ═══════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════
+window.addEventListener('load', () => {
+  loadOverview();
+
+  // Auto-refresh every 10 seconds
+  setInterval(() => {
+    loadOverview();
+    if (S.panel === 'map') loadMap();
+  }, 10000);
+});
+</script>
+</body>
+</html>
