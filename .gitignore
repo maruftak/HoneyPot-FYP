@@ -95,3 +95,5 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+GeoLite2-City.mmdb
