@@ -520,11 +520,30 @@ HTTP_ROUTES = {
 </div></body></html>"""),
 
     "/admin": (200, "text/html", """<!DOCTYPE html>
-<html><head><title>Admin Panel</title></head>
-<body style="background:#1a1a1a;color:#ccc;font-family:sans-serif;padding:20px">
-<h2>Administrator Login</h2>
-<form method="POST"><input name="user" placeholder="Username"> <input type="password" name="pass" placeholder="Password"> <button>Login</button></form>
-<p style="color:#555;font-size:12px">System: Hikvision V5.7.15 | <a href="/.env" style="color:#888">cfg</a></p>
+<html><head><title>Hikvision Admin Panel</title></head>
+<body style="background:#1a1a1a;color:#ccc;font-family:sans-serif;padding:30px">
+<h2 style="color:#fff">&#9881; Hikvision Administrator Panel</h2>
+<p style="color:#888">Device: DS-2CD2043G2-I | Firmware: V5.7.15 build 230313</p>
+<hr style="border-color:#333">
+<form method="POST" action="/admin" style="max-width:300px">
+  <div style="margin-bottom:12px">
+    <label>Username</label><br>
+    <input name="user" value="admin" style="width:100%;padding:8px;background:#333;
+    border:1px solid #555;color:#fff;border-radius:4px;margin-top:4px">
+  </div>
+  <div style="margin-bottom:12px">
+    <label>Password</label><br>
+    <input type="password" name="pass" style="width:100%;padding:8px;background:#333;
+    border:1px solid #555;color:#fff;border-radius:4px;margin-top:4px">
+  </div>
+  <button type="submit" style="padding:10px 20px;background:#cc3300;color:#fff;
+  border:none;border-radius:4px;cursor:pointer">Login</button>
+</form>
+<p style="color:#444;font-size:11px;margin-top:20px">
+  <a href="/.env" style="color:#555">config</a> |
+  <a href="/backup/passwords.txt" style="color:#555">backup</a> |
+  <a href="/ISAPI/System/deviceInfo" style="color:#555">device info</a>
+</p>
 </body></html>"""),
 
     "/ISAPI/System/deviceInfo": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
@@ -629,6 +648,146 @@ aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
 
     "/install.php": (200, "text/html",
         "<html><body style='padding:20px;background:#1a1a1a;color:#ccc'><h2>Installation Wizard</h2><p>Step 1: Database Configuration</p><form><input name='db_host' value='localhost'> <input name='db_user' value='root'> <input type='password' name='db_pass'><button>Next</button></form></body></html>"),
+    # ── NEW: ONVIF device_service on port 8080 ──
+    "/onvif/device_service": (200, "application/soap+xml", """<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope"
+  xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
+  xmlns:tt="http://www.onvif.org/ver10/schema">
+<SOAP-ENV:Body>
+<tds:GetCapabilitiesResponse>
+<tds:Capabilities>
+<tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
+<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
+<tt:Events><tt:XAddr>http://192.168.1.108:8000/onvif/event</tt:XAddr></tt:Events>
+<tt:Imaging><tt>XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
+<tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
+</tds:Capabilities>
+</tds:GetCapabilitiesResponse>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>"""),
+
+    # ── NEW: web/login ──
+    "/web/login": (200, "text/html", """<!DOCTYPE html>
+<html><head><title>Hikvision — Web Login</title></head>
+<body style="background:#1a1a1a;color:#ccc;font-family:sans-serif;display:flex;
+justify-content:center;align-items:center;height:100vh;margin:0">
+<div style="background:#222;padding:40px;border-radius:8px;min-width:320px">
+<h2 style="color:#fff;text-align:center">&#128247; Hikvision Web Interface</h2>
+<p style="color:#888;text-align:center;font-size:12px">DS-2CD2043G2-I | V5.7.15</p>
+<form method="POST" action="/web/login" style="display:flex;flex-direction:column;gap:12px;margin-top:20px">
+  <input name="username" placeholder="Username" value="admin"
+    style="padding:10px;background:#333;border:1px solid #555;color:#fff;border-radius:4px">
+  <input name="password" type="password" placeholder="Password"
+    style="padding:10px;background:#333;border:1px solid #555;color:#fff;border-radius:4px">
+  <button type="submit"
+    style="padding:10px;background:#0066cc;color:#fff;border:none;border-radius:4px;cursor:pointer">
+    Login
+  </button>
+</form>
+<p style="color:#555;font-size:11px;text-align:center;margin-top:16px">
+  Default: admin / 12345
+</p>
+</div></body></html>"""),
+
+    # ── NEW: /admin panel ──
+    "/admin": (200, "text/html", """<!DOCTYPE html>
+<html><head><title>Hikvision Admin Panel</title></head>
+<body style="background:#1a1a1a;color:#ccc;font-family:sans-serif;padding:30px">
+<h2 style="color:#fff">&#9881; Hikvision Administrator Panel</h2>
+<p style="color:#888">Device: DS-2CD2043G2-I | Firmware: V5.7.15 build 230313</p>
+<hr style="border-color:#333">
+<form method="POST" action="/admin" style="max-width:300px">
+  <div style="margin-bottom:12px">
+    <label>Username</label><br>
+    <input name="user" value="admin" style="width:100%;padding:8px;background:#333;
+    border:1px solid #555;color:#fff;border-radius:4px;margin-top:4px">
+  </div>
+  <div style="margin-bottom:12px">
+    <label>Password</label><br>
+    <input type="password" name="pass" style="width:100%;padding:8px;background:#333;
+    border:1px solid #555;color:#fff;border-radius:4px;margin-top:4px">
+  </div>
+  <button type="submit" style="padding:10px 20px;background:#cc3300;color:#fff;
+  border:none;border-radius:4px;cursor:pointer">Login</button>
+</form>
+<p style="color:#444;font-size:11px;margin-top:20px">
+  <a href="/.env" style="color:#555">config</a> |
+  <a href="/backup/passwords.txt" style="color:#555">backup</a> |
+  <a href="/ISAPI/System/deviceInfo" style="color:#555">device info</a>
+</p>
+</body></html>"""),
+
+    # ── NEW: ISAPI System/deviceInfo (already exists, keep it) ──
+    # already in HTTP_ROUTES above
+
+    # ── NEW: ISAPI Network config (CVE-2021-36260 bait) ──
+    "/ISAPI/System/Network/interfaces/1/ipAddress": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
+<IPAddress version="2.0">
+  <ipVersion>v4</ipVersion>
+  <addressingType>static</addressingType>
+  <ipAddress>192.168.1.108</ipAddress>
+  <subnetMask>255.255.255.0</subnetMask>
+  <DefaultGateway>
+    <ipAddress>192.168.1.1</ipAddress>
+  </DefaultGateway>
+</IPAddress>"""),
+
+    # ── NEW: Streaming endpoint ──
+    "/ISAPI/ContentMgmt/StreamingProxy": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
+<StreamingProxyChannelStatus version="2.0">
+  <id>1</id>
+  <sourceInputPortDescriptor>
+    <proxyProtocol>RTSP</proxyProtocol>
+    <sourceInputPort>rtsp://192.168.1.108:554/Streaming/Channels/101</sourceInputPort>
+    <streamType>main</streamType>
+  </sourceInputPortDescriptor>
+  <online>true</online>
+</StreamingProxyChannelStatus>"""),
+
+    # ── NEW: Video status ──
+    "/ISAPI/System/Video/inputs/channels/1/status": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
+<VideoInputChannelStatus version="2.0">
+  <id>1</id>
+  <videoInputStatusDescription>OK</videoInputStatusDescription>
+  <resolution>
+    <width>2688</width>
+    <height>1520</height>
+  </resolution>
+</VideoInputChannelStatus>"""),
+
+    # ── NEW: User management ──
+    "/ISAPI/Security/users/1": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
+<User version="2.0">
+  <id>1</id>
+  <userName>admin</userName>
+  <userLevel>Administrator</userLevel>
+</User>"""),
+
+    # ── NEW: Camera capabilities ──
+    "/ISAPI/System/capabilities": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
+<SystemCap version="2.0">
+  <isSupportDDNS>true</isSupportDDNS>
+  <isSupportNFS>true</isSupportNFS>
+  <isSupportConfigEncrypt>true</isSupportConfigEncrypt>
+  <NetworkCap>
+    <isSupportWireless>false</isSupportWireless>
+    <isSupportWifi>false</isSupportWifi>
+  </NetworkCap>
+</SystemCap>"""),
+
+    # ── NEW: config download bait ──
+    "/System/configurationFile": (200, "application/octet-stream",
+        "HIKVISION_CONFIG_V5.7.15\nadmin:Admin@2024\nrtsp_pass:RtspP@ss123\n"),
+
+    # ── NEW: CGI login bait ──
+    "/cgi-bin/admin/param.cgi": (200, "text/html", """<!DOCTYPE html>
+<html><body style="background:#111;color:#ccc;font-family:monospace;padding:20px">
+<h3>Hikvision CGI Interface</h3>
+<form method="POST">
+  User: <input name="usr"> Pass: <input type="password" name="pwd">
+  <input type="submit" value="Submit">
+</form>
+</body></html>"""),
 }
 
 _HTTP_SERVER_HEADERS = [
@@ -708,7 +867,50 @@ def handle_http(conn, addr, https=False):
         # Route response
         if path in HTTP_ROUTES:
             status, ct, body = HTTP_ROUTES[path]
+
+            # Extra logging for POST login attempts
+            if method == "POST" and post_body:
+                username = ""
+                password = ""
+                for part in post_body.replace("&", "\n").splitlines():
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        if k.lower() in ("username", "user", "usr", "log", "j_username"):
+                            username = v
+                        if k.lower() in ("password", "pass", "pwd", "j_password"):
+                            password = v
+
+                if username or password:
+                    is_bot = _check_botnet(username, password)
+                    is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
+                    db.log_attack({
+                        "timestamp": _ts(), "source_ip": ip, "source_port": port,
+                        "dest_port": dport, "service": svc, "protocol": "TCP",
+                        "method": method, "path": path,
+                        "username": username, "password": password,
+                        "country": gdata["country"], "city": gdata["city"],
+                        "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+                        "attack_type": "brute_force", "threat_level": "high" if is_bot else "medium",
+                        "is_botnet": is_bot,
+                    })
+                    if is_bot:
+                        _inc("botnets")
+                        alerts.botnet_cred(ip, gdata["country"], svc, username, password)
+                    if is_ht_c:
+                        _inc("honeytokens")
+                        alerts.honeytoken(ip, gdata["country"], "HTTP_CRED", ht_cv, svc)
+                        db.log_honeytoken(_ts(), ip, "HTTP_CRED", ht_cv, svc, gdata["country"])
+
+                # Always return 401 on POST login (keep attacker guessing)
+                if path in ("/web/login", "/doc/page/login.asp", "/admin", "/cgi-bin/admin/param.cgi"):
+                    conn.sendall(_http_resp(401, "text/html",
+                        b"<html><body style='background:#1a1a1a;color:#f55;padding:20px'>"
+                        b"<p>Invalid username or password. Please try again.</p>"
+                        b"<a href='javascript:history.back()' style='color:#0af'>Back</a></body></html>"))
+                    return
+
             conn.sendall(_http_resp(status, ct, body))
+
         elif any(x in path for x in ["wp-", "wordpress"]):
             conn.sendall(_http_resp(200, "text/html", HTTP_ROUTES["/wp-login.php"][2]))
         elif any(x in path.lower() for x in ["phpmyadmin", "pma"]):
