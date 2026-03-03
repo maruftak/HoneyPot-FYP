@@ -933,219 +933,153 @@ def handle_http(conn, addr, https=False):
         except: pass
 
 # ─── RTSP (port 554) ──────────────────────────────────────────────────────────
+# Enhanced RTSP 2.0 with DESCRIBE → SETUP → PLAY sequence (modern H.265/H.264)
+
+_SDP_RESPONSE = """v=0
+o=- {session_id} 1 IN IP4 192.168.1.108
+s=Hikvision RTSP Server
+i=DS-2CD2043G2-I
+c=IN IP4 0.0.0.0
+t=0 0
+a=control:*
+a=range:npt=0-
+m=video 0 RTP/AVP 96
+a=rtpmap:96 H265/90000
+a=fmtp:96 profile-id=1;sprop-sps=Z0LAFdoCAJbARAAAAwAEAAADAPA8WLZY=;sprop-pps=aM4yyA==
+a=control:trackID=1
+m=audio 0 RTP/AVP 8
+a=rtpmap:8 PCMA/8000
+a=control:trackID=2"""
+
 def handle_rtsp(conn, addr):
     ip, port = addr
     if _is_rate_limited(ip): conn.close(); return
     gdata = _geoip(ip)
     _inc("sessions")
+    session_id = os.urandom(4).hex()
 
     try:
-        conn.settimeout(10)
-        raw = conn.recv(2048).decode(errors="ignore")
-        if not raw: return
-
-        cseq = "1"
-        for line in raw.split("\n"):
-            if line.upper().startswith("CSEQ:"):
-                cseq = line.split(":", 1)[1].strip()
-
-        # Extract stream URL if present
-        stream_url = ""
-        for line in raw.split("\n"):
-            if line.upper().startswith("DESCRIBE") or "RTSP" in line.upper():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1].startswith("rtsp://"):
-                    stream_url = parts[1]
-
-        db.log_attack({
-            "timestamp":   _ts(), "source_ip": ip, "source_port": port,
-            "dest_port":   554, "service": "rtsp", "protocol": "TCP",
-            "method":      raw.split()[0] if raw.split() else "DESCRIBE",
-            "path":        stream_url or raw[:100],
-            "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-            "attack_type": "camera_access", "threat_level": "medium",
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "rtsp")
-
-        resp = (f"RTSP/1.0 401 Unauthorized\r\n"
-                f"CSeq: {cseq}\r\n"
-                f"WWW-Authenticate: Digest realm=\"Streaming Server\","
-                f" nonce=\"{os.urandom(8).hex()}\","
-                f" algorithm=\"MD5\"\r\n"
-                f"Server: Hikvision RTSP Server\r\n\r\n")
-        conn.sendall(resp.encode())
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-# ─── ONVIF (port 8000) ───────────────────────────────────────────────────────
-_ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
-<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope"
-  xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
-  xmlns:tt="http://www.onvif.org/ver10/schema">
-<SOAP-ENV:Body>
-<tds:GetCapabilitiesResponse>
-<tds:Capabilities>
-<tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
-<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
-<tt:Events><tt:XAddr>http://192.168.1.108:8000/onvif/event</tt:XAddr></tt:Events>
-<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
-<tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
-</tds:Capabilities>
-</tds:GetCapabilitiesResponse>
-</SOAP-ENV:Body>
-</SOAP-ENV:Envelope>"""
-
-def handle_onvif(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        conn.settimeout(8)
-        raw = conn.recv(4096)
-        if not raw: return
-
-        db.log_attack({
-            "timestamp":   _ts(), "source_ip": ip, "dest_port": 8000,
-            "service":     "onvif", "protocol": "TCP",
-            "payload":     raw.decode(errors="ignore")[:200],
-            "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-            "attack_type": "camera_discovery", "threat_level": "medium",
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "onvif")
-
-        hdr = (f"HTTP/1.1 200 OK\r\nContent-Type: application/soap+xml\r\n"
-               f"Content-Length: {len(_ONVIF_RESP)}\r\n\r\n")
-        conn.sendall(hdr.encode() + _ONVIF_RESP)
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-# ─── MQTT (port 1883) ─────────────────────────────────────────────────────────
-def handle_mqtt(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    username = ""
-    try:
-        conn.settimeout(10)
-        pkt = conn.recv(256)
-        if not pkt: return
-
-        if (pkt[0] & 0xF0) == 0x10:  # CONNECT
-            # Try to extract username from variable header
+        conn.settimeout(12)
+        
+        for _ in range(20):  # handle multi-step RTSP conversation
             try:
-                proto_len = int.from_bytes(pkt[4:6], "big")
-                idx = 2 + 2 + proto_len + 1 + 1 + 2  # skip fixed, proto_name, level, flags, keepalive
-                flags = pkt[9] if len(pkt) > 9 else 0
-                # Skip client_id
-                if idx + 2 <= len(pkt):
-                    cid_len = int.from_bytes(pkt[idx:idx+2], "big")
-                    idx += 2 + cid_len
-                # Username
-                if (flags & 0x80) and idx + 2 <= len(pkt):
-                    ulen = int.from_bytes(pkt[idx:idx+2], "big")
-                    username = pkt[idx+2:idx+2+ulen].decode(errors="ignore")
-            except Exception:
-                pass
-
-            conn.sendall(b"\x20\x02\x00\x00")  # CONNACK — accepted
-
-            db.log_attack({
-                "timestamp":   _ts(), "source_ip": ip, "dest_port": 1883,
-                "service":     "mqtt", "protocol": "TCP",
-                "username":    username,
-                "country":     gdata["country"], "city": gdata["city"],
-                "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-                "attack_type": "iot_protocol", "threat_level": "medium",
-            })
-            _new_ip_alert(ip, gdata["country"], gdata["city"], "mqtt")
-
-            # Read more packets
-            for _ in range(15):
-                try:
-                    conn.settimeout(8)
-                    p = conn.recv(512)
-                    if not p: break
-                    t = (p[0] & 0xF0) >> 4
-                    if t == 12: conn.sendall(b"\xd0\x00")   # PINGRESP
-                    elif t == 8: conn.sendall(b"\x90\x03\x00\x01\x00")  # SUBACK
-                    elif t == 14: break  # DISCONNECT
-                except: break
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-# ─── Redis (port 6379) ────────────────────────────────────────────────────────
-def handle_redis(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-    commands_seen = []
-
-    try:
-        for _ in range(25):
-            conn.settimeout(15)
-            try:
-                data = conn.recv(1024)
+                raw = conn.recv(4096).decode(errors="ignore")
             except socket.timeout:
                 break
-            if not data: break
+            if not raw: break
 
-            raw = data.decode(errors="ignore").strip()
-            commands_seen.append(raw[:100])
-            cmd = raw.upper().split()[0] if raw.split() else ""
+            lines  = raw.split("\n")
+            req_ln = lines[0].strip()
+            method = req_ln.split()[0] if req_ln.split() else "DESCRIBE"
+            
+            cseq = "1"
+            for line in lines:
+                if line.upper().startswith("CSEQ:"):
+                    cseq = line.split(":", 1)[1].strip()
 
-            # Detect CONFIG SET RCE
-            if cmd == "CONFIG" and ("SET" in raw.upper()):
-                _inc("cves")
-                alerts.redis_rce(ip, gdata["country"], raw[:100])
-                db.log_cve(_ts(), ip, "REDIS-RCE", "Redis CONFIG SET RCE", "critical", "redis", raw[:500], gdata["country"])
-                db.log_attack({
-                    "timestamp": _ts(), "source_ip": ip, "dest_port": 6379,
-                    "service": "redis", "payload": raw[:200], "cve_id": "REDIS-RCE",
-                    "attack_type": "rce_attempt", "threat_level": "critical",
-                    "country": gdata["country"], "latitude": gdata["latitude"],
-                    "longitude": gdata["longitude"],
-                })
+            # Extract auth if present
+            username = ""
+            password = ""
+            for line in lines:
+                if "authorization" in line.lower() and "digest" in line.lower():
+                    import re
+                    um = re.search(r'username="([^"]+)"', line)
+                    if um: username = um.group(1)
+                    # password is hashed in digest, but log attempt
+                    password = "(digest_response)"
+
+            # Extract stream URL
+            stream_url = ""
+            for line in lines:
+                if line.upper().startswith(("DESCRIBE", "SETUP", "PLAY", "TEARDOWN")):
+                    parts = line.split()
+                    if len(parts) >= 2 and "rtsp://" in parts[1]:
+                        stream_url = parts[1]
+
+            db.log_attack({
+                "timestamp":   _ts(), "source_ip": ip, "source_port": port,
+                "dest_port":   554, "service": "rtsp", "protocol": "TCP",
+                "method":      method,
+                "path":        stream_url or req_ln[:100],
+                "username":    username,
+                "password":    password,
+                "country":     gdata["country"], "city": gdata["city"],
+                "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
+                "attack_type": "camera_streaming" if username else "camera_probe",
+                "threat_level": "high" if username else "medium",
+            })
+            _new_ip_alert(ip, gdata["country"], gdata["city"], "rtsp")
+
+            # Check for honeytokens in auth
+            if username and password:
+                is_bot = _check_botnet(username, password)
+                is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
+                if is_bot:
+                    _inc("botnets")
+                    alerts.botnet_cred(ip, gdata["country"], "rtsp", username, password)
+                if is_ht_c:
+                    _inc("honeytokens")
+                    alerts.honeytoken(ip, gdata["country"], "RTSP_CRED", ht_cv, "rtsp")
+                    db.log_honeytoken(_ts(), ip, "RTSP_CRED", ht_cv, "rtsp", gdata["country"])
+
+            # Route by RTSP method
+            if method == "DESCRIBE":
+                sdp = _SDP_RESPONSE.format(session_id=session_id)
+                resp = (f"RTSP/1.0 200 OK\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"Content-Type: application/sdp\r\n"
+                        f"Content-Length: {len(sdp)}\r\n"
+                        f"Server: Hikvision RTSP Server\r\n\r\n{sdp}")
+                conn.sendall(resp.encode())
+
+            elif method == "SETUP":
+                resp = (f"RTSP/1.0 200 OK\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"Session: {session_id};timeout=60\r\n"
+                        f"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n"
+                        f"Server: Hikvision RTSP Server\r\n\r\n")
+                conn.sendall(resp.encode())
+
+            elif method == "PLAY":
+                resp = (f"RTSP/1.0 200 OK\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"Session: {session_id}\r\n"
+                        f"Range: npt=0.000-\r\n"
+                        f"RTP-Info: url=rtsp://192.168.1.108:554/Streaming/Channels/101/trackID=1;seq=1;rtptime=0\r\n"
+                        f"Server: Hikvision RTSP Server\r\n\r\n")
+                conn.sendall(resp.encode())
+
+            elif method == "TEARDOWN":
+                resp = (f"RTSP/1.0 200 OK\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"Session: {session_id}\r\n"
+                        f"Server: Hikvision RTSP Server\r\n\r\n")
+                conn.sendall(resp.encode())
+                break
+
+            elif method == "OPTIONS":
+                resp = (f"RTSP/1.0 200 OK\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"Public: DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, OPTIONS, ANNOUNCE, RECORD, GET_PARAMETER, SET_PARAMETER\r\n"
+                        f"Server: Hikvision RTSP Server\r\n\r\n")
+                conn.sendall(resp.encode())
+
+            elif method == "GET_PARAMETER":
+                resp = (f"RTSP/1.0 200 OK\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"Session: {session_id}\r\n"
+                        f"Server: Hikvision RTSP Server\r\n\r\n")
+                conn.sendall(resp.encode())
+
             else:
-                db.log_attack({
-                    "timestamp": _ts(), "source_ip": ip, "dest_port": 6379,
-                    "service": "redis", "payload": raw[:200],
-                    "attack_type": "nosql_probe", "threat_level": "high",
-                    "country": gdata["country"], "city": gdata["city"],
-                    "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-                })
-            _new_ip_alert(ip, gdata["country"], gdata["city"], "redis")
-
-            if cmd == "PING":      conn.sendall(b"+PONG\r\n")
-            elif cmd == "AUTH":    conn.sendall(b"-ERR invalid password\r\n")
-            elif cmd == "INFO":    conn.sendall(b"$120\r\n# Server\r\nredis_version:7.0.11\r\nredis_mode:standalone\r\nos:Linux 5.15.0\r\narch_bits:64\r\nuptime_in_seconds:86400\r\n\r\n")
-            elif cmd == "CONFIG":  conn.sendall(b"-ERR unknown command 'config', with args beginning with: 'set' 'dir' '/tmp' \r\n")
-            elif cmd == "SLAVEOF": conn.sendall(b"+OK\r\n")
-            elif cmd == "SAVE":    conn.sendall(b"+OK\r\n")
-            elif cmd == "FLUSHALL":conn.sendall(b"+OK\r\n")
-            elif cmd == "SET":     conn.sendall(b"+OK\r\n")
-            elif cmd == "GET":     conn.sendall(b"$-1\r\n")
-            elif cmd == "KEYS":    conn.sendall(b"*0\r\n")
-            elif cmd in ("QUIT","EXIT"): conn.sendall(b"+OK\r\n"); break
-            else:                  conn.sendall(b"-ERR unknown command\r\n")
+                # Unauthorized for any other request
+                resp = (f"RTSP/1.0 401 Unauthorized\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"WWW-Authenticate: Digest realm=\"Streaming Server\","
+                        f" nonce=\"{os.urandom(8).hex()}\","
+                        f" algorithm=\"MD5\"\r\n"
+                        f"Server: Hikvision RTSP Server\r\n\r\n")
+                conn.sendall(resp.encode())
 
     except Exception:
         pass
@@ -1153,21 +1087,87 @@ def handle_redis(conn, addr):
         try: conn.close()
         except: pass
 
-# ─── MySQL (port 3306) ────────────────────────────────────────────────────────
-_MYSQL_GREET = (
-    b"\x4a\x00\x00\x00"
-    b"\x0a"
-    b"8.0.32\x00"
-    b"\x08\x00\x00\x00"
-    b"\x2a\x4b\x7c\x26\x31\x3e\x65\x77\x00"
-    b"\xff\xf7\x08\x02\x00\xff\x81\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    b"\x4c\x4b\x6c\x41\x43\x37\x42\x42\x41\x74\x6f\x4e\x00"
-    b"caching_sha2_password\x00"
-)
+# ─── Service launcher ─────────────────────────────────────────────────────────
+def _start_tcp(handler, port, name):
+    def _inner():
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind((config.HONEYPOT_HOST, port))
+            srv.listen(256)
+            print(f"  [+] {name:<22} :{port}")
+            while True:
+                try:
+                    cli, addr = srv.accept()
+                    t = threading.Thread(target=handler, args=(cli, addr), daemon=True)
+                    t.start()
+                except Exception as e:
+                    print(f"  [!] {name} accept: {e}")
+        except OSError as e:
+            print(f"  [✗] {name:<22} :{port} — {e}")
+    threading.Thread(target=_inner, daemon=True, name=name).start()
 
-def handle_mysql(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
+# ─── Services map ─────────────────────────────────────────────────────────────
+_SERVICES = [
+    (handle_telnet,                        config.SERVICE_PORTS["telnet"],    "Telnet"),
+    (handle_ssh,                           config.SERVICE_PORTS["ssh"],       "SSH"),
+    (handle_ftp,                           config.SERVICE_PORTS["ftp"],       "FTP"),
+    (handle_smtp,                          config.SERVICE_PORTS["smtp"],      "SMTP"),
+    (handle_http,                          config.SERVICE_PORTS["http"],      "HTTP"),
+    (lambda c,a: handle_http(c,a,True),    config.SERVICE_PORTS["https"],     "HTTPS"),
+    (handle_http,                          config.SERVICE_PORTS["http_alt"],  "HTTP-Alt"),
+    (handle_rtsp,                          config.SERVICE_PORTS["rtsp"],      "RTSP"),
+    (handle_onvif,                         config.SERVICE_PORTS["onvif"],     "ONVIF"),
+    (handle_mqtt,                          config.SERVICE_PORTS["mqtt"],      "MQTT"),
+    (handle_redis,                         config.SERVICE_PORTS["redis"],     "Redis"),
+    (handle_mysql,                         config.SERVICE_PORTS["mysql"],     "MySQL"),
+    (handle_docker,                        config.SERVICE_PORTS["docker"],    "Docker API"),
+    (handle_memcached,                     config.SERVICE_PORTS["memcached"], "Memcached"),
+    (handle_vnc,                           config.SERVICE_PORTS["vnc"],       "VNC"),
+    (handle_rdp,                           config.SERVICE_PORTS["rdp"],       "RDP"),
+    (handle_modbus,                        config.SERVICE_PORTS["modbus"],    "Modbus/ICS"),
+]
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+def main():
+    db.init()
+
+    print(f"""
+╔══════════════════════════════════════════════════════════════════════╗
+║  honeyPot v{config.VERSION}  —  IoT Threat Intelligence Honeypot              ║
+║  Device: {config.DEVICE_VENDOR} {config.DEVICE_MODEL}                    ║
+║  Firmware: {config.DEVICE_FIRMWARE}                              ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Telegram: {'ENABLED ✓' if config.TELEGRAM_ENABLED else 'disabled (set TELEGRAM_TOKEN + TELEGRAM_CHAT_ID)'}                                   ║
+║  GeoIP:    {'ENABLED ✓' if os.path.exists(config.GEOIP_DB) else 'disabled (GeoLite2-City.mmdb missing)'}                                      ║
+╚══════════════════════════════════════════════════════════════════════╝""")
+
+    print("\n[*] Starting services:")
+    active = 0
+    for handler, port, name in _SERVICES:
+        if port:
+            _start_tcp(handler, port, name)
+            active += 1
+            time.sleep(0.05)
+
+    print(f"\n[✓] {active} services active | DB: {config.DB_PATH}")
+    print(f"[✓] Dashboard: python3 dashboard.py\n")
+
+    if config.TELEGRAM_ENABLED:
+        alerts.startup(active, f"{config.DEVICE_VENDOR} {config.DEVICE_MODEL}", config.DEVICE_FIRMWARE)
+    else:
+        print("[!] Telegram disabled — set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID env vars")
+
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        print(f"\n[!] Stopped | Sessions: {COUNTERS['sessions']} | Unique IPs: {len(_seen_ips)}")
+        if config.TELEGRAM_ENABLED:
+            alerts.shutdown(COUNTERS["sessions"], len(_seen_ips))
+
+if __name__ == "__main__":
+    main()
     gdata = _geoip(ip)
     _inc("sessions")
 
