@@ -134,7 +134,47 @@ def _base_log(ip, service, gdata, sid, extra=None):
     db.log_attack(d)
     _new_ip_alert(ip, d["country"], d["city"], service)
 
-# ─── TELNET (port 23) — full fake BusyBox shell ───────────────────────────────
+# ─── Scanner / Tool Detection ──────────────────────────────────────────────────
+# NOTE: Must be defined BEFORE any handle_* function that calls _detect_scanner()
+_SCANNER_SIGNATURES = {
+    "masscan":          ["masscan"],
+    "nmap":             ["nmap", "nmapscript"],
+    "zgrab":            ["zgrab"],
+    "shodan":           ["shodan"],
+    "censys":           ["censys"],
+    "nikto":            ["nikto"],
+    "sqlmap":           ["sqlmap"],
+    "wpscan":           ["wpscan"],
+    "nuclei":           ["nuclei", "projectdiscovery"],
+    "burpsuite":        ["burp", "burpsuite"],
+    "metasploit":       ["metasploit", "msfconsole", "meterpreter"],
+    "cobalt_strike":    ["cobalt strike", "cobaltstrike"],
+    "hydra":            ["hydra", "thc-hydra"],
+    "medusa":           ["medusa"],
+    "ncrack":           ["ncrack"],
+    "curl":             ["curl/"],
+    "wget":             ["wget/"],
+    "python_requests":  ["python-requests", "python-urllib"],
+    "go_http":          ["go-http-client"],
+    "java_http":        ["java/", "jakarta"],
+    "mirai_scanner":    ["hello world", "busybox", "bin/busybox"],
+    "iot_reaper":       ["iot_reaper", "reaper"],
+    "zgrab2":           ["zgrab2"],
+    "libssh":           ["libssh"],
+    "paramiko":         ["paramiko"],
+    "putty":            ["putty"],
+    "dropbear":         ["dropbear"],
+}
+
+def _detect_scanner(text: str) -> str:
+    """Return best-match scanner/tool name. Empty string if none matched."""
+    t = text.lower()
+    for tool, signatures in _SCANNER_SIGNATURES.items():
+        if any(sig.lower() in t for sig in signatures):
+            return tool
+    return ""
+
+# ─── TELNET (port 23) — full fake BusyBox shell ──────────────────────────────
 _TELNET_BANNERS = [
     "\r\n\r\nHikvision DS-2CD2043G2-I\r\nFirmware: V5.7.15 build 230313\r\n\r\n(none) login: ",
     "\r\n\r\nBusyBox v1.31.1 (2021-10-19 08:36:54 UTC) built-in shell (ash)\r\n\r\nlogin: ",
@@ -259,6 +299,10 @@ def handle_telnet(conn, addr):
                 db.log_cve(_ts(), ip, cve_id, cve["name"], cve["severity"], "telnet", cmd, gdata["country"])
 
             out = shell.execute(cmd)
+
+            # Detect scanner tool from command payload
+            scanner_tool = _detect_scanner(cmd)
+
             time.sleep(0.1)
             if out:
                 conn.sendall(out.encode())
@@ -307,21 +351,22 @@ def handle_ssh(conn, addr):
             pass
 
         ua = client_data.decode(errors="ignore")[:200]
-        scanner = ""
-        for s in ["masscan", "zgrab", "shodan", "libssh", "paramiko", "python", "go/", "nmap"]:
-            if s in ua.lower():
-                scanner = s; break
+
+        # Replace old scanner detection with new unified function
+        scanner = _detect_scanner(ua)
 
         db.log_attack({
             "timestamp": _ts(), "source_ip": ip, "source_port": port,
             "dest_port": 22, "service": "ssh", "protocol": "TCP",
-            "user_agent": ua, "attack_type": "banner_grab" if not scanner else "scanner",
+            "user_agent": ua,
+            "scanner_tool": scanner,
+            "attack_type": "scanner" if scanner else "banner_grab",
             "threat_level": "medium", "country": gdata["country"], "city": gdata["city"],
             "latitude": gdata["latitude"], "longitude": gdata["longitude"],
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "ssh")
         if scanner:
-            print(f"  [SSH] Scanner detected: {scanner} from {ip}")
+            print(f"  [SSH] Tool detected: {scanner} from {ip}")
 
         # Keep alive briefly for scanners
         time.sleep(1.5)
@@ -384,6 +429,7 @@ def handle_ftp(conn, addr):
 
             elif cmd == "PASS":
                 password = arg
+                scanner_tool = _detect_scanner(f"{username} {password}")
                 is_bot   = _check_botnet(username, password)
                 is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
 
@@ -788,6 +834,11 @@ justify-content:center;align-items:center;height:100vh;margin:0">
   <input type="submit" value="Submit">
 </form>
 </body></html>"""),
+
+    # ── Health check — stops dashboard /v1/about 404 spam ──
+    "/v1/about": (200, "application/json",
+        f'{{"name":"{config.PROJECT_NAME if hasattr(config,"PROJECT_NAME") else "honeyPot"}",'
+        f'"status":"running","device":"Hikvision DS-2CD2043G2-I","firmware":"V5.7.15 build 230313"}}'),
 }
 
 _HTTP_SERVER_HEADERS = [
@@ -982,6 +1033,9 @@ def handle_http(conn, addr, https=False):
         # LOG EVERY REQUEST (Even 404s) — Industry Standard for Honeypots
         # ═══════════════════════════════════════════════════════════════════════
         
+        # ── detect scanner_tool BEFORE db.log_attack ──
+        scanner_tool = _detect_scanner(ua + " " + full_request[:500])
+
         db.log_attack({
             "timestamp":       _ts(),
             "source_ip":       ip,
@@ -1008,6 +1062,7 @@ def handle_http(conn, addr, https=False):
             "attack_type":     attack_patterns[0] if attack_patterns else "web_scan",
             "threat_level":    threat_level,
             "cve_id":          cve_id or "",
+            "scanner_tool":    scanner_tool,
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], svc)
 
