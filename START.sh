@@ -7,15 +7,13 @@ GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo -e "${CYAN}"
-cat << 'EOF'
-  ╔══════════════════════════════════════════════════════╗
-  ║         honeyPot — IoT Threat Intelligence           ║
-  ║         Hikvision DS-2CD2043G2-I Emulator            ║
-  ╚══════════════════════════════════════════════════════╝
-EOF
-echo -e "${NC}"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    . "$SCRIPT_DIR/.env"
+    set +a
+fi
 
+echo -e "${CYAN}"
 # Root check
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}[!] Root required for low ports. Run: sudo ./START.sh${NC}"; exit 1
@@ -24,13 +22,6 @@ fi
 # Python check
 if ! command -v python3 &>/dev/null; then
     echo -e "${RED}[!] Python 3 required${NC}"; exit 1
-fi
-
-# Load .env if exists
-if [ -f "$SCRIPT_DIR/.env" ]; then
-    set -a
-    source "$SCRIPT_DIR/.env"
-    set +a
 fi
 
 # Dependencies
@@ -75,6 +66,15 @@ echo -e "  Database:       $SCRIPT_DIR/logs/honeypot.db"
 echo ""
 echo -e "  Stop: Ctrl+C"
 echo -e "${CYAN}══════════════════════════════════════════════════════${NC}"
+echo ""
+
+cleanup() {
+    echo -e "\n${RED}[!] Shutting down honeyPot…${NC}"
+    kill $HP_PID $DASH_PID 2>/dev/null || true
+    echo -e "${GREEN}[✓] Stopped.${NC}"
+}
+trap cleanup EXIT INT TERM
+wait
 echo ""
 
 cleanup() {

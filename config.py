@@ -16,9 +16,12 @@ DASHBOARD_HOST    = "0.0.0.0"
 DASHBOARD_PORT    = 5001
 
 # ─── Telegram Alerts ─────────────────────────────────────────────────────────
-TELEGRAM_ENABLED    = os.getenv("TELEGRAM_TOKEN") is not None
-TELEGRAM_TOKEN      = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "")
+DEFAULT_TELEGRAM_TOKEN   = "8138859391:AAFqswxB9pvW5bODElrMPS_C4SRZ2UKg7wA"
+DEFAULT_TELEGRAM_CHAT_ID = "8213069106"
+
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", DEFAULT_TELEGRAM_TOKEN)
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", DEFAULT_TELEGRAM_CHAT_ID)
+TELEGRAM_ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
 
 # Alert thresholds — how many events before a Telegram message fires
 ALERT_NEW_IP_EVERY    = 1    # every new attacker IP
@@ -193,4 +196,4 @@ HONEYTOKEN_CREDS = {
     ("cloudadmin", "Cloud@Admin123"),
     ("deploy",     "Deploy@2024!"),
 }
-}
+

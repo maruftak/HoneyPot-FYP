@@ -158,6 +158,18 @@ TELEGRAM_CHAT_ID = "..."
 
 ---
 
+## 🔔 Telegram Alerts (secure setup)
+
+1. Copy the template and fill your values (never commit `.env`):
+   ```bash
+   cp .env.example .env
+   # edit .env with your TELEGRAM_TOKEN and TELEGRAM_CHAT_ID
+   ```
+2. Run `sudo ./START.sh` — the script auto-loads `.env`.
+3. Rotate tokens immediately if they ever leak (BotFather `/revoke`).
+
+---
+
 ## ☁️ Cloud Deployment (Ubuntu Example)
 
 ```bash
