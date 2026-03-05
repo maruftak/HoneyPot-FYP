@@ -24,6 +24,7 @@ logs/
 
 # Secrets / config
 .env
+.env.local
 config.local.py
 config.dev.py
 secrets.json

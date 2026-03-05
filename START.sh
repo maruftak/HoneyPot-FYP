@@ -26,6 +26,13 @@ if ! command -v python3 &>/dev/null; then
     echo -e "${RED}[!] Python 3 required${NC}"; exit 1
 fi
 
+# Load .env if exists
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
 # Dependencies
 echo -e "${GREEN}[1/3] Installing dependencies…${NC}"
 pip3 install flask flask-cors requests geoip2 -q --break-system-packages 2>/dev/null || \
