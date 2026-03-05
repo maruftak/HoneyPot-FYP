@@ -37,7 +37,12 @@ CREATE TABLE IF NOT EXISTS attacks (
     is_botnet        INTEGER DEFAULT 0,
     is_tor           INTEGER DEFAULT 0,
     commands         TEXT    DEFAULT '[]',
-    raw_payload      TEXT    DEFAULT ''
+    raw_payload      TEXT    DEFAULT '',
+    query_string     TEXT    DEFAULT '',
+    referer          TEXT    DEFAULT '',
+    host_header      TEXT    DEFAULT '',
+    origin            TEXT    DEFAULT '',
+    attack_patterns  TEXT    DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS cve_attempts (
@@ -134,6 +139,25 @@ def init():
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         conn.executescript(SCHEMA)
+        
+        # Add new columns for comprehensive HTTP logging
+        with conn:
+            try:
+                conn.execute("ALTER TABLE attacks ADD COLUMN query_string TEXT")
+            except: pass
+            try:
+                conn.execute("ALTER TABLE attacks ADD COLUMN referer TEXT")
+            except: pass
+            try:
+                conn.execute("ALTER TABLE attacks ADD COLUMN host_header TEXT")
+            except: pass
+            try:
+                conn.execute("ALTER TABLE attacks ADD COLUMN origin TEXT")
+            except: pass
+            try:
+                conn.execute("ALTER TABLE attacks ADD COLUMN attack_patterns TEXT")
+            except: pass
+    
         conn.commit()
         conn.close()
     print(f"[DB] Initialised: {DB_PATH}")
@@ -157,9 +181,9 @@ def log_attack(d: dict):
                    method, path, user_agent, payload, username, password,
                    country, city, latitude, longitude,
                    attack_type, threat_level, cve_id, session_id,
-                   is_botnet, is_tor, commands, raw_payload)
+                   is_botnet, is_tor, commands, raw_payload, query_string, referer, host_header, origin, attack_patterns)
                 VALUES
-                  (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 d.get("timestamp",   _now()),
                 d.get("source_ip",   d.get("ip", "")),
@@ -185,6 +209,11 @@ def log_attack(d: dict):
                 1 if d.get("is_tor")    else 0,
                 json.dumps(d.get("commands", [])),
                 d.get("raw_payload", "")[:2048],
+                d.get("query_string", "")[:512],
+                d.get("referer",      "")[:512],
+                d.get("host_header",  "")[:512],
+                d.get("origin",       "")[:512],
+                d.get("attack_patterns", "")[:512],
             ))
             conn.commit()
             conn.close()

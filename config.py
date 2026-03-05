@@ -17,9 +17,9 @@ DASHBOARD_PORT    = 5001
 
 # ─── Telegram Alerts ──────────────────────────────────────────────────────────
 # Set via environment variables OR fill in directly here
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN",   "")   # e.g. "123456:ABC-DEF..."
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")   # e.g. "123456789"
-TELEGRAM_ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
+TELEGRAM_ENABLED    = True
+TELEGRAM_TOKEN      = "8138859391:AAFqswxB9pvW5bODElrMPS_C4SRZ2UKg7wA"
+TELEGRAM_CHAT_ID    = "8213069106"
 
 # Alert thresholds — how many events before a Telegram message fires
 ALERT_NEW_IP_EVERY    = 1    # every new attacker IP

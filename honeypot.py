@@ -659,7 +659,7 @@ aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
 <tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
 <tt:Events><tt:XAddr>http://192.168.1.108:8000/onvif/event</tt:XAddr></tt:Events>
-<tt:Imaging><tt>XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
+<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
 <tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
 </tds:Capabilities>
 </tds:GetCapabilitiesResponse>
@@ -827,20 +827,111 @@ def handle_http(conn, addr, https=False):
         method  = req_ln[0] if req_ln else "GET"
         full_path = req_ln[1] if len(req_ln) > 1 else "/"
         path    = full_path.split("?")[0]
+        query   = full_path.split("?")[1] if "?" in full_path else ""
 
         ua      = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("user-agent:")), "")
         referer = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("referer:")), "")
-
-        # POST body (login attempts)
+        host    = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("host:")), "")
+        origin  = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("origin:")), "")
+        
+        # POST body
         post_body = ""
         if "\r\n\r\n" in raw_str:
-            post_body = raw_str.split("\r\n\r\n", 1)[1][:500]
+            post_body = raw_str.split("\r\n\r\n", 1)[1][:1000]
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # ATTACK PATTERN DETECTION — Based on Real-World IoT Attacks 2024-2026
+        # ═══════════════════════════════════════════════════════════════════════
+        
+        attack_patterns = []
+        threat_level = "low"
+        
+        # 1. Directory Traversal / LFI
+        if any(x in full_path for x in ["../", "..\\", "%2e%2e", "....//", "..;/"]):
+            attack_patterns.append("directory_traversal")
+            threat_level = "high"
+        
+        # 2. Command Injection
+        cmd_patterns = ["|", ";", "`", "$", "&&", "||", "\n", "$(", "${"]
+        if any(x in full_path or x in post_body for x in cmd_patterns):
+            attack_patterns.append("command_injection")
+            threat_level = "critical"
+        
+        # 3. SQL Injection
+        sql_patterns = ["'", "union", "select", "insert", "delete", "drop", "exec", "script", "1=1", "' or '"]
+        if any(x in full_path.lower() or x in post_body.lower() for x in sql_patterns):
+            attack_patterns.append("sql_injection")
+            threat_level = "high"
+        
+        # 4. XSS / Script Injection
+        if any(x in full_path.lower() or x in post_body.lower() for x in ["<script", "javascript:", "onerror=", "onload="]):
+            attack_patterns.append("xss")
+            threat_level = "medium"
+        
+        # 5. IoT-Specific Exploits (Real CVEs from 2021-2024)
+        iot_exploits = {
+            "/cgi-bin/": "cgi_exploit",
+            "/shell?": "web_shell",
+            "/api/jsonws/invoke": "liferay_rce",  # CVE-2020-7961
+            "/vendor/phpunit": "phpunit_rce",  # CVE-2017-9841
+            "/telescope/requests": "laravel_debug",
+            "/.aws/": "aws_creds_leak",
+            "/.docker/": "docker_creds_leak",
+            "/.kube/": "kubernetes_creds",
+            "/actuator/": "spring_boot_exposure",  # Common in 2024
+            "/solr/": "apache_solr_exploit",
+            "/console/": "jboss_exploit",
+            "/manager/": "tomcat_exploit",
+            "/boa/": "boa_server_exploit",  # IoT routers
+            "/goform/": "dlink_tplink_exploit",  # D-Link/TP-Link routers
+        }
+        for pattern, exploit_name in iot_exploits.items():
+            if pattern in path.lower():
+                attack_patterns.append(exploit_name)
+                threat_level = "critical"
+        
+        # 6. Credential Harvesting
+        if method == "POST" and any(x in path.lower() for x in ["/login", "/admin", "/auth", "/signin"]):
+            attack_patterns.append("credential_harvest")
+            threat_level = "high"
+        
+        # 7. Ransomware / Cryptomining Indicators
+        if any(x in ua.lower() for x in ["xmrig", "miner", "stratum", "nicehash"]):
+            attack_patterns.append("cryptominer")
+            threat_level = "critical"
+        
+        # 8. Botnet C&C / DDoS Patterns
+        botnet_ua = ["masscan", "zgrab", "shodan", "censys", "nmap", "nikto", "sqlmap", "metasploit", "burp"]
+        if any(x in ua.lower() for x in botnet_ua):
+            attack_patterns.append("automated_scanner")
+            threat_level = "medium"
+        
+        # 9. Sensitive File Access (Real-World Honeypot Data)
+        sensitive_files = [
+            "/.env", "/config.php", "/wp-config.php", "/.git/config", 
+            "/id_rsa", "/.ssh/", "/shadow", "/passwd", "/database.yml",
+            "/credentials.json", "/secret.key", "/backup.sql", "/.aws/credentials"
+        ]
+        if any(sf in path.lower() for sf in sensitive_files):
+            attack_patterns.append("sensitive_file_access")
+            threat_level = "critical"
+        
+        # 10. Rare: China APT / Nation-State Patterns (Observed in 2023-2024)
+        if any(x in full_path for x in ["/bin/busybox", "/system/bin/sh", "/proc/self/exe"]):
+            attack_patterns.append("linux_binary_probe")
+            threat_level = "critical"
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # UNIVERSAL HTTP LOGGING — Log EVERY Request (Known + Unknown Endpoints)
+        # ═══════════════════════════════════════════════════════════════════════
+        
         # CVE check
         full_request = raw_str[:2000]
         cve_id, cve = _check_cve(full_request, svc)
         if cve_id:
             _inc("cves")
+            attack_patterns.append(f"cve_{cve_id}")
+            threat_level = "critical"
             alerts.cve_exploit(ip, gdata["country"], cve_id, cve["name"], cve["severity"], svc, path)
             db.log_cve(_ts(), ip, cve_id, cve["name"], cve["severity"], svc, full_request[:1000], gdata["country"])
 
@@ -848,75 +939,102 @@ def handle_http(conn, addr, https=False):
         ht_f, ht_fv = _check_honeytoken_file(path)
         if ht_f:
             _inc("honeytokens")
+            attack_patterns.append("honeytoken_file")
+            threat_level = "critical"
             alerts.honeytoken(ip, gdata["country"], "HTTP_GET", path, svc)
             db.log_honeytoken(_ts(), ip, "HTTP_GET", path, svc, gdata["country"], gdata["city"])
 
-        threat = "critical" if cve_id or ht_f else ("high" if any(p in path for p in ["/admin", "/ISAPI/", "/actuator"]) else "low")
+        # POST credential logging
+        username = ""
+        password = ""
+        if method == "POST" and post_body:
+            for part in post_body.replace("&", "\n").splitlines():
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    if k.lower() in ("username", "user", "usr", "log", "j_username", "login", "email"):
+                        username = v[:50]
+                    if k.lower() in ("password", "pass", "pwd", "j_password", "passwd"):
+                        password = v[:50]
+            
+            if username or password:
+                is_bot = _check_botnet(username, password)
+                is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
+                if is_bot:
+                    _inc("botnets")
+                    attack_patterns.append("botnet_credential")
+                    threat_level = "critical"
+                    alerts.botnet_cred(ip, gdata["country"], svc, username, password)
+                if is_ht_c:
+                    _inc("honeytokens")
+                    attack_patterns.append("honeytoken_credential")
+                    threat_level = "critical"
+                    alerts.honeytoken(ip, gdata["country"], "HTTP_CRED", ht_cv, svc)
+                    db.log_honeytoken(_ts(), ip, "HTTP_CRED", ht_cv, svc, gdata["country"])
+
+        # Final threat level (upgrade if patterns detected)
+        if not attack_patterns and path in HTTP_ROUTES:
+            threat_level = "low"
+        elif attack_patterns:
+            if any(x in attack_patterns for x in ["command_injection", "cryptominer", "sensitive_file_access"]):
+                threat_level = "critical"
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # LOG EVERY REQUEST (Even 404s) — Industry Standard for Honeypots
+        # ═══════════════════════════════════════════════════════════════════════
+        
         db.log_attack({
-            "timestamp":   _ts(), "source_ip": ip, "source_port": port,
-            "dest_port":   dport, "service":   svc, "protocol": "TCP",
-            "method":      method, "path": path, "user_agent": ua[:256],
-            "payload":     post_body, "raw_payload": full_request[:512],
-            "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-            "attack_type": "web_scan", "threat_level": threat,
-            "cve_id":      cve_id or "",
+            "timestamp":       _ts(),
+            "source_ip":       ip,
+            "source_port":     port,
+            "dest_port":       dport,
+            "service":         svc,
+            "protocol":        "TCP",
+            "method":          method,
+            "path":            path[:500],
+            "query_string":    query[:500],
+            "user_agent":      ua[:256],
+            "referer":         referer[:256],
+            "host_header":     host[:256],
+            "origin":          origin[:256],
+            "username":        username,
+            "password":        password,
+            "payload":         post_body[:500],
+            "raw_payload":     full_request[:1000],
+            "attack_patterns": ",".join(attack_patterns) if attack_patterns else "",
+            "country":         gdata["country"],
+            "city":            gdata["city"],
+            "latitude":        gdata["latitude"],
+            "longitude":       gdata["longitude"],
+            "attack_type":     attack_patterns[0] if attack_patterns else "web_scan",
+            "threat_level":    threat_level,
+            "cve_id":          cve_id or "",
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], svc)
 
-        # Route response
+        # ═══════════════════════════════════════════════════════════════════════
+        # HTTP RESPONSE ROUTING (After Logging)
+        # ═══════════════════════════════════════════════════════════════════════
+        
+        # Known routes
         if path in HTTP_ROUTES:
             status, ct, body = HTTP_ROUTES[path]
-
-            # Extra logging for POST login attempts
-            if method == "POST" and post_body:
-                username = ""
-                password = ""
-                for part in post_body.replace("&", "\n").splitlines():
-                    if "=" in part:
-                        k, v = part.split("=", 1)
-                        if k.lower() in ("username", "user", "usr", "log", "j_username"):
-                            username = v
-                        if k.lower() in ("password", "pass", "pwd", "j_password"):
-                            password = v
-
-                if username or password:
-                    is_bot = _check_botnet(username, password)
-                    is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
-                    db.log_attack({
-                        "timestamp": _ts(), "source_ip": ip, "source_port": port,
-                        "dest_port": dport, "service": svc, "protocol": "TCP",
-                        "method": method, "path": path,
-                        "username": username, "password": password,
-                        "country": gdata["country"], "city": gdata["city"],
-                        "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-                        "attack_type": "brute_force", "threat_level": "high" if is_bot else "medium",
-                        "is_botnet": is_bot,
-                    })
-                    if is_bot:
-                        _inc("botnets")
-                        alerts.botnet_cred(ip, gdata["country"], svc, username, password)
-                    if is_ht_c:
-                        _inc("honeytokens")
-                        alerts.honeytoken(ip, gdata["country"], "HTTP_CRED", ht_cv, svc)
-                        db.log_honeytoken(_ts(), ip, "HTTP_CRED", ht_cv, svc, gdata["country"])
-
-                # Always return 401 on POST login (keep attacker guessing)
-                if path in ("/web/login", "/doc/page/login.asp", "/admin", "/cgi-bin/admin/param.cgi"):
-                    conn.sendall(_http_resp(401, "text/html",
-                        b"<html><body style='background:#1a1a1a;color:#f55;padding:20px'>"
-                        b"<p>Invalid username or password. Please try again.</p>"
-                        b"<a href='javascript:history.back()' style='color:#0af'>Back</a></body></html>"))
-                    return
-
+            
+            # Handle POST login attempts (always fail with 401)
+            if method == "POST" and path in ("/web/login", "/doc/page/login.asp", "/admin", "/cgi-bin/admin/param.cgi"):
+                conn.sendall(_http_resp(401, "text/html",
+                    b"<html><body style='background:#1a1a1a;color:#f55;padding:20px'>"
+                    b"<p>Invalid username or password. Please try again.</p>"
+                    b"<a href='javascript:history.back()' style='color:#0af'>Back</a></body></html>"))
+                return
+            
             conn.sendall(_http_resp(status, ct, body))
-
+        
+        # Partial matches
         elif any(x in path for x in ["wp-", "wordpress"]):
             conn.sendall(_http_resp(200, "text/html", HTTP_ROUTES["/wp-login.php"][2]))
         elif any(x in path.lower() for x in ["phpmyadmin", "pma"]):
             conn.sendall(_http_resp(200, "text/html", HTTP_ROUTES["/phpMyAdmin/"][2]))
         elif "backup" in path.lower() or path.endswith((".sql", ".zip", ".tar.gz")):
-            # Return forbidden but log it
             conn.sendall(_http_resp(403, "text/html", b"<h1>403 Forbidden</h1>"))
         elif path.startswith("/api"):
             conn.sendall(_http_resp(200, "application/json", b'{"status":"ok","version":"1.0.0"}'))
@@ -924,6 +1042,7 @@ def handle_http(conn, addr, https=False):
             conn.sendall(_http_resp(401, "application/xml",
                 b"<?xml version=\"1.0\"?><ResponseStatus><statusCode>401</statusCode><statusString>Unauthorized</statusString></ResponseStatus>"))
         else:
+            # 404 for everything else (but already logged above)
             conn.sendall(_http_resp(404, "text/html", b"<html><body><h1>404 Not Found</h1></body></html>"))
 
     except Exception:
@@ -1087,87 +1206,192 @@ def handle_rtsp(conn, addr):
         try: conn.close()
         except: pass
 
-# ─── Service launcher ─────────────────────────────────────────────────────────
-def _start_tcp(handler, port, name):
-    def _inner():
-        try:
-            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            srv.bind((config.HONEYPOT_HOST, port))
-            srv.listen(256)
-            print(f"  [+] {name:<22} :{port}")
-            while True:
-                try:
-                    cli, addr = srv.accept()
-                    t = threading.Thread(target=handler, args=(cli, addr), daemon=True)
-                    t.start()
-                except Exception as e:
-                    print(f"  [!] {name} accept: {e}")
-        except OSError as e:
-            print(f"  [✗] {name:<22} :{port} — {e}")
-    threading.Thread(target=_inner, daemon=True, name=name).start()
+# ─── ONVIF (port 8000) ───────────────────────────────────────────────────────
+_ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope"
+  xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
+  xmlns:tt="http://www.onvif.org/ver10/schema">
+<SOAP-ENV:Body>
+<tds:GetCapabilitiesResponse>
+<tds:Capabilities>
+<tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
+<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
+<tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt:XAddr></tt:Events>
+<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
+<tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
+</tds:Capabilities>
+</tds:GetCapabilitiesResponse>
+</SOAP-ENV:Body>
+</SOAP-ENV:Envelope>"""
 
-# ─── Services map ─────────────────────────────────────────────────────────────
-_SERVICES = [
-    (handle_telnet,                        config.SERVICE_PORTS["telnet"],    "Telnet"),
-    (handle_ssh,                           config.SERVICE_PORTS["ssh"],       "SSH"),
-    (handle_ftp,                           config.SERVICE_PORTS["ftp"],       "FTP"),
-    (handle_smtp,                          config.SERVICE_PORTS["smtp"],      "SMTP"),
-    (handle_http,                          config.SERVICE_PORTS["http"],      "HTTP"),
-    (lambda c,a: handle_http(c,a,True),    config.SERVICE_PORTS["https"],     "HTTPS"),
-    (handle_http,                          config.SERVICE_PORTS["http_alt"],  "HTTP-Alt"),
-    (handle_rtsp,                          config.SERVICE_PORTS["rtsp"],      "RTSP"),
-    (handle_onvif,                         config.SERVICE_PORTS["onvif"],     "ONVIF"),
-    (handle_mqtt,                          config.SERVICE_PORTS["mqtt"],      "MQTT"),
-    (handle_redis,                         config.SERVICE_PORTS["redis"],     "Redis"),
-    (handle_mysql,                         config.SERVICE_PORTS["mysql"],     "MySQL"),
-    (handle_docker,                        config.SERVICE_PORTS["docker"],    "Docker API"),
-    (handle_memcached,                     config.SERVICE_PORTS["memcached"], "Memcached"),
-    (handle_vnc,                           config.SERVICE_PORTS["vnc"],       "VNC"),
-    (handle_rdp,                           config.SERVICE_PORTS["rdp"],       "RDP"),
-    (handle_modbus,                        config.SERVICE_PORTS["modbus"],    "Modbus/ICS"),
-]
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
-def main():
-    db.init()
-
-    print(f"""
-╔══════════════════════════════════════════════════════════════════════╗
-║  honeyPot v{config.VERSION}  —  IoT Threat Intelligence Honeypot              ║
-║  Device: {config.DEVICE_VENDOR} {config.DEVICE_MODEL}                    ║
-║  Firmware: {config.DEVICE_FIRMWARE}                              ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  Telegram: {'ENABLED ✓' if config.TELEGRAM_ENABLED else 'disabled (set TELEGRAM_TOKEN + TELEGRAM_CHAT_ID)'}                                   ║
-║  GeoIP:    {'ENABLED ✓' if os.path.exists(config.GEOIP_DB) else 'disabled (GeoLite2-City.mmdb missing)'}                                      ║
-╚══════════════════════════════════════════════════════════════════════╝""")
-
-    print("\n[*] Starting services:")
-    active = 0
-    for handler, port, name in _SERVICES:
-        if port:
-            _start_tcp(handler, port, name)
-            active += 1
-            time.sleep(0.05)
-
-    print(f"\n[✓] {active} services active | DB: {config.DB_PATH}")
-    print(f"[✓] Dashboard: python3 dashboard.py\n")
-
-    if config.TELEGRAM_ENABLED:
-        alerts.startup(active, f"{config.DEVICE_VENDOR} {config.DEVICE_MODEL}", config.DEVICE_FIRMWARE)
-    else:
-        print("[!] Telegram disabled — set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID env vars")
+def handle_onvif(conn, addr):
+    ip, port = addr
+    if _is_rate_limited(ip): conn.close(); return
+    gdata = _geoip(ip)
+    _inc("sessions")
 
     try:
-        while True:
-            time.sleep(10)
-    except KeyboardInterrupt:
-        print(f"\n[!] Stopped | Sessions: {COUNTERS['sessions']} | Unique IPs: {len(_seen_ips)}")
-        if config.TELEGRAM_ENABLED:
-            alerts.shutdown(COUNTERS["sessions"], len(_seen_ips))
+        conn.settimeout(8)
+        raw = conn.recv(4096)
+        if not raw: return
 
-if __name__ == "__main__":
-    main()
+        db.log_attack({
+            "timestamp":   _ts(), "source_ip": ip, "dest_port": 8000,
+            "service":     "onvif", "protocol": "TCP",
+            "payload":     raw.decode(errors="ignore")[:200],
+            "country":     gdata["country"], "city": gdata["city"],
+            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
+            "attack_type": "camera_discovery", "threat_level": "medium",
+        })
+        _new_ip_alert(ip, gdata["country"], gdata["city"], "onvif")
+
+        hdr = (f"HTTP/1.1 200 OK\r\nContent-Type: application/soap+xml\r\n"
+               f"Content-Length: {len(_ONVIF_RESP)}\r\n\r\n")
+        conn.sendall(hdr.encode() + _ONVIF_RESP)
+
+    except Exception:
+        pass
+    finally:
+        try: conn.close()
+        except: pass
+
+# ─── MQTT (port 1883) ─────────────────────────────────────────────────────────
+def handle_mqtt(conn, addr):
+    ip, port = addr
+    if _is_rate_limited(ip): conn.close(); return
+    gdata = _geoip(ip)
+    _inc("sessions")
+
+    username = ""
+    try:
+        conn.settimeout(10)
+        pkt = conn.recv(256)
+        if not pkt: return
+
+        if (pkt[0] & 0xF0) == 0x10:  # CONNECT
+            # Try to extract username from variable header
+            try:
+                proto_len = int.from_bytes(pkt[4:6], "big")
+                idx = 2 + 2 + proto_len + 1 + 1 + 2  # skip fixed, proto_name, level, flags, keepalive
+                flags = pkt[9] if len(pkt) > 9 else 0
+                # Skip client_id
+                if idx + 2 <= len(pkt):
+                    cid_len = int.from_bytes(pkt[idx:idx+2], "big")
+                    idx += 2 + cid_len
+                # Username
+                if (flags & 0x80) and idx + 2 <= len(pkt):
+                    ulen = int.from_bytes(pkt[idx:idx+2], "big")
+                    username = pkt[idx+2:idx+2+ulen].decode(errors="ignore")
+            except Exception:
+                pass
+
+            conn.sendall(b"\x20\x02\x00\x00")  # CONNACK — accepted
+
+            db.log_attack({
+                "timestamp":   _ts(), "source_ip": ip, "dest_port": 1883,
+                "service":     "mqtt", "protocol": "TCP",
+                "username":    username,
+                "country":     gdata["country"], "city": gdata["city"],
+                "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
+                "attack_type": "iot_protocol", "threat_level": "medium",
+            })
+            _new_ip_alert(ip, gdata["country"], gdata["city"], "mqtt")
+
+            # Read more packets
+            for _ in range(15):
+                try:
+                    conn.settimeout(8)
+                    p = conn.recv(512)
+                    if not p: break
+                    t = (p[0] & 0xF0) >> 4
+                    if t == 12: conn.sendall(b"\xd0\x00")   # PINGRESP
+                    elif t == 8: conn.sendall(b"\x90\x03\x00\x01\x00")  # SUBACK
+                    elif t == 14: break  # DISCONNECT
+                except: break
+
+    except Exception:
+        pass
+    finally:
+        try: conn.close()
+        except: pass
+
+# ─── Redis (port 6379) ────────────────────────────────────────────────────────
+def handle_redis(conn, addr):
+    ip, port = addr
+    if _is_rate_limited(ip): conn.close(); return
+    gdata = _geoip(ip)
+    _inc("sessions")
+    commands_seen = []
+
+    try:
+        for _ in range(25):
+            conn.settimeout(15)
+            try:
+                data = conn.recv(1024)
+            except socket.timeout:
+                break
+            if not data: break
+
+            raw = data.decode(errors="ignore").strip()
+            commands_seen.append(raw[:100])
+            cmd = raw.upper().split()[0] if raw.split() else ""
+
+            # Detect CONFIG SET RCE
+            if cmd == "CONFIG" and ("SET" in raw.upper()):
+                _inc("cves")
+                alerts.redis_rce(ip, gdata["country"], raw[:100])
+                db.log_cve(_ts(), ip, "REDIS-RCE", "Redis CONFIG SET RCE", "critical", "redis", raw[:500], gdata["country"])
+                db.log_attack({
+                    "timestamp": _ts(), "source_ip": ip, "dest_port": 6379,
+                    "service": "redis", "payload": raw[:200], "cve_id": "REDIS-RCE",
+                    "attack_type": "rce_attempt", "threat_level": "critical",
+                    "country": gdata["country"], "latitude": gdata["latitude"],
+                    "longitude": gdata["longitude"],
+                })
+            else:
+                db.log_attack({
+                    "timestamp": _ts(), "source_ip": ip, "dest_port": 6379,
+                    "service": "redis", "payload": raw[:200],
+                    "attack_type": "nosql_probe", "threat_level": "high",
+                    "country": gdata["country"], "city": gdata["city"],
+                    "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+                })
+            _new_ip_alert(ip, gdata["country"], gdata["city"], "redis")
+
+            if cmd == "PING":      conn.sendall(b"+PONG\r\n")
+            elif cmd == "AUTH":    conn.sendall(b"-ERR invalid password\r\n")
+            elif cmd == "INFO":    conn.sendall(b"$120\r\n# Server\r\nredis_version:7.0.11\r\nredis_mode:standalone\r\nos:Linux 5.15.0\r\narch_bits:64\r\nuptime_in_seconds:86400\r\n\r\n")
+            elif cmd == "CONFIG":  conn.sendall(b"-ERR unknown command 'config', with args beginning with: 'set' 'dir' '/tmp' \r\n")
+            elif cmd == "SLAVEOF": conn.sendall(b"+OK\r\n")
+            elif cmd == "SAVE":    conn.sendall(b"+OK\r\n")
+            elif cmd == "FLUSHALL":conn.sendall(b"+OK\r\n")
+            elif cmd == "SET":     conn.sendall(b"+OK\r\n")
+            elif cmd == "GET":     conn.sendall(b"$-1\r\n")
+            elif cmd == "KEYS":    conn.sendall(b"*0\r\n")
+            elif cmd in ("QUIT","EXIT"): conn.sendall(b"+OK\r\n"); break
+            else:                  conn.sendall(b"-ERR unknown command\r\n")
+
+    except Exception:
+        pass
+    finally:
+        try: conn.close()
+        except: pass
+
+# ─── MySQL (port 3306) ────────────────────────────────────────────────────────
+_MYSQL_GREET = (
+    b"\x4a\x00\x00\x00"
+    b"\x0a"
+    b"8.0.32\x00"
+    b"\x08\x00\x00\x00"
+    b"\x2a\x4b\x7c\x26\x31\x3e\x65\x77\x00"
+    b"\xff\xf7\x08\x02\x00\xff\x81\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    b"\x4c\x4b\x6c\x41\x43\x37\x42\x42\x41\x74\x6f\x4e\x00"
+    b"caching_sha2_password\x00"
+)
+
+def handle_mysql(conn, addr):
+    ip, port = addr
+    if _is_rate_limited(ip): conn.close(); return
     gdata = _geoip(ip)
     _inc("sessions")
 
