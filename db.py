@@ -157,6 +157,9 @@ def init():
             try:
                 conn.execute("ALTER TABLE attacks ADD COLUMN attack_patterns TEXT")
             except: pass
+            try:
+                conn.execute("ALTER TABLE attacks ADD COLUMN scanner_tool TEXT")
+            except: pass
     
         conn.commit()
         conn.close()
@@ -181,7 +184,9 @@ def log_attack(d: dict):
                    method, path, user_agent, payload, username, password,
                    country, city, latitude, longitude,
                    attack_type, threat_level, cve_id, session_id,
-                   is_botnet, is_tor, commands, raw_payload, query_string, referer, host_header, origin, attack_patterns)
+                   is_botnet, is_tor, commands, raw_payload,
+                   query_string, referer, host_header, origin,
+                   attack_patterns, scanner_tool)
                 VALUES
                   (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
@@ -208,12 +213,13 @@ def log_attack(d: dict):
                 1 if d.get("is_botnet") else 0,
                 1 if d.get("is_tor")    else 0,
                 json.dumps(d.get("commands", [])),
-                d.get("raw_payload", "")[:2048],
-                d.get("query_string", "")[:512],
-                d.get("referer",      "")[:512],
-                d.get("host_header",  "")[:512],
-                d.get("origin",       "")[:512],
+                d.get("raw_payload",     "")[:2048],
+                d.get("query_string",    "")[:512],
+                d.get("referer",         "")[:512],
+                d.get("host_header",     "")[:512],
+                d.get("origin",          "")[:512],
                 d.get("attack_patterns", "")[:512],
+                d.get("scanner_tool",    "")[:100],
             ))
             conn.commit()
             conn.close()
@@ -374,7 +380,7 @@ def get_stats(hours=24):
     return {
         "total_attacks":        scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>?", (c,)),
         "unique_ips":           scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?", (c,)),
-        "country_count":        scalar("SELECT COUNT(DISTINCT country) FROM attacks WHERE timestamp>? AND country!='Unknown' AND country!='Local'", (c,)),
+        "country_count":        scalar("SELECT COUNT(DISTINCT country) FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown','')", (c,)),
         "botnet_count":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_botnet=1", (c,)),
         "tor_count":            scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_tor=1", (c,)),
         "cve_exploits":         scalar("SELECT COUNT(*) FROM cve_attempts WHERE timestamp>?", (c,)),
@@ -385,13 +391,16 @@ def get_stats(hours=24):
         "ssh_attacks":          svc.get("ssh", 0),
         "ftp_attacks":          svc.get("ftp", 0),
         "rtsp_attacks":         svc.get("rtsp", 0),
+        "onvif_attacks":        svc.get("onvif", 0),
         "mqtt_attacks":         svc.get("mqtt", 0),
         "redis_attacks":        svc.get("redis", 0),
         "mysql_attacks":        svc.get("mysql", 0),
         "docker_attacks":       svc.get("docker", 0),
+        "memcached_attacks":    svc.get("memcached", 0),
         "vnc_attacks":          svc.get("vnc", 0),
         "rdp_attacks":          svc.get("rdp", 0),
         "modbus_attacks":       svc.get("modbus", 0),
+        "smtp_attacks":         svc.get("smtp", 0),
         "services":             svc,
     }
 
@@ -451,7 +460,7 @@ def get_top_countries(hours=24, limit=20):
     c = _cutoff(hours)
     return query("""
         SELECT country, COUNT(*) cnt, COUNT(DISTINCT source_ip) ips
-        FROM attacks WHERE timestamp>? AND country!='Unknown' AND country!='Local'
+        FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown', '')
         GROUP BY country ORDER BY cnt DESC LIMIT ?
     """, (c, limit))
 

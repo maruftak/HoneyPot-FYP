@@ -41,7 +41,8 @@ def _inc(key, n=1):
         COUNTERS[key] = COUNTERS.get(key, 0) + n
 
 def _is_rate_limited(ip):
-    if ip.startswith(("127.", "10.", "192.168.")):
+    # never rate-limit — just return False always for local testing
+    if ip.startswith(("127.", "10.", "192.168.", "::1")):
         return False
     now = time.time()
     if ip in _banned:
@@ -58,7 +59,37 @@ def _is_rate_limited(ip):
     return False
 
 def _geoip(ip):
-    return geo.lookup(ip)
+    g = {
+        "country": "Iran", "city": "Isfahan",
+        "latitude": 32.65, "longitude": 51.67,
+        "asn": None, "asn_org": "IR-Honeypot", "org": "IR-Honeypot", "isp": "IR-Honeypot",
+        "is_vpn": False, "is_tor": False, "is_proxy": False, "proxy": False,
+    }
+    if not ip.startswith(("127.", "10.", "192.168.", "::1")):
+        try:
+            g.update(geo.lookup(ip) or {})
+            if hasattr(geo, "asn_lookup"):     g.update(geo.asn_lookup(ip) or {})
+            if hasattr(geo, "privacy_lookup"): g.update(geo.privacy_lookup(ip) or {})
+        except Exception:
+            pass
+    # always force Iran/Isfahan — never allow "Local" or "Unknown"
+    g.update({
+        "country": "Iran", "city": "Isfahan",
+        "latitude": 32.65, "longitude": 51.67,
+        "org":     g.get("org") or "IR-Honeypot",
+        "asn_org": g.get("asn_org") or "IR-Honeypot",
+    })
+    return g
+
+def _intel_fields(g):
+    g = g or {}
+    return {
+        "asn":      g.get("asn") or g.get("asn_org") or g.get("org"),
+        "org":      g.get("org") or g.get("isp") or g.get("asn_org"),
+        "is_vpn":   g.get("is_vpn", False) or g.get("vpn", False),
+        "is_tor":   g.get("is_tor", False),
+        "is_proxy": g.get("is_proxy", False) or g.get("proxy", False),
+    }
 
 def _new_ip_alert(ip, country, city, service):
     if ip not in _seen_ips:
@@ -231,6 +262,7 @@ def handle_telnet(conn, addr):
                 "latitude": gdata["latitude"], "longitude": gdata["longitude"],
                 "attack_type": "brute_force", "threat_level": threat,
                 "is_botnet": is_bot, "session_id": sid,
+                **_intel_fields(gdata),
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "telnet")
 
@@ -321,6 +353,7 @@ def handle_telnet(conn, addr):
                 "attack_type": "session_complete", "threat_level": "high" if all_commands else "medium",
                 "session_id": sid, "commands": all_commands,
                 "is_botnet": any(la["is_botnet"] for la in login_attempts),
+                **_intel_fields(gdata),
             })
         try: conn.close()
         except: pass
@@ -363,6 +396,7 @@ def handle_ssh(conn, addr):
             "attack_type": "scanner" if scanner else "banner_grab",
             "threat_level": "medium", "country": gdata["country"], "city": gdata["city"],
             "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "ssh")
         if scanner:
@@ -383,6 +417,7 @@ def handle_ssh(conn, addr):
                         "attack_type": "brute_force", "threat_level": "high",
                         "country": gdata["country"], "city": gdata["city"],
                         "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+                        **_intel_fields(gdata),
                     })
             except: break
 
@@ -441,6 +476,7 @@ def handle_ftp(conn, addr):
                     "latitude": gdata["latitude"], "longitude": gdata["longitude"],
                     "attack_type": "brute_force", "threat_level": "high" if is_bot else "medium",
                     "is_botnet": is_bot,
+                    **_intel_fields(gdata),
                 })
                 _new_ip_alert(ip, gdata["country"], gdata["city"], "ftp")
                 _inc("logins")
@@ -516,6 +552,7 @@ def handle_smtp(conn, addr):
                 "attack_type": "smtp_probe", "threat_level": "low",
                 "country": gdata["country"], "city": gdata["city"],
                 "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+                **_intel_fields(gdata),
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "smtp")
 
@@ -704,7 +741,7 @@ aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
 <tds:Capabilities>
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
 <tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
-<tt:Events><tt:XAddr>http://192.168.1.108:8000/onvif/event</tt:XAddr></tt:Events>
+<tt:Events><tt:XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
 <tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
 <tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
 </tds:Capabilities>
@@ -838,7 +875,8 @@ justify-content:center;align-items:center;height:100vh;margin:0">
     # ── Health check — stops dashboard /v1/about 404 spam ──
     "/v1/about": (200, "application/json",
         f'{{"name":"{config.PROJECT_NAME if hasattr(config,"PROJECT_NAME") else "honeyPot"}",'
-        f'"status":"running","device":"Hikvision DS-2CD2043G2-I","firmware":"V5.7.15 build 230313"}}'),
+        f'"status":"running","device":"Hikvision DS-2CD2043G2-I","firmware":"V5.7.15 build 230313",'
+        f'"location":"Iran"}}'),
 }
 
 _HTTP_SERVER_HEADERS = [
@@ -1063,6 +1101,7 @@ def handle_http(conn, addr, https=False):
             "threat_level":    threat_level,
             "cve_id":          cve_id or "",
             "scanner_tool":    scanner_tool,
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], svc)
 
@@ -1092,12 +1131,26 @@ def handle_http(conn, addr, https=False):
         elif "backup" in path.lower() or path.endswith((".sql", ".zip", ".tar.gz")):
             conn.sendall(_http_resp(403, "text/html", b"<h1>403 Forbidden</h1>"))
         elif path.startswith("/api"):
-            conn.sendall(_http_resp(200, "application/json", b'{"status":"ok","version":"1.0.0"}'))
+            intel = _intel_fields(gdata)
+            body = json.dumps({
+                "status": "ok",
+                "version": "1.0.0",
+                "ip": ip,
+                "country": gdata["country"],
+                "city": gdata["city"],
+                "latitude": gdata["latitude"],
+                "longitude": gdata["longitude"],
+                "asn": intel["asn"],
+                "org": intel["org"],
+                "is_vpn": intel["is_vpn"],
+                "is_tor": intel["is_tor"],
+                "is_proxy": intel["is_proxy"],
+            }).encode()
+            conn.sendall(_http_resp(200, "application/json", body))
         elif path.startswith("/ISAPI"):
             conn.sendall(_http_resp(401, "application/xml",
                 b"<?xml version=\"1.0\"?><ResponseStatus><statusCode>401</statusCode><statusString>Unauthorized</statusString></ResponseStatus>"))
         else:
-            # 404 for everything else (but already logged above)
             conn.sendall(_http_resp(404, "text/html", b"<html><body><h1>404 Not Found</h1></body></html>"))
 
     except Exception:
@@ -1107,20 +1160,13 @@ def handle_http(conn, addr, https=False):
         except: pass
 
 # ─── RTSP (port 554) ──────────────────────────────────────────────────────────
-# Enhanced RTSP 2.0 with DESCRIBE → SETUP → PLAY sequence (modern H.265/H.264)
-
 _SDP_RESPONSE = """v=0
-o=- {session_id} 1 IN IP4 192.168.1.108
-s=Hikvision RTSP Server
-i=DS-2CD2043G2-I
+o=- 0 0 IN IP4 127.0.0.1
+s=RTSP Session
+e=0
 c=IN IP4 0.0.0.0
 t=0 0
-a=control:*
-a=range:npt=0-
-m=video 0 RTP/AVP 96
-a=rtpmap:96 H265/90000
-a=fmtp:96 profile-id=1;sprop-sps=Z0LAFdoCAJbARAAAAwAEAAADAPA8WLZY=;sprop-pps=aM4yyA==
-a=control:trackID=1
+a=tool:libavformat https://libav.org/
 m=audio 0 RTP/AVP 8
 a=rtpmap:8 PCMA/8000
 a=control:trackID=2"""
@@ -1181,6 +1227,7 @@ def handle_rtsp(conn, addr):
                 "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
                 "attack_type": "camera_streaming" if username else "camera_probe",
                 "threat_level": "high" if username else "medium",
+                **_intel_fields(gdata),
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "rtsp")
 
@@ -1270,8 +1317,8 @@ _ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
 <tds:GetCapabilitiesResponse>
 <tds:Capabilities>
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
-<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
-<tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt:XAddr></tt:Events>
+<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
+<tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
 <tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
 <tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
 </tds:Capabilities>
@@ -1297,6 +1344,7 @@ def handle_onvif(conn, addr):
             "country":     gdata["country"], "city": gdata["city"],
             "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
             "attack_type": "camera_discovery", "threat_level": "medium",
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "onvif")
 
@@ -1343,12 +1391,14 @@ def handle_mqtt(conn, addr):
             conn.sendall(b"\x20\x02\x00\x00")  # CONNACK — accepted
 
             db.log_attack({
+               
                 "timestamp":   _ts(), "source_ip": ip, "dest_port": 1883,
                 "service":     "mqtt", "protocol": "TCP",
                 "username":    username,
                 "country":     gdata["country"], "city": gdata["city"],
                 "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
                 "attack_type": "iot_protocol", "threat_level": "medium",
+                **_intel_fields(gdata),
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "mqtt")
 
@@ -1402,6 +1452,7 @@ def handle_redis(conn, addr):
                     "attack_type": "rce_attempt", "threat_level": "critical",
                     "country": gdata["country"], "latitude": gdata["latitude"],
                     "longitude": gdata["longitude"],
+                    **_intel_fields(gdata),
                 })
             else:
                 db.log_attack({
@@ -1410,6 +1461,7 @@ def handle_redis(conn, addr):
                     "attack_type": "nosql_probe", "threat_level": "high",
                     "country": gdata["country"], "city": gdata["city"],
                     "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+                    **_intel_fields(gdata),
                 })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "redis")
 
@@ -1470,6 +1522,7 @@ def handle_mysql(conn, addr):
             "attack_type": "db_auth", "threat_level": "high",
             "country":     gdata["country"], "city": gdata["city"],
             "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "mysql")
 
@@ -1515,6 +1568,7 @@ def handle_docker(conn, addr):
             "cve_id":      "DOCKER-ESCAPE",
             "country":     gdata["country"], "city": gdata["city"],
             "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "docker")
 
@@ -1559,6 +1613,7 @@ def handle_memcached(conn, addr):
                 "attack_type": "nosql_probe", "threat_level": "medium",
                 "country": gdata["country"], "city": gdata["city"],
                 "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+                **_intel_fields(gdata),
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "memcached")
 
@@ -1599,6 +1654,7 @@ def handle_vnc(conn, addr):
             "service": "vnc", "attack_type": "remote_access", "threat_level": "high",
             "country": gdata["country"], "city": gdata["city"],
             "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "vnc")
     except Exception:
@@ -1623,6 +1679,7 @@ def handle_rdp(conn, addr):
             "service": "rdp", "attack_type": "remote_access", "threat_level": "high",
             "country": gdata["country"], "city": gdata["city"],
             "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "rdp")
     except Exception:
@@ -1652,6 +1709,7 @@ def handle_modbus(conn, addr):
             "service": "modbus", "attack_type": "ics_scada", "threat_level": "critical",
             "country": gdata["country"], "city": gdata["city"],
             "latitude": gdata["latitude"], "longitude": gdata["longitude"],
+            **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "modbus")
         alerts.generic("MODBUS", "Modbus/ICS Probe", [

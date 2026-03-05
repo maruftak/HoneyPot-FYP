@@ -54,7 +54,8 @@ def start_honeypot_core():
     logger.info("Starting main honeypot service...")
     try:
         import honeypot
-        # honeypot.start()  # Uncomment when honeypot.py is ready
+        t = threading.Thread(target=honeypot.main, daemon=True)
+        t.start()
         logger.info("✓ Main honeypot service started")
         return True
     except Exception as e:

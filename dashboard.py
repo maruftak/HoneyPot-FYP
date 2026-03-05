@@ -57,7 +57,7 @@ def api_health():
     })
 
 @app.route("/api/stats")
-@cached(8)
+@cached(2)
 def api_stats():
     hours = request.args.get("hours", 24, type=int)
     s = db.get_stats(hours)
@@ -65,7 +65,7 @@ def api_stats():
     return jsonify(s)
 
 @app.route("/api/geo-data")
-@cached(15)
+@cached(5)
 def api_geo_data():
     hours = request.args.get("hours", 24, type=int)
     rows  = db.get_geo_data(hours)
@@ -87,13 +87,13 @@ def api_geo_data():
         "markers": markers,
         "total":   len(markers),
         "honeypot": {
-            "lat": 51.5074, "lon": -0.1278,
-            "label": "honeyPot Sensor"
+            "lat": 32.65, "lon": 51.67,
+            "label": "honeyPot Sensor (Isfahan)"
         },
     })
 
 @app.route("/api/sessions")
-@cached(5)
+@cached(2)
 def api_sessions():
     hours   = request.args.get("hours",   24,  type=int)
     limit   = request.args.get("limit",   150, type=int)
@@ -129,7 +129,7 @@ def api_sessions():
     return jsonify({"sessions": result, "total": len(result)})
 
 @app.route("/api/chart-data")
-@cached(10)
+@cached(3)
 def api_chart_data():
     rng   = request.args.get("range", "24h")
     hours = 168 if rng == "7d" else (720 if rng == "30d" else 24)
@@ -156,7 +156,7 @@ def api_chart_data():
     })
 
 @app.route("/api/top-ips")
-@cached(10)
+@cached(3)
 def api_top_ips():
     hours = request.args.get("hours", 24, type=int)
     limit = request.args.get("limit", 20, type=int)
@@ -296,7 +296,7 @@ def api_botnet_distribution():
     return jsonify(db.get_botnet_distribution())
 
 @app.route("/api/live-log")
-@cached(3)
+@cached(1)
 def api_live_log():
     """Most recent 50 attacks for the live log stream."""
     rows = db.get_recent_attacks(hours=1, limit=50)
