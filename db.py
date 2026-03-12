@@ -4,7 +4,8 @@ honeyPot — Database Layer
 SQLite backend for all attack logging and dashboard queries.
 """
 
-import sqlite3, json, datetime, os
+import sqlite3, json, datetime, os, logging
+from pathlib import Path
 from threading import Lock
 from config import DB_PATH, LOG_DIR
 
@@ -137,6 +138,11 @@ CREATE INDEX IF NOT EXISTS idx_chain_ip ON attack_chains(source_ip);
 CREATE INDEX IF NOT EXISTS idx_fp_ip    ON device_fingerprints(source_ip);
 """
 
+LOG_FILE = Path(LOG_DIR) / "db.err"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(filename=str(LOG_FILE), level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(message)s")
+
 def init():
     """Initialise database and create tables."""
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -196,15 +202,15 @@ def log_attack(d: dict):
                 d.get("service",     ""),
                 d.get("protocol",    "TCP"),
                 d.get("method",      ""),
-                d.get("path",        d.get("payload", "")[:512]),
+                d.get("path",        "")[:512],               # use actual path, not payload
                 d.get("user_agent",  "")[:512],
                 d.get("payload",     "")[:1024],
                 d.get("username",    ""),
                 d.get("password",    ""),
-                d.get("country",     "Iran"),
-                d.get("city",        "Isfahan"),
-                d.get("latitude",    32.65),
-                d.get("longitude",   51.67),
+                d.get("country",     "Unknown"),
+                d.get("city",        ""),
+                d.get("latitude",    None),
+                d.get("longitude",   None),
                 d.get("attack_type", ""),
                 d.get("threat_level","low"),
                 d.get("cve_id",      ""),
@@ -227,7 +233,7 @@ def log_attack(d: dict):
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] log_attack error: {e}")
+            logging.exception("log_attack error: %s", e)
 
 def log_cve(timestamp, source_ip, cve_id, cve_name, severity, service, payload, country="Unknown"):
     with _lock:
@@ -240,7 +246,7 @@ def log_cve(timestamp, source_ip, cve_id, cve_name, severity, service, payload, 
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] log_cve error: {e}")
+            logging.exception("log_cve error: %s", e)
 
 def log_malware(timestamp, source_ip, url, command, family="Unknown", arch="unknown", country="Unknown"):
     with _lock:
@@ -253,7 +259,7 @@ def log_malware(timestamp, source_ip, url, command, family="Unknown", arch="unkn
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] log_malware error: {e}")
+            logging.exception("log_malware error: %s", e)
 
 def log_honeytoken(timestamp, source_ip, token_type, token_value, service, country, city="", commands=None):
     with _lock:
@@ -266,7 +272,7 @@ def log_honeytoken(timestamp, source_ip, token_type, token_value, service, count
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] log_honeytoken error: {e}")
+            logging.exception("log_honeytoken error: %s", e)
 
 def log_threat_score(timestamp, source_ip, risk_score, risk_level, factors=None):
     """Log threat intelligence score for IP"""
@@ -280,7 +286,7 @@ def log_threat_score(timestamp, source_ip, risk_score, risk_level, factors=None)
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] log_threat_score error: {e}")
+            logging.exception("log_threat_score error: %s", e)
 
 def log_attack_chain(timestamp, source_ip, chain_id, stages):
     """Log detected attack chain/progression"""
@@ -294,7 +300,7 @@ def log_attack_chain(timestamp, source_ip, chain_id, stages):
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] log_attack_chain error: {e}")
+            logging.exception("log_attack_chain error: %s", e)
 
 def log_device_fingerprint(timestamp, source_ip, device_type, vendor, model, firmware):
     """Log detected device type from banner/response"""
@@ -308,7 +314,7 @@ def log_device_fingerprint(timestamp, source_ip, device_type, vendor, model, fir
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] log_device_fingerprint error: {e}")
+            logging.exception("log_device_fingerprint error: %s", e)
 
 def update_ip_profile(source_ip, attack_data):
     """Update IP profile with aggregated stats"""
@@ -348,7 +354,7 @@ def update_ip_profile(source_ip, attack_data):
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[DB] update_ip_profile error: {e}")
+            logging.exception("update_ip_profile error: %s", e)
 
 # ─── Read operations ──────────────────────────────────────────────────────────
 def _cutoff(hours):
@@ -362,7 +368,7 @@ def query(sql, params=()):
         conn.close()
         return rows
     except Exception as e:
-        print(f"[DB] query error: {e}")
+        logging.exception("query error: %s", e)
         return []
 
 def scalar(sql, params=()):
@@ -373,7 +379,7 @@ def scalar(sql, params=()):
         conn.close()
         return row[0] if row else 0
     except Exception as e:
-        print(f"[DB] scalar error: {e}")
+        logging.exception("scalar error: %s", e)
         return 0
 
 def get_stats(hours=24):
@@ -462,9 +468,12 @@ def get_timeline(hours=24):
     c  = _cutoff(hours)
     if hours <= 24:
         fmt, trunc = "%Y-%m-%dT%H:00", "strftime('%Y-%m-%dT%H:00', timestamp)"
+        step = datetime.timedelta(hours=1)
     else:
         fmt, trunc = "%Y-%m-%d", "strftime('%Y-%m-%d', timestamp)"
-    return query(f"""
+        step = datetime.timedelta(days=1)
+
+    rows = query(f"""
         SELECT {trunc} bucket,
                COUNT(*) total,
                SUM(is_botnet) botnets,
@@ -472,6 +481,20 @@ def get_timeline(hours=24):
         FROM attacks WHERE timestamp>?
         GROUP BY bucket ORDER BY bucket
     """, (c,))
+
+    # Fill missing buckets so charts always render
+    start = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
+    buckets = {}
+    for r in rows:
+        buckets[r["bucket"]] = {"bucket": r["bucket"], "total": r["total"], "botnets": r["botnets"], "cves": r["cves"]}
+
+    filled = []
+    cur = start
+    while cur <= datetime.datetime.utcnow():
+        b = cur.strftime(fmt)
+        filled.append(buckets.get(b, {"bucket": b, "total": 0, "botnets": 0, "cves": 0}))
+        cur += step
+    return filled
 
 def get_top_ips(hours=24, limit=20):
     c = _cutoff(hours)

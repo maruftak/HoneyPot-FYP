@@ -136,31 +136,17 @@ def api_sessions():
     return jsonify({"sessions": result, "total": len(result)})
 
 @app.route("/api/chart-data")
-@cached(3)
 def api_chart_data():
-    rng   = request.args.get("range", "24h")
-    hours = 168 if rng == "7d" else (720 if rng == "30d" else 24)
-    rows  = db.get_timeline(hours)
-
-    labels     = []
-    totals     = []
-    botnets    = []
-    cves       = []
-
-    for r in rows:
-        labels.append(r["bucket"])
-        totals.append(r["total"])
-        botnets.append(r["botnets"] or 0)
-        cves.append(r["cves"] or 0)
-
-    return jsonify({
-        "labels": labels,
-        "datasets": {
-            "connections": totals,
-            "malicious":   botnets,
-            "cve_exploits":cves,
-        },
-    })
+    rng = request.args.get("range", "24h")
+    hours = {"24h": 24, "7d": 168, "30d": 720}.get(rng, 24)
+    timeline = db.get_timeline(hours) or []
+    labels = [row.get("bucket") for row in timeline]
+    datasets = {
+        "connections":  [row.get("total", 0) for row in timeline],
+        "malicious":    [row.get("botnets", 0) for row in timeline],
+        "cve_exploits": [row.get("cves", 0) for row in timeline],
+    }
+    return jsonify({"labels": labels, "datasets": datasets})
 
 @app.route("/api/top-ips")
 @cached(3)
