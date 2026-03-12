@@ -42,13 +42,25 @@ fi
 
 # Start dashboard (background)
 echo -e "${GREEN}[3/3] Starting services…${NC}"
-python3 "$SCRIPT_DIR/dashboard.py" --port 5001 &
+LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs}"
+mkdir -p "$LOG_DIR"
+
+python3 "$SCRIPT_DIR/dashboard.py" --port 5001 >"$LOG_DIR/dashboard.out" 2>&1 &
 DASH_PID=$!
 sleep 1
 
 # Start honeypot (background)
-python3 "$SCRIPT_DIR/honeypot.py" &
+python3 "$SCRIPT_DIR/src/honeypot.py" >"$LOG_DIR/honeypot.out" 2>&1 &
 HP_PID=$!
+
+# Quick port check
+sleep 1
+if ! lsof -i :8080 >/dev/null 2>&1; then
+  echo -e "${RED}[!] Honeypot not listening on :8080. Check $LOG_DIR/honeypot.out${NC}"
+fi
+if ! lsof -i :5001 >/dev/null 2>&1; then
+  echo -e "${RED}[!] Dashboard not listening on :5001. Check $LOG_DIR/dashboard.out${NC}"
+fi
 
 MY_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 
@@ -73,14 +85,7 @@ cleanup() {
     kill $HP_PID $DASH_PID 2>/dev/null || true
     echo -e "${GREEN}[✓] Stopped.${NC}"
 }
+# Keep only one cleanup handler
 trap cleanup EXIT INT TERM
 wait
 echo ""
-
-cleanup() {
-    echo -e "\n${RED}[!] Shutting down honeyPot…${NC}"
-    kill $HP_PID $DASH_PID 2>/dev/null || true
-    echo -e "${GREEN}[✓] Stopped.${NC}"
-}
-trap cleanup EXIT INT TERM
-wait
