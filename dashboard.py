@@ -6,6 +6,7 @@ Serves dashboard.html + all /api/* endpoints.
 Usage:  python3 dashboard.py [--port 5001]
 """
 
+import json
 import os, time, datetime
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
@@ -53,7 +54,7 @@ def api_health():
         "uptime_seconds":       int(time.time() - START_TIME),
         "db_exists":            os.path.exists(config.DB_PATH),
         "telegram_enabled":     config.TELEGRAM_ENABLED,
-        "timestamp":            datetime.datetime.utcnow().isoformat(),
+        "timestamp":            datetime.datetime.now(datetime.timezone.utc).isoformat(),
     })
 
 @app.route("/api/stats")
@@ -104,27 +105,33 @@ def api_sessions():
     for r in rows:
         cmds = []
         try:
-            cmds = __import__("json").loads(r.get("commands", "[]"))
+            cmds = json.loads(r.get("commands", "[]"))
         except Exception:
             pass
         result.append({
-            "ts":        r.get("timestamp",""),
-            "ip":        r.get("source_ip",""),
-            "country":   r.get("country","Unknown"),
-            "city":      r.get("city",""),
-            "service":   (r.get("service","") or "").upper(),
-            "port":      r.get("dest_port",0),
-            "method":    r.get("method",""),
-            "path":      r.get("path","")[:80],
-            "username":  r.get("username",""),
-            "password":  r.get("password",""),
-            "user_agent":r.get("user_agent","")[:100],
-            "cve":       r.get("cve_id",""),
-            "threat":    r.get("threat_level","low"),
-            "is_botnet": bool(r.get("is_botnet",0)),
-            "is_tor":    bool(r.get("is_tor",0)),
-            "commands":  cmds[:5],
-            "attack_type":r.get("attack_type",""),
+            "ts":            r.get("timestamp",""),
+            "ip":            r.get("source_ip",""),
+            "country":       r.get("country","Unknown"),
+            "city":          r.get("city",""),
+            "service":       (r.get("service","") or "").upper(),
+            "port":          r.get("dest_port",0),
+            "method":        r.get("method",""),
+            "path":          r.get("path","")[:80],
+            "username":      r.get("username",""),
+            "password":      r.get("password",""),
+            "user_agent":    r.get("user_agent","")[:100],
+            "cve":           r.get("cve_id",""),
+            "threat":        r.get("threat_level","low"),
+            "is_botnet":     bool(r.get("is_botnet",0)),
+            "is_tor":        bool(r.get("is_tor",0)),
+            "is_vpn":        bool(r.get("is_vpn",0)),
+            "is_proxy":      bool(r.get("is_proxy",0)),
+            "scanner_tool":  r.get("scanner_tool",""),
+            "attack_type":   r.get("attack_type",""),
+            "attack_patterns": r.get("attack_patterns",""),
+            "asn":           r.get("asn",""),
+            "org":           r.get("org",""),
+            "commands":      cmds[:5],
         })
     return jsonify({"sessions": result, "total": len(result)})
 
@@ -163,13 +170,14 @@ def api_top_ips():
     rows  = db.get_top_ips(hours, limit)
     return jsonify({
         "top_ips": [{
-            "ip":        r["source_ip"],
-            "count":     r["cnt"],
-            "country":   r["country"] or "Unknown",
-            "is_botnet": bool(r.get("bots",0)),
-            "is_tor":    bool(r.get("tors",0)),
-            "last_seen": r.get("last_seen",""),
-            "services":  (r.get("services","") or "").split(","),
+            "ip":           r["source_ip"],
+            "count":        r["cnt"],
+            "country":      r["country"] or "Unknown",
+            "is_botnet":    bool(r.get("bots",0)),
+            "is_tor":       bool(r.get("tors",0)),
+            "last_seen":    r.get("last_seen",""),
+            "services":     (r.get("services","") or "").split(","),
+            "scanner_tool": r.get("scanner_tool",""),
         } for r in rows]
     })
 
@@ -245,8 +253,8 @@ def api_honeytokens():
 @app.route("/api/alerts")
 @cached(5)
 def api_alerts():
-    hours = request.args.get("hours", 1,  type=int)
-    limit = request.args.get("limit", 25, type=int)
+    hours = request.args.get("hours", 24, type=int)
+    limit = request.args.get("limit", 50, type=int)
     return jsonify({"alerts": db.get_alerts(hours, limit)})
 
 @app.route("/api/service-stats")
@@ -303,20 +311,33 @@ def api_live_log():
     result = []
     for r in rows:
         result.append({
-            "ts":       r.get("timestamp",""),
-            "ip":       r.get("source_ip",""),
-            "country":  r.get("country",""),
-            "service":  (r.get("service","") or "").upper(),
-            "method":   r.get("method",""),
-            "path":     (r.get("path","") or "")[:60],
-            "threat":   r.get("threat_level","low"),
-            "is_botnet":bool(r.get("is_botnet",0)),
-            "cve":      r.get("cve_id",""),
+            "ts":           r.get("timestamp",""),
+            "ip":           r.get("source_ip",""),
+            "country":      r.get("country",""),
+            "service":      (r.get("service","") or "").upper(),
+            "method":       r.get("method",""),
+            "path":         (r.get("path","") or "")[:60],
+            "threat":       r.get("threat_level","low"),
+            "is_botnet":    bool(r.get("is_botnet",0)),
+            "is_tor":       bool(r.get("is_tor",0)),
+            "is_vpn":       bool(r.get("is_vpn",0)),
+            "is_proxy":     bool(r.get("is_proxy",0)),
+            "scanner_tool": r.get("scanner_tool",""),
+            "cve":          r.get("cve_id",""),
+            "attack_type":  r.get("attack_type",""),
         })
     return jsonify({"events": result})
 
+@app.route("/api/ping")
+def api_ping():
+    """Lightweight endpoint for dashboard auto-refresh heartbeat."""
+    return jsonify({
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "uptime": int(time.time() - START_TIME),
+    })
+
 @app.after_request
-def _headers(resp):
+def after_request_headers(resp):
     resp.headers["Access-Control-Allow-Origin"]  = "*"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     resp.headers["Cache-Control"]                = "no-cache, no-store"

@@ -247,7 +247,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 .b-high{background:var(--orange2);color:var(--orange);border-color:rgba(255,140,0,.3)}
 .b-med{background:rgba(255,214,10,.1);color:var(--yellow);border-color:rgba(255,214,10,.2)}
 .b-low{background:var(--green2);color:var(--green);border-color:rgba(0,255,136,.2)}
-.b-blue{background:var(--blue2);color:var(--blue);border-color:rgba(10,132,255,.2)}
+.b-blue{background:var(--blue2);color:var,--blue;border-color:rgba(10,132,255,.2)}
 .b-purple{background:rgba(191,90,242,.1);color:var(--purple);border-color:rgba(191,90,242,.2)}
 
 /* ─── RANK LIST ──────────────────────────── */
@@ -392,9 +392,12 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="nav-item" onclick="showPanel('creds',this)"><span class="ni-icon">🔑</span>Credentials</div>
     <div class="nav-item" onclick="showPanel('malware',this)"><span class="ni-icon">☣️</span>Malware URLs</div>
     <div class="nav-item" onclick="showPanel('honeytokens',this)"><span class="ni-icon">🍯</span>Honeytokens</div>
+    <div class="nav-item" onclick="showPanel('attacker',this)"><span class="ni-icon">🎯</span>Attacker Intel</div>
+    <div class="nav-item" onclick="showPanel('decoy',this)"><span class="ni-icon">🎭</span>Decoy Log</div>
   </div>
   <div class="nav-group-label">ANALYSIS</div>
   <div class="nav-section">
+    <div class="nav-item" onclick="showPanel('device',this)"><span class="ni-icon">📷</span>Device Status</div>
     <div class="nav-item" onclick="showPanel('services',this)"><span class="ni-icon">⚡</span>Services</div>
     <div class="nav-item" onclick="showPanel('report',this)"><span class="ni-icon">📄</span>Report</div>
   </div>
@@ -449,43 +452,60 @@ tr:hover td{background:rgba(255,255,255,0.02)}
       <div class="mc-icon">☣️</div>
       <div class="mc-label">Malware DLs</div>
       <div class="mc-val" id="m-malware">—</div>
-      <div class="mc-sub">wget/curl captures</div>
+      <div class="mc-sub" id="m-malware-sub">wget/curl captures</div>
       <div class="mc-bar"><div class="mc-bar-fill" id="m-malware-bar" style="width:0%"></div></div>
     </div>
     <div class="metric-card mc-green">
       <div class="mc-icon">🍯</div>
       <div class="mc-label">Honeytokens</div>
       <div class="mc-val" id="m-honey">—</div>
-      <div class="mc-sub">traps triggered</div>
+      <div class="mc-sub" id="m-honey-sub">traps triggered</div>
       <div class="mc-bar"><div class="mc-bar-fill" id="m-honey-bar" style="width:0%"></div></div>
     </div>
     <div class="metric-card mc-blue">
       <div class="mc-icon">🌐</div>
       <div class="mc-label">HTTP Attacks</div>
       <div class="mc-val" id="m-http">—</div>
-      <div class="mc-sub">ports 80/443/8080</div>
+      <div class="mc-sub" id="m-http-sub">ports 80/443/8080</div>
       <div class="mc-bar"><div class="mc-bar-fill" id="m-http-bar" style="width:0%"></div></div>
     </div>
     <div class="metric-card mc-purple">
       <div class="mc-icon">📟</div>
       <div class="mc-label">Telnet Attacks</div>
       <div class="mc-val" id="m-telnet">—</div>
-      <div class="mc-sub">port 23</div>
+      <div class="mc-sub" id="m-telnet-sub">port 23</div>
       <div class="mc-bar"><div class="mc-bar-fill" id="m-telnet-bar" style="width:0%"></div></div>
     </div>
     <div class="metric-card mc-orange">
       <div class="mc-icon">📹</div>
       <div class="mc-label">RTSP Attacks</div>
       <div class="mc-val" id="m-rtsp">—</div>
-      <div class="mc-sub">port 554 camera</div>
+      <div class="mc-sub" id="m-rtsp-sub">port 554 camera</div>
       <div class="mc-bar"><div class="mc-bar-fill" id="m-rtsp-bar" style="width:0%"></div></div>
     </div>
+    <!-- replaced Docker with ONVIF — far more relevant for Hikvision -->
+    <div class="metric-card mc-blue">
+      <div class="mc-icon">📡</div>
+      <div class="mc-label">ONVIF Probes</div>
+      <div class="mc-val" id="m-onvif">—</div>
+      <div class="mc-sub">port 8000 camera mgmt</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-onvif-bar" style="width:0%"></div></div>
+    </div>
+    <!-- new: tracks attackers who got past login page -->
     <div class="metric-card mc-red">
-      <div class="mc-icon">🐳</div>
-      <div class="mc-label">Docker Probes</div>
-      <div class="mc-val" id="m-docker">—</div>
-      <div class="mc-sub">container escape</div>
-      <div class="mc-bar"><div class="mc-bar-fill" id="m-docker-bar" style="width:0%"></div></div>
+      <div class="mc-icon">🎭</div>
+      <div class="mc-label">Decoy Interactions</div>
+      <div class="mc-val" id="m-decoy">—</div>
+      <div class="mc-sub">deep lure engagement</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-decoy-bar" style="width:0%"></div></div>
+    </div>
+    <!-- new: fake ISAPI endpoint hits -->
+    <div class="metric-card mc-purple">
+      <div class="mc-icon">🔌</div>
+      <div class="mc-label">ISAPI Hits</div>
+      <div class="mc-val" id="m-isapi">—</div>
+      <div class="mc-sub">/ISAPI/ endpoint probes</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-isapi-bar" style="width:0%"></div></div>
     </div>
   </div>
 
@@ -532,6 +552,25 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="card">
       <div class="card-title">Botnet Family Distribution</div>
       <div class="chart-wrap" style="height:180px"><canvas id="botnetChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- NEW: Decoy Interaction Log — shows attackers who went deep -->
+  <div class="card">
+    <div class="card-title">
+      🎭 Decoy Interaction Log — Attackers Who Went Deeper
+      <span style="font-family:var(--mono);font-size:9px;color:var(--green);background:var(--green2);padding:3px 8px;border-radius:4px;border:1px solid rgba(0,255,136,0.2)">HIGH VALUE</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Time</th><th>IP</th><th>Country</th>
+          <th>Lure Path</th><th>Stage</th><th>Creds Used</th><th>Threat</th>
+        </tr></thead>
+        <tbody id="decoyBody">
+          <tr><td colspan="7" class="loading"><span class="spin">◌</span> Loading…</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -746,6 +785,200 @@ tr:hover td{background:rgba(255,255,255,0.02)}
   </div>
 </div>
 
+<!-- ══ PANEL: ATTACKER INTEL ══ -->
+<div class="panel" id="panel-attacker">
+  <div class="grid-3">
+    <div class="metric-card mc-red"><div class="mc-icon">🎯</div><div class="mc-label">High Risk IPs</div><div class="mc-val" id="ai-highrisk">—</div><div class="mc-sub">score &gt; 70</div></div>
+    <div class="metric-card mc-orange"><div class="mc-icon">🔍</div><div class="mc-label">Scanners Detected</div><div class="mc-val" id="ai-scanners">—</div><div class="mc-sub">Shodan/Masscan/ZMap</div></div>
+    <div class="metric-card mc-purple"><div class="mc-icon">⛓️</div><div class="mc-label">Attack Chains</div><div class="mc-val" id="ai-chains">—</div><div class="mc-sub">multi-stage attacks</div></div>
+  </div>
+
+  <!-- Top Threat IPs -->
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">
+        Top Threat Actors
+        <button class="btn-sm" onclick="loadAttackerIntel()">↺ Refresh</button>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>IP</th><th>Country</th><th>Risk Score</th>
+            <th>Attacks</th><th>Services Hit</th><th>Scanner</th><th>Flags</th><th>Last Seen</th>
+          </tr></thead>
+          <tbody id="threatBody">
+            <tr><td colspan="8" class="loading"><span class="spin">◌</span> Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Attack Stage Distribution</div>
+      <div class="chart-wrap" style="height:240px"><canvas id="stageChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Attack Progression Timeline per IP -->
+  <div class="card">
+    <div class="card-title">
+      Attack Progression — Multi-Stage Sessions
+      <span style="font-family:var(--mono);font-size:9px;color:var(--orange);background:var(--orange2);padding:3px 8px;border-radius:4px;border:1px solid rgba(255,140,0,0.2)">KILL CHAIN</span>
+    </div>
+    <div id="progressionList" style="display:flex;flex-direction:column;gap:10px;max-height:400px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- ══ PANEL: DECOY LOG ══ -->
+<div class="panel" id="panel-decoy">
+  <div class="grid-3">
+    <div class="metric-card mc-red"><div class="mc-icon">🎭</div><div class="mc-label">Decoy Interactions</div><div class="mc-val" id="dl-total">—</div><div class="mc-sub">HIK path probes</div></div>
+    <div class="metric-card mc-orange"><div class="mc-icon">🔐</div><div class="mc-label">Login Attempts</div><div class="mc-val" id="dl-login">—</div><div class="mc-sub">/doc/page/login.asp</div></div>
+    <div class="metric-card mc-purple"><div class="mc-icon">📺</div><div class="mc-label">Stream Access</div><div class="mc-val" id="dl-stream">—</div><div class="mc-sub">/Streaming/channels</div></div>
+  </div>
+  <div class="card">
+    <div class="card-title">
+      🎭 Decoy Interaction Log — Attackers Who Went Deeper
+      <span style="font-family:var(--mono);font-size:9px;color:var(--green);background:var(--green2);padding:3px 8px;border-radius:4px;border:1px solid rgba(0,255,136,0.2)">HIGH VALUE</span>
+    </div>
+    <div class="filter-bar">
+      <input type="text" id="decoySearch" placeholder="Filter by IP, path, stage…" oninput="filterDecoy()" style="flex:1">
+      <select id="decoyStage" onchange="filterDecoy()">
+        <option value="">All Stages</option>
+        <option value="Login Page">Login Page</option>
+        <option value="Auth Attempt">Auth Attempt</option>
+        <option value="Auth Bypass">Auth Bypass</option>
+        <option value="Device Enum">Device Enum</option>
+        <option value="Stream Access">Stream Access</option>
+        <option value="ISAPI Probe">ISAPI Probe</option>
+      </select>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Time</th><th>IP</th><th>Country</th>
+          <th>Lure Path</th><th>Stage</th><th>Creds Used</th>
+          <th>User-Agent</th><th>Threat</th>
+        </tr></thead>
+        <tbody id="decoyBody2">
+          <tr><td colspan="8" class="loading"><span class="spin">◌</span> Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <!-- Decoy path heatmap -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Most Probed HIK Paths</div>
+      <ul class="rank-list" id="decoyPathList"></ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Interaction Stage Funnel</div>
+      <div class="chart-wrap" style="height:240px"><canvas id="funnelChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PANEL: DEVICE STATUS ══ -->
+<div class="panel" id="panel-device">
+
+  <!-- Fake HIK camera status — makes the honeypot look like a real device -->
+  <div class="card" style="border-color:rgba(0,255,136,0.2)">
+    <div class="card-title">
+      📷 Hikvision DS-2CD2043G2-I — Device Status
+      <span style="font-family:var(--mono);font-size:9px;color:var(--green);background:var(--green2);padding:3px 8px;border-radius:4px;border:1px solid rgba(0,255,136,0.2)">ONLINE</span>
+    </div>
+    <div class="grid-3" style="margin-bottom:16px">
+      <div style="background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;margin-bottom:8px">DEVICE INFO</div>
+        <div style="font-family:var(--mono);font-size:11px;line-height:2;color:var(--text)">
+          <div><span style="color:var(--muted)">Model:</span> DS-2CD2043G2-I</div>
+          <div><span style="color:var(--muted)">Firmware:</span> <span style="color:var(--green)">V5.7.15 build 230313</span></div>
+          <div><span style="color:var(--muted)">Serial:</span> DS-2CD2043G2-I20230313BBRR</div>
+          <div><span style="color:var(--muted)">MAC:</span> <span id="dev-mac">A8:26:D9:F2:3C:11</span></div>
+          <div><span style="color:var(--muted)">IPv4:</span> <span id="dev-ip" style="color:var(--blue)">—</span></div>
+        </div>
+      </div>
+      <div style="background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;margin-bottom:8px">SYSTEM HEALTH</div>
+        <div style="font-family:var(--mono);font-size:11px;line-height:2">
+          <div><span style="color:var(--muted)">CPU:</span> <span id="dev-cpu" style="color:var(--green)">—</span></div>
+          <div><span style="color:var(--muted)">Temp:</span> <span id="dev-temp" style="color:var(--yellow)">—</span></div>
+          <div><span style="color:var(--muted)">Uptime:</span> <span id="dev-uptime2" style="color:var(--text)">—</span></div>
+          <div><span style="color:var(--muted)">Memory:</span> <span id="dev-mem" style="color:var(--text)">—</span></div>
+          <div><span style="color:var(--muted)">Storage:</span> <span style="color:var(--muted)">No SD card</span></div>
+        </div>
+      </div>
+      <div style="background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;margin-bottom:8px">VIDEO STATUS</div>
+        <div style="font-family:var(--mono);font-size:11px;line-height:2">
+          <div><span style="color:var(--muted)">Channel 1:</span> <span style="color:var(--green)">● Active</span></div>
+          <div><span style="color:var(--muted)">Resolution:</span> 2560×1440</div>
+          <div><span style="color:var(--muted)">Bitrate:</span> <span id="dev-bitrate">4096 Kbps</span></div>
+          <div><span style="color:var(--muted)">FPS:</span> 25</div>
+          <div><span style="color:var(--muted)">Codec:</span> H.265+</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Port / service status table — fake but realistic -->
+    <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;margin-bottom:8px">ACTIVE SERVICES</div>
+    <div id="deviceSvcGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px"></div>
+  </div>
+
+  <!-- Attack stats targeting this device -->
+  <div class="grid-3">
+    <div class="metric-card mc-red">
+      <div class="mc-icon">🎯</div>
+      <div class="mc-label">Attacks on Device</div>
+      <div class="mc-val" id="dv-attacks">—</div>
+      <div class="mc-sub">targeting this camera</div>
+    </div>
+    <div class="metric-card mc-orange">
+      <div class="mc-icon">🔐</div>
+      <div class="mc-label">Login Attempts</div>
+      <div class="mc-val" id="dv-logins">—</div>
+      <div class="mc-sub">admin panel probes</div>
+    </div>
+    <div class="metric-card mc-purple">
+      <div class="mc-icon">📡</div>
+      <div class="mc-label">Stream Access Tried</div>
+      <div class="mc-val" id="dv-streams">—</div>
+      <div class="mc-sub">RTSP + ISAPI channel</div>
+    </div>
+  </div>
+
+  <!-- Fake access log — what an attacker sees if they get "in" -->
+  <div class="card">
+    <div class="card-title">
+      Device Access Log — Recent Connections
+      <span style="font-family:var(--mono);font-size:9px;color:var(--orange);background:var(--orange2);padding:3px 8px;border-radius:4px;border:1px solid rgba(255,140,0,0.2)">SIMULATED</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Time</th><th>Remote IP</th><th>Country</th><th>Method</th>
+          <th>Path</th><th>Status</th><th>User-Agent</th>
+        </tr></thead>
+        <tbody id="deviceLogBody">
+          <tr><td colspan="7" class="loading"><span class="spin">◌</span> Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Scanner detection -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Known Scanner Activity</div>
+      <ul class="rank-list" id="scannerList"></ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Top User-Agents</div>
+      <ul class="rank-list" id="uaList"></ul>
+    </div>
+  </div>
+</div>
+
 </main>
 </div><!-- /layout -->
 
@@ -844,6 +1077,9 @@ function showPanel(name, el) {
   if (name === 'malware')     loadMalware();
   if (name === 'honeytokens') loadHoneytokens();
   if (name === 'services')    loadServices();
+  if (name === 'attacker') loadAttackerIntel();
+  if (name === 'decoy')    loadDecoyPanel();
+  if (name === 'device') loadDeviceStatus();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -911,17 +1147,21 @@ async function loadOverview() {
   animCount('m-http',   s.http_attacks);
   animCount('m-telnet', s.telnet_attacks);
   animCount('m-rtsp',   s.rtsp_attacks);
-  animCount('m-docker', s.docker_attacks);
+  animCount('m-onvif',  s.onvif_attacks);   // replaced docker
+  animCount('m-decoy',  s.decoy_interactions || 0);
+  animCount('m-isapi',  s.isapi_hits || 0);
 
-  // Bar fills (max arbitrary for visual)
+  // Bar fills — replace docker with onvif/decoy/isapi
   const max = s.total_attacks || 1;
   [['m-total',s.total_attacks],['m-ips',s.unique_ips*20],['m-cve',s.cve_exploits*100],
    ['m-botnet',s.botnet_count*50],['m-malware',s.malware_downloads*200],
    ['m-honey',s.honeytokens_triggered*500],['m-http',s.http_attacks],
-   ['m-telnet',s.telnet_attacks*2],['m-rtsp',s.rtsp_attacks*3],['m-docker',s.docker_attacks*100]
+   ['m-telnet',s.telnet_attacks*2],['m-rtsp',s.rtsp_attacks*3],
+   ['m-onvif',s.onvif_attacks*4],['m-decoy',(s.decoy_interactions||0)*10],
+   ['m-isapi',(s.isapi_hits||0)*2]
   ].forEach(([id, val]) => {
     const el = document.getElementById(id+'-bar');
-    if (el) el.style.width = Math.min(val/max*100, 100)+'%';
+    if (el) el.style.width = Math.min((val||0)/max*100, 100)+'%';
   });
 
   // Timeline
@@ -1017,15 +1257,16 @@ async function loadOverview() {
 
 function updateTicker(s) {
   const events = [];
-  if (s.total_attacks)         events.push(`💥 ${fmt(s.total_attacks)} total attacks captured`);
-  if (s.cve_exploits)          events.push(`💀 ${s.cve_exploits} CVE exploit attempts detected`);
-  if (s.botnet_count)          events.push(`🤖 ${s.botnet_count} botnet credential sprays`);
-  if (s.malware_downloads)     events.push(`☣️ ${s.malware_downloads} malware URLs captured`);
-  if (s.honeytokens_triggered) events.push(`🍯 ${s.honeytokens_triggered} honeytokens triggered`);
-  if (s.country_count)         events.push(`🌍 Attacks from ${s.country_count} countries`);
-  if (s.docker_attacks)        events.push(`🐳 ${s.docker_attacks} Docker API escape attempts`);
-  if (s.rtsp_attacks)          events.push(`📹 ${fmt(s.rtsp_attacks)} RTSP camera probes`);
-
+  if (s.total_attacks)          events.push(`💥 ${fmt(s.total_attacks)} total attacks captured`);
+  if (s.cve_exploits)           events.push(`💀 ${s.cve_exploits} CVE exploit attempts detected`);
+  if (s.botnet_count)           events.push(`🤖 ${s.botnet_count} botnet credential sprays`);
+  if (s.malware_downloads)      events.push(`☣️ ${s.malware_downloads} malware URLs captured`);
+  if (s.honeytokens_triggered)  events.push(`🍯 ${s.honeytokens_triggered} honeytokens triggered`);
+  if (s.country_count)          events.push(`🌍 Attacks from ${s.country_count} countries`);
+  if (s.onvif_attacks)          events.push(`📡 ${fmt(s.onvif_attacks)} ONVIF camera mgmt probes`);
+  if (s.rtsp_attacks)           events.push(`📹 ${fmt(s.rtsp_attacks)} RTSP stream access attempts`);
+  if (s.isapi_hits)             events.push(`🔌 ${fmt(s.isapi_hits)} Hikvision ISAPI hits`);
+  if (s.decoy_interactions)     events.push(`🎭 ${s.decoy_interactions} attackers engaged decoy`);
   if (!events.length) { document.getElementById('tickerTrack').textContent = 'Waiting for attacks…'; return; }
   document.getElementById('tickerTrack').innerHTML =
     events.map(e => `<span class="ticker-event">${e}</span><span class="ticker-sep"> /// </span>`).join('');
@@ -1057,6 +1298,9 @@ async function setTimeRange(r, btn) {
     const labels = tl.labels.map(l => l.slice(-5));
     const c = S.charts['timelineChart'];
     if (c) {
+
+
+
       c.data.labels                     = labels;
       c.data.datasets[0].data          = tl.datasets.connections;
       c.data.datasets[1].data          = tl.datasets.malicious;
@@ -1348,7 +1592,7 @@ async function loadCVE() {
       <td class="mono" style="color:var(--muted)">${c.unique_ips}</td>
       <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(c.last)}</td>
     </tr>`).join('') :
-    '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No CVE attempts recorded yet</td></tr>';
+    '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px;font-family:var,--mono)">No CVE attempts recorded yet</td></tr>';
 
   // Severity chart
   const sev = {critical:0,high:0,medium:0,low:0};
@@ -1375,7 +1619,7 @@ async function loadCreds() {
       <td class="mono" style="color:var(--text);font-weight:700">${fmt(c.count)}</td>
       <td>${c.is_botnet ? '<span class="badge b-crit">🤖 BOTNET</span>' : '<span class="badge b-low">normal</span>'}</td>
     </tr>`).join('') :
-    '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No credentials captured yet</td></tr>';
+    '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px;font-family:var,--mono)">No credentials captured yet</td></tr>';
 
   const botnet = creds.filter(c=>c.is_botnet).reduce((a,c)=>a+c.count,0);
   const normal = creds.filter(c=>!c.is_botnet).reduce((a,c)=>a+c.count,0);
@@ -1408,7 +1652,7 @@ async function loadMalware() {
         <td class="mono" style="color:var(--muted)">${u.unique_ips}</td>
         <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(u.last)}</td>
       </tr>`).join('') :
-      '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No malware URLs captured yet.<br>Start the honeypot and wait for Telnet/SSH sessions with wget/curl commands.</td></tr>';
+      '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px;font-family:var,--mono)">No malware URLs captured yet.<br>Start the honeypot and wait for Telnet/SSH sessions with wget/curl commands.</td></tr>';
   }
 
   if (botnet && botnet.families) {
@@ -1450,7 +1694,7 @@ async function loadHoneytokens() {
       <td class="mono truncate" style="font-size:10px;color:var(--red)">${r.token_value}</td>
       <td>${svcBadge(r.service)}</td>
     </tr>`).join('') :
-    '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No honeytokens triggered yet.<br>They fire when attackers access fake files or use bait credentials.</td></tr>';
+    '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px;font-family:var,--mono)">No honeytokens triggered yet</td></tr>';
 
   const files = data.by_file || [];
   const max_f = files[0]?.count || 1;
@@ -1463,171 +1707,441 @@ async function loadHoneytokens() {
       </div>
       <span class="rank-count" style="color:var(--red)">${f.count}</span>
     </li>`).join('') :
-    '<li style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:12px 0">No honeytoken hits yet</li>';
+    '<li style="color:var(--muted);font-family:var,--mono);font-size:11px;padding:12px 0">No honeytoken hits yet</li>';
 }
 
 // ═══════════════════════════════════════════════════════════
-// SERVICES
+// ATTACKER INTEL
 // ═══════════════════════════════════════════════════════════
-async function loadServices() {
-  const data = await api('/api/service-stats?hours=24');
-  if (!data) return;
+async function loadAttackerIntel() {
+  const [topIps, sessions] = await Promise.all([
+    api('/api/top-ips?hours=168&limit=50'),
+    api('/api/sessions?limit=500&hours=168'),
+  ]);
+  if (!topIps) return;
 
-  const svcs = data.services || [];
-  const icons = {
-    HTTP:'🌐',HTTPS:'🔒',TELNET:'📟',SSH:'🔑',FTP:'📁',SMTP:'📧',
-    RTSP:'📹',ONVIF:'📡',MQTT:'📡',REDIS:'🗄️',MYSQL:'🗃️',
-    DOCKER:'🐳',MEMCACHED:'💾',VNC:'🖥️',RDP:'🖥️',MODBUS:'⚙️',
-    HTTP_ALT:'🌐',
-  };
+  const ips = topIps.top_ips || [];
+  const sess = (sessions?.sessions || []);
 
-  document.getElementById('svcGrid').innerHTML = svcs.map(s => {
-    const cls = s.hits > 100 ? 'attacked' : 'active';
-    const hiCls= s.hits > 1000 ? '' : s.hits > 100 ? 'few' : 'none';
-    return `
-      <div class="svc-tile ${cls}">
-        <div class="svc-dot"></div>
-        <div class="svc-icon">${icons[s.service] || '🔌'}</div>
-        <div class="svc-name">${s.service}</div>
-        <div class="svc-port">:${s.port}</div>
-        <div class="svc-hits ${hiCls}">${fmt(s.hits)}</div>
-        ${s.is_botnet ? '<div style="font-size:9px;color:var(--orange);margin-top:2px">🤖 BOTNET</div>' : ''}
-      </div>`;
-  }).join('');
-
-  const active = svcs.filter(s=>s.hits>0);
-  mkChart('svcBarChart','bar',{
-    labels: active.map(s=>s.service),
-    datasets:[{
-      data:  active.map(s=>s.hits),
-      backgroundColor: active.map(s=>s.hits>1000?'rgba(255,48,84,.7)':s.hits>100?'rgba(255,140,0,.7)':'rgba(0,255,136,.4)'),
-      borderRadius:3,
-    }]
-  });
-
-  // Protocol donut — all TCP for this honeypot
-  const total = svcs.reduce((a,s)=>a+s.hits,0);
-  mkChart('protoChart','doughnut',{
-    labels:['TCP','UDP','ICMP'],
-    datasets:[{ data:[total, 0, 0], backgroundColor:['#0a84ffaa','#ff8c00aa','#00ff88aa'], borderWidth:0 }]
-  },{
-    plugins:{ legend:{ display:true, position:'right', labels:{ color:'rgba(255,255,255,.5)', font:{family:"'JetBrains Mono'",size:10}, boxWidth:10 } } }
-  });
-}
-
-// ═══════════════════════════════════════════════════════════
-// REPORT
-// ═══════════════════════════════════════════════════════════
-async function generateReport() {
-  const hours = document.getElementById('reportHours').value;
-  const el    = document.getElementById('reportOutput');
-  el.textContent = '◌ Generating report…';
-
-  const data = await api(`/api/report?hours=${hours}`);
-  if (!data) {
-    el.textContent = '✗ Failed to fetch report data. Is the honeypot running?';
-    return;
+  // Risk scoring
+  function riskScore(ip) {
+    let score = 0;
+    if (ip.is_botnet) score += 40;
+    if (ip.is_tor)    score += 35;
+    if (ip.scanner_tool) score += 20;
+    const cnt = ip.count || ip.cnt || 0;
+    if (cnt > 1000) score += 20;
+    else if (cnt > 100) score += 10;
+    else if (cnt > 10) score += 5;
+    const svcs = (ip.services || []).filter(Boolean);
+    if (svcs.length > 3) score += 15;
+    return Math.min(score, 100);
   }
 
-  const s  = data.stats || {};
-  const ts = new Date(data.generated_at).toLocaleString();
-  const top_c  = (data.top_countries || []).slice(0,5);
-  const top_ip = (data.top_ips || []).slice(0,5);
-  const cves   = (data.cve_data || []).slice(0,5);
-  const svcs   = (data.services || []).slice(0,5);
+  const scored = ips.map(ip => ({ ...ip, risk: riskScore(ip) }))
+                    .sort((a, b) => b.risk - a.risk);
 
-  const pct = (n,total) => total ? `${((n/total)*100).toFixed(1)}%` : '0%';
-  const total = s.total_attacks || 0;
+  const highRisk = scored.filter(ip => ip.risk >= 70).length;
+  const scanners = scored.filter(ip => ip.scanner_tool).length;
 
-  let report = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  honeyPot — Threat Intelligence Report
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  animCount('ai-highrisk', highRisk);
+  animCount('ai-scanners', scanners);
 
-  Generated:    ${ts}
-  Period:       Last ${hours}h
-  Device:       Hikvision DS-2CD2043G2-I (V5.7.15)
-
-━━━ EXECUTIVE SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Total Attacks:         ${total.toLocaleString()}
-  Unique Source IPs:     ${(s.unique_ips||0).toLocaleString()}
-  Countries:             ${s.country_count || 0}
-  CVE Exploits:          ${s.cve_exploits || 0}
-  Botnet Credentials:    ${s.botnet_count || 0}
-  Malware URLs Captured: ${s.malware_downloads || 0}
-  Honeytokens Triggered: ${s.honeytokens_triggered || 0}
-
-━━━ TOP ATTACKING COUNTRIES ━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-  top_c.forEach((c,i) => {
-    const n = c.cnt || c.count || 0;
-    report += `  ${i+1}. ${c.country||c.name}  ${n.toLocaleString()} attacks (${pct(n,total)})\n`;
+  // Multi-stage detection — IPs that hit 3+ different paths
+  const ipPaths = {};
+  sess.forEach(s => {
+    if (!s.path) return;
+    if (!ipPaths[s.ip]) ipPaths[s.ip] = new Set();
+    ipPaths[s.ip].add(s.path);
   });
+  const chains = Object.values(ipPaths).filter(p => p.size >= 3).length;
+  animCount('ai-chains', chains);
 
-  if (!top_c.length) report += '  No country data yet.\n';
+  // Threat table
+  const riskColor = r => r >= 70 ? 'var(--red)' : r >= 40 ? 'var(--orange)' : 'var(--yellow)';
+  const riskLabel = r => r >= 70 ? 'CRITICAL' : r >= 40 ? 'HIGH' : r >= 20 ? 'MEDIUM' : 'LOW';
 
-  report += `\n━━━ TOP ATTACKING IPs ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  top_ip.forEach((ip,i) => {
-    const n = ip.cnt || ip.count || 0;
-    report += `  ${i+1}. ${ip.source_ip||ip.ip}  ${n.toLocaleString()} hits  (${ip.country||'Unknown'})\n`;
+  document.getElementById('threatBody').innerHTML = scored.slice(0, 30).map(ip => {
+    const r = ip.risk;
+    const cnt = ip.count || ip.cnt || 0;
+    const svcs = (typeof ip.services === 'string' ? ip.services.split(',') : ip.services || []).filter(Boolean);
+    const flags = [
+      ip.is_botnet   ? '🤖' : '',
+      ip.is_tor      ? '🧅' : '',
+      ip.scanner_tool ? `<span class="badge b-blue" style="font-size:8px">${ip.scanner_tool}</span>` : '',
+    ].filter(Boolean).join(' ');
+    return `
+    <tr>
+      <td class="mono" style="color:var(--blue)">${ip.source_ip || ip.ip}</td>
+      <td>${ip.country || '—'}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="flex:1;height:4px;background:var(--border);border-radius:2px">
+            <div style="width:${r}%;height:100%;background:${riskColor(r)};border-radius:2px;transition:width .6s"></div>
+          </div>
+          <span class="mono" style="color:${riskColor(r)};font-size:10px;font-weight:700;min-width:28px">${r}</span>
+          <span class="badge" style="background:${riskColor(r)}22;color:${riskColor(r)};border-color:${riskColor(r)}44;font-size:8px">${riskLabel(r)}</span>
+        </div>
+      </td>
+      <td class="mono" style="color:var(--orange);font-weight:700">${fmt(cnt)}</td>
+      <td style="font-size:10px">${svcs.slice(0,4).map(s => `<span class="badge b-blue" style="font-size:8px">${s}</span>`).join(' ')}</td>
+      <td style="font-size:10px;color:var(--muted)">${ip.scanner_tool || '—'}</td>
+      <td>${flags || '—'}</td>
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(ip.last_seen)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:30px">No data yet</td></tr>';
+
+  // Stage distribution chart
+  const stageCounts = {
+    'Initial Scan': 0, 'Auth Probe': 0, 'CVE Exploit': 0,
+    'Botnet Cred': 0,  'Deep Access': 0
+  };
+  sess.forEach(s => {
+    const p = (s.path || '').toLowerCase();
+    if (s.cve) stageCounts['CVE Exploit']++;
+    else if (s.is_botnet) stageCounts['Botnet Cred']++;
+    else if (p.includes('/isapi/') || p.includes('/streaming')) stageCounts['Deep Access']++;
+    else if (s.username) stageCounts['Auth Probe']++;
+    else stageCounts['Initial Scan']++;
   });
-  if (!top_ip.length) report += '  No IP data yet.\n';
+  mkChart('stageChart','doughnut',{
+    labels: Object.keys(stageCounts),
+    datasets:[{
+      data: Object.values(stageCounts),
+      backgroundColor:['#0a84ffaa','#ffd60aaa','#ff8c00aa','#ff8c00cc','#ff3054aa','#ff3054cc','#bf5af2aa'],
+      borderColor:['#0a84ff','#ff8c00','#ff3054','#bf5af2','#00ff88'],
+      borderWidth:1
+    }]
+  },{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9},boxWidth:10}}}});
 
-  report += `\n━━━ CVE EXPLOITS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  cves.forEach((c,i) => {
-    report += `  ${i+1}. ${c.cve_id}  [${(c.severity||'').toUpperCase()}]  ${c.cnt||c.count} attempts  — ${c.cve_name||c.name}\n`;
-  });
-  if (!cves.length) report += '  No CVE attempts recorded.\n';
+  // Attack progression — IPs with 3+ stages
+  const progressions = Object.entries(ipPaths)
+    .filter(([, paths]) => paths.size >= 3)
+    .slice(0, 10)
+    .map(([ip, paths]) => {
+      const ipSess = sess.filter(s => s.ip === ip);
+      const country = ipSess[0]?.country || '?';
+      const threat  = ipSess.some(s => s.threat === 'critical') ? 'critical' :
+                      ipSess.some(s => s.threat === 'high') ? 'high' : 'medium';
+      return { ip, country, paths: [...paths], threat, count: ipSess.length };
+    });
 
-  report += `\n━━━ TOP SERVICES ATTACKED ━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  svcs.filter(s=>s.cnt>0 || s.hits>0).forEach((s,i) => {
-    const n = s.cnt || s.hits || 0;
-    report += `  ${i+1}. ${s.service}  :${s.dest_port||s.port}  ${n.toLocaleString()} hits  (${pct(n,total)})\n`;
-  });
+  const stageIcons = {
+    '/doc/page/login': '🟡 Login',
+    '/ISAPI/Security': '🟠 Auth',
+    '/ISAPI/System':   '🔴 Enum',
+    '/Streaming':      '🔴 Stream',
+    '/ISAPI/':         '🟠 ISAPI',
+    '/onvif/':         '🟠 ONVIF',
+    '/cgi-bin/':       '🟡 CGI',
+  };
 
-  report += `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  honeyPot v1.0.0  |  Research & Threat Intelligence
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-
-  el.textContent = report;
+  document.getElementById('progressionList').innerHTML = progressions.length ?
+    progressions.map(p => {
+      const stages = p.paths.slice(0, 6).map(path => {
+        for (const [k, v] of Object.entries(stageIcons)) {
+          if (path.includes(k)) return `<span style="background:var(--raised);border:1px solid var(--border2);padding:2px 7px;border-radius:3px;font-size:10px;font-family:var(--mono)">${v}</span>`;
+        }
+        return `<span style="background:var(--raised);border:1px solid var(--border2);padding:2px 7px;border-radius:3px;font-size:10px;font-family:var(--mono);color:var(--muted)">${path.slice(0,20)}</span>`;
+      }).join(' → ');
+      return `
+      <div style="background:var(--raised);border:1px solid var(--border);border-left:3px solid var(--${p.threat==='critical'?'red':p.threat==='high'?'orange':'yellow'});border-radius:6px;padding:12px 14px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span class="mono" style="color:var(--blue);font-size:11px">${p.ip}</span>
+          <span style="color:var(--muted);font-size:10px">${p.country}</span>
+          <span class="mono" style="color:var(--orange);font-size:10px;margin-left:auto">${p.count} events</span>
+          ${badge(p.threat)}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">${stages}</div>
+      </div>`;
+    }).join('') :
+    '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;text-align:center;padding:30px">No multi-stage attacks yet</div>';
 }
 
-function printReport() {
-  const el = document.getElementById('reportOutput');
-  const w  = window.open('','_blank');
-  w.document.write(`<html><head><title>honeyPot Report</title>
-    <style>body{background:#040608;color:#fff;font-family:'Courier New',monospace;font-size:12px;padding:30px;white-space:pre-wrap}</style>
-    </head><body>${el.textContent}</body></html>`);
-  w.print();
+// ═══════════════════════════════════════════════════════════
+// DECOY LOG PANEL
+// ═══════════════════════════════════════════════════════════
+let _decoyAll = [];
+
+const HIK_PATHS = [
+  '/ISAPI/','/doc/page/login','/PSIA/','/onvif/',
+  '/SDK/','/Streaming/channels','/Security/sessionLogin',
+  '/System/deviceInfo','/cgi-bin/','/webapi/','/ISAPI/Security',
+];
+
+const STAGE_MAP = {
+  '/doc/page/login':    'Login Page',
+  '/Security/sessionLogin': 'Auth Attempt',
+  '/Security/userCheck':    'Auth Bypass',
+  '/System/deviceInfo':     'Device Enum',
+  '/Streaming/channels':    'Stream Access',
+  '/ISAPI/':                'ISAPI Probe',
+  '/onvif/':                'ONVIF Probe',
+  '/PSIA/':                 'PSIA Probe',
+  '/cgi-bin/':              'CGI Probe',
+  '/SDK/':                  'SDK Probe',
+};
+
+function getStage(path) {
+  for (const [k, v] of Object.entries(STAGE_MAP)) {
+    if ((path || '').includes(k)) return v;
+  }
+  return 'Initial Scan';
+}
+
+async function loadDecoyPanel() {
+  const data = await api('/api/sessions?limit=500&hours=168');
+  if (!data) return;
+
+  _decoyAll = (data.sessions || []).filter(s =>
+    HIK_PATHS.some(p => (s.path || '').includes(p))
+  );
+
+  // Metrics
+  animCount('dl-total', _decoyAll.length);
+  animCount('dl-login',  _decoyAll.filter(s => (s.path||'').includes('/login')).length);
+  animCount('dl-stream', _decoyAll.filter(s => (s.path||'').includes('/Streaming')).length);
+
+  renderDecoyTable(_decoyAll);
+
+  // Most probed paths
+  const pathCounts = {};
+  _decoyAll.forEach(s => {
+    const p = s.path || '—';
+    pathCounts[p] = (pathCounts[p] || 0) + 1;
+  });
+  const sorted = Object.entries(pathCounts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const maxP = sorted[0]?.[1] || 1;
+  document.getElementById('decoyPathList').innerHTML = sorted.map(([path, count], i) => `
+    <li class="rank-item">
+      <span class="rank-num">${i+1}</span>
+      <div class="rank-info">
+        <span class="rank-label" style="color:var(--orange);font-size:10px">${path}</span>
+        <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(count/maxP*100).toFixed(1)}%;background:var(--orange)"></div></div>
+      </div>
+      <span class="rank-count">${count}</span>
+    </li>`).join('') || '<li style="color:var(--muted);font-family:var,--mono);font-size:11px">No data yet</li>';
+
+  // Funnel chart
+  const stageCounts = {};
+  _decoyAll.forEach(s => {
+    const st = getStage(s.path);
+    stageCounts[st] = (stageCounts[st] || 0) + 1;
+  });
+  const stageOrder = ['Initial Scan','Login Page','ISAPI Probe','Auth Attempt','Auth Bypass','Device Enum','Stream Access'];
+  const funnelLabels = stageOrder.filter(s => stageCounts[s]);
+  const funnelVals   = funnelLabels.map(s => stageCounts[s] || 0);
+  mkChart('funnelChart','bar',{
+    labels: funnelLabels,
+    datasets:[{
+      data: funnelVals,
+      backgroundColor:['#0a84ffaa','#ffd60aaa','#ff8c00aa','#ff8c00cc','#ff3054aa','#ff3054cc','#bf5af2aa'],
+      borderRadius: 4,
+    }]
+  },{
+    indexAxis:'y',
+    plugins:{ legend:{ display:false } },
+    scales:{
+      x:{ grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'rgba(255,255,255,0.4)',font:{family:"'JetBrains Mono'",size:9}} },
+      y:{ grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'rgba(255,255,255,0.4)',font:{family:"'JetBrains Mono'",size:9}} },
+    }
+  });
+}
+
+function renderDecoyTable(rows) {
+  const tbody = document.getElementById('decoyBody2');
+  if (!tbody) return;
+  tbody.innerHTML = rows.slice(0,50).map(s => {
+    const stage = getStage(s.path);
+    const stageColor = stage.includes('Stream') || stage.includes('Bypass') || stage.includes('Enum')
+      ? 'var(--red)' : stage.includes('Auth') ? 'var(--orange)' : 'var(--yellow)';
+    return `
+    <tr style="background:rgba(255,48,84,0.02)">
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
+      <td class="mono" style="color:var(--red)">${s.ip}</td>
+      <td>${s.country || '—'}</td>
+      <td class="mono" style="color:var(--orange);font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.path}">${s.path || '—'}</td>
+      <td style="white-space:nowrap;color:${stageColor};font-family:var(--mono);font-size:10px">${stage}</td>
+      <td class="mono" style="font-size:10px">${
+        s.username
+          ? `<span style="color:var(--orange)">${s.username}</span>/<span style="color:var(--red)">${s.password||'?'}</span>`
+          : '<span style="color:var(--muted)">—</span>'
+      }</td>
+      <td class="mono truncate" style="font-size:9px;color:var(--muted);max-width:140px">${s.user_agent||'—'}</td>
+      <td>${badge(s.threat)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px;font-family:var,--mono)">No decoy interactions yet</td></tr>`;
+}
+
+function filterDecoy() {
+  const q  = (document.getElementById('decoySearch').value || '').toLowerCase();
+  const st = document.getElementById('decoyStage').value || '';
+  const filtered = _decoyAll.filter(s =>
+    (!q  || [s.ip, s.country, s.path, s.username].join(' ').toLowerCase().includes(q)) &&
+    (!st || getStage(s.path).includes(st))
+  );
+  renderDecoyTable(filtered);
+}
+
+// ─── also call loadDecoyLog in loadOverview (for the overview panel decoy table)
+async function loadDecoyLog() {
+  const data = await api('/api/sessions?limit=500&hours=24');
+  if (!data) return;
+  const decoy = (data.sessions || []).filter(s =>
+    HIK_PATHS.some(p => (s.path || '').includes(p))
+  ).slice(0, 20);
+  const tbody = document.getElementById('decoyBody');
+  if (!tbody) return;
+  tbody.innerHTML = decoy.length ? decoy.map(s => `
+    <tr style="background:rgba(255,48,84,0.03)">
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
+      <td class="mono" style="color:var(--red)">${s.ip}</td>
+      <td>${s.country || '—'}</td>
+      <td class="mono" style="color:var(--orange);font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.path || '—'}</td>
+      <td style="white-space:nowrap;font-family:var(--mono);font-size:10px">${getStage(s.path)}</td>
+      <td class="mono" style="font-size:10px">${s.username ? `<span style="color:var(--orange)">${s.username}</span>/<span style="color:var(--red)">${s.password||'?'}</span>` : '—'}</td>
+      <td>${badge(s.threat)}</td>
+    </tr>`).join('') :
+    `<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;font-family:var,--mono);font-size:11px">No deep interactions yet</td></tr>`;
 }
 
 // ═══════════════════════════════════════════════════════════
-// GLOBAL REFRESH
+// DEVICE STATUS PANEL
 // ═══════════════════════════════════════════════════════════
-async function refresh() {
-  await loadOverview();
-  if (S.panel === 'map')         loadMap();
-  if (S.panel === 'sessions')    loadSessions();
-  if (S.panel === 'cve')         loadCVE();
-  if (S.panel === 'creds')       loadCreds();
-  if (S.panel === 'malware')     loadMalware();
-  if (S.panel === 'honeytokens') loadHoneytokens();
-  if (S.panel === 'services')    loadServices();
+async function loadDeviceStatus() {
+  const [stats, sessions, topIps] = await Promise.all([
+    api('/api/stats'),
+    api('/api/sessions?limit=200&hours=24'),
+    api('/api/top-ips?hours=24&limit=20'),
+  ]);
+
+  // Fake but realistic device stats — these simulate what a real HIK camera shows
+  const uptime = stats?.uptime_seconds || 0;
+  const cpu    = Math.floor(15 + (stats?.total_attacks || 0) % 30); // varies with load
+  const temp   = (42 + Math.sin(Date.now()/100000) * 6).toFixed(1);
+  const mem    = Math.floor(60 + (stats?.total_attacks || 0) % 20);
+
+  document.getElementById('dev-uptime2').textContent = uptime ? fmtUptime(uptime) : '14d 6h 22m';
+  document.getElementById('dev-cpu').textContent     = `${cpu}%`;
+  document.getElementById('dev-temp').textContent    = `${temp}°C`;
+  document.getElementById('dev-mem').textContent     = `${mem}% used`;
+
+  // Try to get actual server IP from stats
+  if (stats?.sensor_ip) document.getElementById('dev-ip').textContent = stats.sensor_ip;
+  else document.getElementById('dev-ip').textContent = window.location.hostname || '—';
+
+  // Device service tiles
+  const svcs = [
+    { name:'HTTP',    port:'80',   up:true  },
+    { name:'HTTPS',   port:'443',  up:true  },
+    { name:'RTSP',    port:'554',  up:true  },
+    { name:'ONVIF',   port:'8000', up:true  },
+    { name:'HTTP-Alt',port:'8080', up:true  },
+    { name:'Telnet',  port:'23',   up:false },
+  ];
+  document.getElementById('deviceSvcGrid').innerHTML = svcs.map(s => `
+    <div style="background:var(--bg);border:1px solid ${s.up?'rgba(0,255,136,0.15)':'rgba(255,48,84,0.15)'};border-radius:4px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:10px;font-weight:700;font-family:var(--mono);color:var(--text)">${s.name}</div>
+        <div style="font-size:9px;font-family:var(--mono);color:var(--muted)">:${s.port}</div>
+      </div>
+      <span style="font-size:9px;font-family:var(--mono);color:${s.up?'var(--green)':'var(--red)'};font-weight:700">${s.up?'UP':'—'}</span>
+    </div>`).join('');
+
+  // Device attack metrics
+  const sess = sessions?.sessions || [];
+  animCount('dv-attacks', stats?.total_attacks || 0);
+  animCount('dv-logins',  sess.filter(s => (s.path||'').includes('/login') || s.username).length);
+  animCount('dv-streams', sess.filter(s => (s.path||'').includes('/Streaming') || (s.service||'').toUpperCase()==='RTSP').length);
+
+  // Device access log — real sessions formatted like a camera access log
+  const STATUS_MAP = {
+    '/doc/page/login.asp':            '302',
+    '/ISAPI/Security/sessionLogin':   '401',
+    '/ISAPI/System/deviceInfo':       '401',
+    '/Streaming/channels':            '401',
+    '/ISAPI/':                        '404',
+    '/onvif/':                        '200',
+    '/cgi-bin/':                      '404',
+  };
+  function getStatus(path) {
+    for (const [k,v] of Object.entries(STATUS_MAP)) {
+      if ((path||'').includes(k)) return v;
+    }
+    return '200';
+  }
+  function statusColor(code) {
+    if (code === '401') return 'var(--red)';
+    if (code === '302') return 'var(--orange)';
+    if (code === '404') return 'var(--muted)';
+    return 'var(--green)';
+  }
+
+  document.getElementById('deviceLogBody').innerHTML = sess.slice(0,30).map(s => {
+    const status = getStatus(s.path);
+    const method = s.method || 'GET';
+    const path   = s.path || '/';
+    const ua     = s.user_agent || 'curl/7.68.0';
+    return `
+    <tr>
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
+      <td class="mono" style="color:var(--blue)">${s.ip}</td>
+      <td>${s.country||'—'}</td>
+      <td class="mono" style="color:var(--orange);font-size:10px">${method}</td>
+      <td class="mono" style="font-size:10px;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${path}</td>
+      <td class="mono" style="color:${statusColor(status)};font-weight:700">${status}</td>
+      <td class="mono truncate" style="font-size:9px;color:var(--muted);max-width:160px">${ua}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;font-family:var,--mono)">No sessions yet</td></tr>';
+
+  // Scanner detection
+  const SCANNERS = {
+    'Shodan': ['shodan','censysio','masscan/1'],
+    'Masscan': ['masscan'],
+    'ZMap': ['zmap'],
+    'Censys': ['censys'],
+    'Mirai': ['hello world','go http'],
+    'Nmap': ['nmap scripting'],
+  };
+  const scanCounts = {};
+  sess.forEach(s => {
+    const ua = (s.user_agent||'').toLowerCase();
+    for (const [name, kws] of Object.entries(SCANNERS)) {
+      if (kws.some(k => ua.includes(k))) {
+        scanCounts[name] = (scanCounts[name]||0)+1;
+      }
+    }
+  });
+  const scanSorted = Object.entries(scanCounts).sort((a,b)=>b[1]-a[1]);
+  document.getElementById('scannerList').innerHTML = scanSorted.length ? scanSorted.map(([name, count], i) => `
+    <li class="rank-item">
+      <span class="rank-num">${i+1}</span>
+      <div class="rank-info">
+        <span class="rank-label" style="color:var(--orange)">${name}</span>
+        <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(count/scanSorted[0][1]*100).toFixed(1)}%;background:var(--orange)"></div></div>
+      </div>
+      <span class="rank-count">${count}</span>
+    </li>`).join('') :
+    '<li style="color:var(--muted);font-family:var,--mono);font-size:11px;padding:12px 0">No scanner activity detected</li>';
+
+  // User-Agent analysis
+  const uaCounts = {};
+  sess.forEach(s => {
+    const ua = (s.user_agent||'').toLowerCase();
+    uaCounts[ua] = (uaCounts[ua] || 0) + 1;
+  });
+  const uaSorted = Object.entries(uaCounts).sort((a,b)=>b[1]-a[1]);
+  document.getElementById('uaList').innerHTML = uaSorted.length ? uaSorted.map(([ua, count], i) => `
+    <li class="rank-item">
+      <span class="rank-num">${i+1}</span>
+      <div class="rank-info">
+        <span class="rank-label" style="color:var(--blue)">${ua}</span>
+        <div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(count/uaSorted[0][1]*100).toFixed(1)}%;background:var(--blue)"></div></div>
+      </div>
+      <span class="rank-count">${count}</span>
+    </li>`).join('') :
+    '<li style="color:var(--muted);font-family:var,--mono);font-size:11px;padding:12px 0">No User-Agent data available</li>';
 }
-
-// ═══════════════════════════════════════════════════════════
-// INIT
-// ═══════════════════════════════════════════════════════════
-window.addEventListener('load', () => {
-  loadOverview();
-
-  // Auto-refresh every 10 seconds
-  setInterval(() => {
-    loadOverview();
-    if (S.panel === 'map') loadMap();
-  }, 10000);
-});
 </script>
 </body>
 </html>

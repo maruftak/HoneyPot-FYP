@@ -740,8 +740,8 @@ aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
 <tds:GetCapabilitiesResponse>
 <tds:Capabilities>
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
-<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
-<tt:Events><tt:XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
+<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
+<tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
 <tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
 <tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
 </tds:Capabilities>
@@ -1245,7 +1245,7 @@ def handle_rtsp(conn, addr):
 
             # Route by RTSP method
             if method == "DESCRIBE":
-                sdp = _SDP_RESPONSE.format(session_id=session_id)
+                sdp = _SDP_RESPONSE   # no {session_id} placeholder — remove .format()
                 resp = (f"RTSP/1.0 200 OK\r\n"
                         f"CSeq: {cseq}\r\n"
                         f"Content-Type: application/sdp\r\n"
@@ -1320,7 +1320,7 @@ _ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
 <tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
 <tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
 <tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
-<tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
+<tt:Media><tt>XAddr>http://192.168.1.108:8000/onvif/media</tt>XAddr></tt:Media>
 </tds:Capabilities>
 </tds:GetCapabilitiesResponse>
 </SOAP-ENV:Body>

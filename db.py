@@ -36,12 +36,16 @@ CREATE TABLE IF NOT EXISTS attacks (
     session_id       TEXT    DEFAULT '',
     is_botnet        INTEGER DEFAULT 0,
     is_tor           INTEGER DEFAULT 0,
+    is_vpn           INTEGER DEFAULT 0,
+    is_proxy         INTEGER DEFAULT 0,
+    asn              TEXT    DEFAULT '',
+    org              TEXT    DEFAULT '',
     commands         TEXT    DEFAULT '[]',
     raw_payload      TEXT    DEFAULT '',
     query_string     TEXT    DEFAULT '',
     referer          TEXT    DEFAULT '',
     host_header      TEXT    DEFAULT '',
-    origin            TEXT    DEFAULT '',
+    origin           TEXT    DEFAULT '',
     attack_patterns  TEXT    DEFAULT ''
 );
 
@@ -139,28 +143,22 @@ def init():
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         conn.executescript(SCHEMA)
-        
-        # Add new columns for comprehensive HTTP logging
         with conn:
-            try:
-                conn.execute("ALTER TABLE attacks ADD COLUMN query_string TEXT")
-            except: pass
-            try:
-                conn.execute("ALTER TABLE attacks ADD COLUMN referer TEXT")
-            except: pass
-            try:
-                conn.execute("ALTER TABLE attacks ADD COLUMN host_header TEXT")
-            except: pass
-            try:
-                conn.execute("ALTER TABLE attacks ADD COLUMN origin TEXT")
-            except: pass
-            try:
-                conn.execute("ALTER TABLE attacks ADD COLUMN attack_patterns TEXT")
-            except: pass
-            try:
-                conn.execute("ALTER TABLE attacks ADD COLUMN scanner_tool TEXT")
-            except: pass
-    
+            for col, typ in [
+                ("query_string",   "TEXT"),
+                ("referer",        "TEXT"),
+                ("host_header",    "TEXT"),
+                ("origin",         "TEXT"),
+                ("attack_patterns","TEXT"),
+                ("scanner_tool",   "TEXT"),
+                ("is_vpn",         "INTEGER DEFAULT 0"),
+                ("is_proxy",       "INTEGER DEFAULT 0"),
+                ("asn",            "TEXT DEFAULT ''"),
+                ("org",            "TEXT DEFAULT ''"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE attacks ADD COLUMN {col} {typ}")
+                except: pass
         conn.commit()
         conn.close()
     print(f"[DB] Initialised: {DB_PATH}")
@@ -184,11 +182,12 @@ def log_attack(d: dict):
                    method, path, user_agent, payload, username, password,
                    country, city, latitude, longitude,
                    attack_type, threat_level, cve_id, session_id,
-                   is_botnet, is_tor, commands, raw_payload,
+                   is_botnet, is_tor, is_vpn, is_proxy, asn, org,
+                   commands, raw_payload,
                    query_string, referer, host_header, origin,
                    attack_patterns, scanner_tool)
                 VALUES
-                  (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 d.get("timestamp",   _now()),
                 d.get("source_ip",   d.get("ip", "")),
@@ -202,16 +201,20 @@ def log_attack(d: dict):
                 d.get("payload",     "")[:1024],
                 d.get("username",    ""),
                 d.get("password",    ""),
-                d.get("country",     "Unknown"),
-                d.get("city",        ""),
-                d.get("latitude",    None),
-                d.get("longitude",   None),
+                d.get("country",     "Iran"),
+                d.get("city",        "Isfahan"),
+                d.get("latitude",    32.65),
+                d.get("longitude",   51.67),
                 d.get("attack_type", ""),
                 d.get("threat_level","low"),
                 d.get("cve_id",      ""),
                 d.get("session_id",  ""),
-                1 if d.get("is_botnet") else 0,
-                1 if d.get("is_tor")    else 0,
+                1 if d.get("is_botnet")  else 0,
+                1 if d.get("is_tor")     else 0,
+                1 if d.get("is_vpn")     else 0,
+                1 if d.get("is_proxy")   else 0,
+                str(d.get("asn",  "") or "")[:100],
+                str(d.get("org",  "") or "")[:100],
                 json.dumps(d.get("commands", [])),
                 d.get("raw_payload",     "")[:2048],
                 d.get("query_string",    "")[:512],
@@ -377,12 +380,35 @@ def get_stats(hours=24):
     c = _cutoff(hours)
     svc_rows = query("SELECT service, COUNT(*) n FROM attacks WHERE timestamp>? GROUP BY service", (c,))
     svc = {r["service"]: r["n"] for r in svc_rows}
+
+    # ISAPI hits — paths containing /ISAPI/
+    isapi_hits = scalar(
+        "SELECT COUNT(*) FROM attacks WHERE timestamp>? AND path LIKE '%/ISAPI/%'", (c,)
+    )
+    # Decoy interactions — attackers who hit HIK-specific paths
+    decoy_interactions = scalar("""
+        SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?
+        AND (
+            path LIKE '%/ISAPI/%' OR
+            path LIKE '%/doc/page/login%' OR
+            path LIKE '%/PSIA/%' OR
+            path LIKE '%/onvif/%' OR
+            path LIKE '%/SDK/%' OR
+            path LIKE '%/Streaming/channels%' OR
+            path LIKE '%/Security/sessionLogin%' OR
+            path LIKE '%/System/deviceInfo%'
+        )
+    """, (c,))
+
     return {
         "total_attacks":        scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>?", (c,)),
         "unique_ips":           scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?", (c,)),
         "country_count":        scalar("SELECT COUNT(DISTINCT country) FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown','')", (c,)),
         "botnet_count":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_botnet=1", (c,)),
         "tor_count":            scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_tor=1", (c,)),
+        "vpn_count":            scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_vpn=1", (c,)),
+        "proxy_count":          scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_proxy=1", (c,)),
+        "scanner_count":        scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND scanner_tool!='' AND scanner_tool IS NOT NULL", (c,)),
         "cve_exploits":         scalar("SELECT COUNT(*) FROM cve_attempts WHERE timestamp>?", (c,)),
         "malware_downloads":    scalar("SELECT COUNT(*) FROM malware_urls WHERE timestamp>?", (c,)),
         "honeytokens_triggered":scalar("SELECT COUNT(*) FROM honeytoken_triggers WHERE timestamp>?", (c,)),
@@ -401,6 +427,8 @@ def get_stats(hours=24):
         "rdp_attacks":          svc.get("rdp", 0),
         "modbus_attacks":       svc.get("modbus", 0),
         "smtp_attacks":         svc.get("smtp", 0),
+        "isapi_hits":           isapi_hits,
+        "decoy_interactions":   decoy_interactions,
         "services":             svc,
     }
 
@@ -451,7 +479,8 @@ def get_top_ips(hours=24, limit=20):
         SELECT source_ip, country, COUNT(*) cnt,
                SUM(is_botnet) bots, SUM(is_tor) tors,
                MAX(timestamp) last_seen,
-               GROUP_CONCAT(DISTINCT service) services
+               GROUP_CONCAT(DISTINCT service) services,
+               MAX(scanner_tool) scanner_tool
         FROM attacks WHERE timestamp>?
         GROUP BY source_ip ORDER BY cnt DESC LIMIT ?
     """, (c, limit))
@@ -504,7 +533,7 @@ def get_honeytoken_data(hours=168):
         "recent":      rows[:30],
     }
 
-def get_alerts(hours=1, limit=25):
+def get_alerts(hours=24, limit=25):   # was hours=1 — too short
     c = _cutoff(hours)
     alerts = []
 
