@@ -1,4 +1,4 @@
-import os, time, json, threading, random, secrets, sys
+import os, time, json, threading, random, secrets, sys, logging
 from pathlib import Path
 # Ensure project root is on sys.path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -14,6 +14,12 @@ except ImportError:
 
 app = Flask(__name__)
 init_db()
+
+# Logging to logs/honeypot.err
+LOG_FILE = Path(__file__).resolve().parents[1] / "logs" / "honeypot.err"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(filename=str(LOG_FILE), level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(message)s")
 
 GEOIP_DB = os.environ.get("GEOIP_DB")  # point to GeoLite2-City.mmdb if available
 geo_reader = geoip2.database.Reader(GEOIP_DB) if GEOIP_DB and geoip2 else None
@@ -145,7 +151,10 @@ def base_log(payload):
         "scanner_tool": request.headers.get("User-Agent", "")[:100],
     }
     data["attack_type"] = payload.get("attack_type", "")
-    log_attack(data)
+    try:
+        log_attack(data)
+    except Exception as e:
+        logging.exception("log_attack failed: %s", e)
     track_stage(ip, request.path)
 
 @app.before_request
@@ -182,9 +191,54 @@ def login_page():
         slow_down(120, 240)
         return resp
     base_log({})
-    resp = make_response("""
-    <html>...</html>
-    """, 200)
+    html = """
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Hikvision Network Video Recorder</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .container { background: #fff; border-radius: 8px; box-shadow: 0 8px 16px rgba(0,0,0,0.3); padding: 40px; width: 100%; max-width: 380px; }
+        .logo { text-align: center; margin-bottom: 30px; }
+        .logo h1 { color: #333; font-size: 24px; margin-bottom: 5px; }
+        .logo p { color: #999; font-size: 12px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; color: #333; font-size: 13px; font-weight: bold; margin-bottom: 8px; }
+        input { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; transition: border-color 0.3s; }
+        input:focus { outline: none; border-color: #0066cc; }
+        button { width: 100%; padding: 10px; background: #0066cc; color: #fff; border: none; border-radius: 4px; font-size: 14px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
+        button:hover { background: #0052a3; }
+        .footer { text-align: center; margin-top: 20px; color: #999; font-size: 11px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="logo">
+          <h1>🎥 Hikvision</h1>
+          <p>Network Video Recorder</p>
+        </div>
+        <form method="POST">
+          <div class="form-group">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" value="admin" required autofocus>
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Enter password" required>
+          </div>
+          <button type="submit">Login</button>
+        </form>
+        <div class="footer">
+          <p>DS-2CD2043G2-I v5.7.15</p>
+          <p>© 2023 Hikvision Digital Technology</p>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    resp = make_response(html, 200)
     resp.set_cookie("HikvisionSession", token, httponly=True, samesite="Lax")
     slow_down(100, 180)
     return resp

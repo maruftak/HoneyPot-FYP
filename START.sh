@@ -45,21 +45,23 @@ echo -e "${GREEN}[3/3] Starting services…${NC}"
 LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs}"
 mkdir -p "$LOG_DIR"
 
-python3 "$SCRIPT_DIR/dashboard.py" --port 5001 >"$LOG_DIR/dashboard.out" 2>&1 &
+HP_PORT="${HONEYPOT_PORT:-8080}"
+DASH_PORT="${DASHBOARD_PORT:-5001}"
+
+python3 "$SCRIPT_DIR/dashboard.py" --port "$DASH_PORT" >"$LOG_DIR/dashboard.out" 2>&1 &
 DASH_PID=$!
 sleep 1
 
-# Start honeypot (background)
 python3 "$SCRIPT_DIR/src/honeypot.py" >"$LOG_DIR/honeypot.out" 2>&1 &
 HP_PID=$!
 
 # Quick port check
 sleep 1
-if ! lsof -i :8080 >/dev/null 2>&1; then
-  echo -e "${RED}[!] Honeypot not listening on :8080. Check $LOG_DIR/honeypot.out${NC}"
+if ! lsof -i :"$HP_PORT" >/dev/null 2>&1; then
+  echo -e "${RED}[!] Honeypot not listening on :$HP_PORT. Check $LOG_DIR/honeypot.out${NC}"
 fi
-if ! lsof -i :5001 >/dev/null 2>&1; then
-  echo -e "${RED}[!] Dashboard not listening on :5001. Check $LOG_DIR/dashboard.out${NC}"
+if ! lsof -i :"$DASH_PORT" >/dev/null 2>&1; then
+  echo -e "${RED}[!] Dashboard not listening on :$DASH_PORT. Check $LOG_DIR/dashboard.out${NC}"
 fi
 
 MY_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
@@ -68,8 +70,8 @@ echo ""
 echo -e "${CYAN}══════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}[✓] honeyPot is running!${NC}"
 echo ""
-echo -e "  Dashboard → ${YELLOW}http://${MY_IP}:5001${NC}"
-echo -e "  Also try  → ${YELLOW}http://localhost:5001${NC}"
+echo -e "  Dashboard → ${YELLOW}http://${MY_IP}:${DASH_PORT}${NC}"
+echo -e "  Also try  → ${YELLOW}http://localhost:${DASH_PORT}${NC}"
 echo ""
 echo -e "  Honeypot PID:   $HP_PID"
 echo -e "  Dashboard PID:  $DASH_PID"
