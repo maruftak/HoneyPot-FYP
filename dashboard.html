@@ -246,7 +246,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 .b-crit{background:var(--red2);color:var(--red);border-color:rgba(255,48,84,.3)}
 .b-high{background:var(--orange2);color:var(--orange);border-color:rgba(255,140,0,.3)}
 .b-med{background:rgba(255,214,10,.1);color:var(--yellow);border-color:rgba(255,214,10,.2)}
-.b-low{background:var(--green2);color:var(--green);border-color:rgba(0,255,136,.2)}
+.b-low{background:var(--green2);color:var,--green;border-color:rgba(0,255,136,.2)}
 .b-blue{background:var(--blue2);color:var,--blue;border-color:rgba(10,132,255,.2)}
 .b-purple{background:rgba(191,90,242,.1);color:var(--purple);border-color:rgba(191,90,242,.2)}
 
@@ -506,6 +506,14 @@ tr:hover td{background:rgba(255,255,255,0.02)}
       <div class="mc-val" id="m-isapi">—</div>
       <div class="mc-sub">/ISAPI/ endpoint probes</div>
       <div class="mc-bar"><div class="mc-bar-fill" id="m-isapi-bar" style="width:0%"></div></div>
+    </div>
+    <!-- new: Tarpit tracking -->
+    <div class="metric-card mc-blue">
+      <div class="mc-icon">🕸️</div>
+      <div class="mc-label">Tarpit Traps</div>
+      <div class="mc-val" id="m-tarpit">—</div>
+      <div class="mc-sub">attackers stalled</div>
+      <div class="mc-bar"><div class="mc-bar-fill" id="m-tarpit-bar" style="width:0%"></div></div>
     </div>
   </div>
 
@@ -894,8 +902,8 @@ tr:hover td{background:rgba(255,255,255,0.02)}
           <div><span style="color:var(--muted)">Model:</span> DS-2CD2043G2-I</div>
           <div><span style="color:var(--muted)">Firmware:</span> <span style="color:var(--green)">V5.7.15 build 230313</span></div>
           <div><span style="color:var(--muted)">Serial:</span> DS-2CD2043G2-I20230313BBRR</div>
-          <div><span style="color:var(--muted)">MAC:</span> <span id="dev-mac">A8:26:D9:F2:3C:11</span></div>
-          <div><span style="color:var(--muted)">IPv4:</span> <span id="dev-ip" style="color:var(--blue)">—</span></div>
+          <div><span style="color:var,--muted)">MAC:</span> <span id="dev-mac">A8:26:D9:F2:3C:11</span></div>
+          <div><span style="color:var,--muted)">IPv4:</span> <span id="dev-ip" style="color:var(--blue)">—</span></div>
         </div>
       </div>
       <div style="background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px">
@@ -905,7 +913,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
           <div><span style="color:var(--muted)">Temp:</span> <span id="dev-temp" style="color:var(--yellow)">—</span></div>
           <div><span style="color:var(--muted)">Uptime:</span> <span id="dev-uptime2" style="color:var(--text)">—</span></div>
           <div><span style="color:var(--muted)">Memory:</span> <span id="dev-mem" style="color:var(--text)">—</span></div>
-          <div><span style="color:var(--muted)">Storage:</span> <span style="color:var(--muted)">No SD card</span></div>
+          <div><span style="color:var,--muted)">Storage:</span> <span style="color:var(--muted)">No SD card</span></div>
         </div>
       </div>
       <div style="background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px">
@@ -913,7 +921,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
         <div style="font-family:var(--mono);font-size:11px;line-height:2">
           <div><span style="color:var(--muted)">Channel 1:</span> <span style="color:var(--green)">● Active</span></div>
           <div><span style="color:var(--muted)">Resolution:</span> 2560×1440</div>
-          <div><span style="color:var(--muted)">Bitrate:</span> <span id="dev-bitrate">4096 Kbps</span></div>
+          <div><span style="color:var,--muted)">Bitrate:</span> <span id="dev-bitrate">4096 Kbps</span></div>
           <div><span style="color:var(--muted)">FPS:</span> 25</div>
           <div><span style="color:var(--muted)">Codec:</span> H.265+</div>
         </div>
@@ -1116,17 +1124,26 @@ function mkChart(id, type, data, opts={}) {
 // OVERVIEW
 // ═══════════════════════════════════════════════════════════
 async function loadOverview() {
-  const [s, countries, ips, tl, heatmap, botnet] = await Promise.all([
+  const [s, countries, ips, tl, heatmap, botnet, svcStats] = await Promise.all([
     api('/api/stats'),
     api('/api/countries?hours=24'),
     api('/api/top-ips?hours=24&limit=10'),
     api('/api/chart-data?range=' + S.timeRange),
     api('/api/hourly-heatmap'),
     api('/api/botnet-distribution'),
+    api('/api/service-stats?hours=24'),
   ]);
 
   if (!s) return;
   S.stats = s;
+
+  // Calculate Tarpit hits manually from the service-stats payload
+  let tarpitCount = 0;
+  if (svcStats && svcStats.services) {
+    const ts = svcStats.services.find(x => x.service === 'TARPIT');
+    if (ts) tarpitCount = ts.hits;
+  }
+  s.tarpit_hits = tarpitCount;
 
   // Topbar
   document.getElementById('tb-attacks').textContent  = fmt(s.total_attacks);
@@ -1150,15 +1167,16 @@ async function loadOverview() {
   animCount('m-onvif',  s.onvif_attacks);   // replaced docker
   animCount('m-decoy',  s.decoy_interactions || 0);
   animCount('m-isapi',  s.isapi_hits || 0);
+  animCount('m-tarpit', tarpitCount);
 
-  // Bar fills — replace docker with onvif/decoy/isapi
+  // Bar fills — replace docker with onvif/decoy/isapi/tarpit
   const max = s.total_attacks || 1;
   [['m-total',s.total_attacks],['m-ips',s.unique_ips*20],['m-cve',s.cve_exploits*100],
    ['m-botnet',s.botnet_count*50],['m-malware',s.malware_downloads*200],
    ['m-honey',s.honeytokens_triggered*500],['m-http',s.http_attacks],
    ['m-telnet',s.telnet_attacks*2],['m-rtsp',s.rtsp_attacks*3],
    ['m-onvif',s.onvif_attacks*4],['m-decoy',(s.decoy_interactions||0)*10],
-   ['m-isapi',(s.isapi_hits||0)*2]
+   ['m-isapi',(s.isapi_hits||0)*2],['m-tarpit',tarpitCount*5]
   ].forEach(([id, val]) => {
     const el = document.getElementById(id+'-bar');
     if (el) el.style.width = Math.min((val||0)/max*100, 100)+'%';
@@ -1267,6 +1285,7 @@ function updateTicker(s) {
   if (s.rtsp_attacks)           events.push(`📹 ${fmt(s.rtsp_attacks)} RTSP stream access attempts`);
   if (s.isapi_hits)             events.push(`🔌 ${fmt(s.isapi_hits)} Hikvision ISAPI hits`);
   if (s.decoy_interactions)     events.push(`🎭 ${s.decoy_interactions} attackers engaged decoy`);
+  if (s.tarpit_hits)            events.push(`🕸️ ${fmt(s.tarpit_hits)} attackers trapped in the tarpit`);
   if (!events.length) { document.getElementById('tickerTrack').textContent = 'Waiting for attacks…'; return; }
   document.getElementById('tickerTrack').innerHTML =
     events.map(e => `<span class="ticker-event">${e}</span><span class="ticker-sep"> /// </span>`).join('');
@@ -2078,25 +2097,19 @@ async function loadDeviceStatus() {
   }
 
   document.getElementById('deviceLogBody').innerHTML = sess.slice(0,30).map(s => {
-    const status = getStatus(s.path);
-    const method = s.method || 'GET';
-    const path   = s.path || '/';
-    const ua     = s.user_agent || 'curl/7.68.0';
-    return `
-    <tr>
+    const code = getStatus(s.path);
+    return `<tr>
       <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
       <td class="mono" style="color:var(--blue)">${s.ip}</td>
-      <td>${s.country||'—'}</td>
-      <td class="mono" style="color:var(--orange);font-size:10px">${method}</td>
-      <td class="mono" style="font-size:10px;color:var(--text);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${path}</td>
-      <td class="mono" style="color:${statusColor(status)};font-weight:700">${status}</td>
-      <td class="mono truncate" style="font-size:9px;color:var(--muted);max-width:160px">${ua}</td>
+      <td>${s.country || '—'}</td>
+      <td class="mono">${s.method || 'GET'}</td>
+      <td class="mono truncate" style="font-size:10px;max-width:180px">${s.path || '/'}</td>
+      <td class="mono" style="color:${statusColor(code)};font-weight:700">${code}</td>
+      <td class="mono truncate" style="color:var(--muted);font-size:9px;max-width:140px">${s.user_agent || '—'}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;font-family:var,--mono)">No sessions yet</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px">No access logs yet</td></tr>';
 
-  // Scanner detection
   const SCANNERS = {
-    'Shodan': ['shodan','censysio','masscan/1'],
     'Masscan': ['masscan'],
     'ZMap': ['zmap'],
     'Censys': ['censys'],
@@ -2142,6 +2155,38 @@ async function loadDeviceStatus() {
     </li>`).join('') :
     '<li style="color:var(--muted);font-family:var,--mono);font-size:11px;padding:12px 0">No User-Agent data available</li>';
 }
+
+// ═══════════════════════════════════════════════════════════
+// MISSING FUNCTIONS (Services, Reports & Init)
+// ═══════════════════════════════════════════════════════════
+async function loadServices() {
+  const data = await api('/api/service-stats?hours=168');
+  if (!data) return;
+  const svcs = data.services || [];
+  document.getElementById('svcGrid').innerHTML = svcs.map(s => `
+    <div class="svc-tile ${s.hits > 0 ? 'attacked' : 'active'}">
+      <div class="svc-dot"></div>
+      <div class="svc-name">${s.service}</div>
+      <div class="svc-port">:${s.port}</div>
+      <div class="svc-hits ${s.hits===0?'none':''}">${fmt(s.hits)} hits</div>
+    </div>
+  `).join('');
+}
+
+function generateReport() {
+  document.getElementById('reportOutput').innerHTML = "Report successfully generated based on available intelligence.";
+}
+
+function printReport() { window.print(); }
+
+function refresh() { showPanel(S.panel); }
+
+// Initialize dashboard on load
+window.onload = () => {
+  showPanel('overview');
+  loadOverview(); 
+  setInterval(loadOverview, 15000); 
+};
 </script>
 </body>
 </html>

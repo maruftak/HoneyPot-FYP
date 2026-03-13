@@ -4,7 +4,7 @@ honeyPot — Database Layer
 SQLite backend for all attack logging and dashboard queries.
 """
 
-import sqlite3, json, datetime, os, logging
+import sqlite3, json, datetime, os, logging, sys
 from pathlib import Path
 from threading import Lock
 from config import DB_PATH, LOG_DIR
@@ -140,8 +140,12 @@ CREATE INDEX IF NOT EXISTS idx_fp_ip    ON device_fingerprints(source_ip);
 
 LOG_FILE = Path(LOG_DIR) / "db.err"
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(filename=str(LOG_FILE), level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(message)s")
+try:
+    logging.basicConfig(filename=str(LOG_FILE), level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+except PermissionError:
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
 
 def init():
     """Initialise database and create tables."""

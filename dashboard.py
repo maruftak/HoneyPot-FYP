@@ -45,6 +45,12 @@ def index():
         return send_file(DASHBOARD_HTML)
     return "<h1>honeyPot</h1><p>Place dashboard.html next to dashboard.py</p>", 404
 
+@app.route("/favicon.ico")
+@app.route("/apple-touch-icon.png")
+@app.route("/apple-touch-icon-precomposed.png")
+def favicon():
+    return "", 204
+
 @app.route("/api/health")
 def api_health():
     return jsonify({

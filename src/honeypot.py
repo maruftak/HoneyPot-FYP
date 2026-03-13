@@ -1,4 +1,4 @@
-import os, time, json, threading, random, secrets, sys, logging
+import os, time, json, threading, random, secrets, sys, logging, socket
 from pathlib import Path
 # Ensure project root is on sys.path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -17,9 +17,13 @@ init_db()
 
 # Logging to logs/honeypot.err
 LOG_FILE = Path(__file__).resolve().parents[1] / "logs" / "honeypot.err"
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(filename=str(LOG_FILE), level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(message)s")
+try:
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(filename=str(LOG_FILE), level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+except PermissionError:
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
 
 GEOIP_DB = os.environ.get("GEOIP_DB")  # point to GeoLite2-City.mmdb if available
 geo_reader = geoip2.database.Reader(GEOIP_DB) if GEOIP_DB and geoip2 else None
@@ -101,6 +105,63 @@ def ensure_session_token(ip):
 def validate_session_token(ip, token):
     return token and SESSION_NONCES.get(ip) == token
 
+def tarpit_connection(client_socket, client_address):
+    try:
+        ip = client_address[0]
+        port = client_address[1]
+        logging.info(f"Tarpit connection from {ip}:{port}")
+        
+        # Log the connection to the database so the dashboard sees it
+        try:
+            geo = get_geo(ip)
+            log_attack({
+                "source_ip": ip,
+                "source_port": port,
+                "dest_port": 2223,
+                "service": "tarpit",
+                "protocol": "TCP",
+                "method": "CONNECT",
+                "path": "",
+                "user_agent": "tarpit-scanner",
+                "payload": "",
+                "country": geo.get("country", "Unknown"),
+                "city": geo.get("city", ""),
+                "latitude": geo.get("latitude", 0.0),
+                "longitude": geo.get("longitude", 0.0),
+                "threat_level": "medium",
+                "attack_type": "tarpit_connection"
+            })
+        except Exception as e:
+            pass
+
+        # Send a fake banner slowly
+        banner = b"SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5\r\n"
+        for byte in banner:
+            client_socket.send(bytes([byte]))
+            time.sleep(10)  # Hold connection open, 10 seconds per byte
+        
+        # Keep sending junk data indefinitely
+        while True:
+            client_socket.send(b"\x00")
+            time.sleep(15)
+    except Exception:
+        pass
+    finally:
+        client_socket.close()
+
+def start_tarpit(port=2223):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(("0.0.0.0", port))
+        server.listen(100)
+        logging.info(f"Tarpit running on port {port}")
+        while True:
+            client, addr = server.accept()
+            threading.Thread(target=tarpit_connection, args=(client, addr), daemon=True).start()
+    except Exception as e:
+        logging.error(f"Tarpit failed to start on port {port}: {e}")
+
 def describe_stage(path):
     if not path:
         return "Recon"
@@ -163,6 +224,13 @@ def throttle():
     if rate_limit(ip):
         return make_response("429 Too Many Requests", 429)
 
+@app.after_request
+def add_realistic_headers(response):
+    # Mask Flask/Werkzeug by mimicking the typical Hikvision web server
+    response.headers["Server"] = "App-webs/"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    return response
+
 def rtsp_response(status=401):
     resp = make_response("RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\nWWW-Authenticate: Basic realm=\"hikvision\"\r\n\r\n", status)
     resp.headers["Server"] = "App-webs/"
@@ -199,7 +267,7 @@ def login_page():
       <title>Hikvision Network Video Recorder</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        body { background: linear-gradient(135deg, #1a1a1a 0%, #16213e 100%); font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
         .container { background: #fff; border-radius: 8px; box-shadow: 0 8px 16px rgba(0,0,0,0.3); padding: 40px; width: 100%; max-width: 380px; }
         .logo { text-align: center; margin-bottom: 30px; }
         .logo h1 { color: #333; font-size: 24px; margin-bottom: 5px; }
@@ -245,7 +313,21 @@ def login_page():
 
 @app.route("/ISAPI/<path:rest>", methods=["GET", "POST", "PUT"])
 def isapi(rest):
-    base_log({})
+    payload_data = request.get_data(as_text=True)
+    
+    # Detect CVE-2021-36260 (Hikvision Command Injection)
+    if request.method == "PUT" and ("<language>" in payload_data or "system(" in payload_data or "/bin/sh" in payload_data):
+        base_log({
+            "attack_type": "cve-2021-36260-exploit",
+            "threat_level": "critical",
+            "notes": "Command injection detected"
+        })
+        slow_down(200, 500)
+        # Device typically returns a 500 error or a specific XML error when crashing/exploited
+        return make_response("<?xml version=\"1.0\" ?><Response><status>500</status><statusString>Error</statusString></Response>", 500)
+    
+    base_log({"attack_type": "isapi-probe"})
+    slow_down()
     return make_response("<?xml version=\"1.0\" ?><Response><status>0</status></Response>", 200)
 
 @app.route("/PSIA/Streaming/channels", methods=["GET"])
@@ -325,8 +407,19 @@ def session_login():
 @app.route("/<path:path>")
 def catch_all(path):
     base_log({})
-    html = "<html><body><h1>Hikvision DS-2CD2043G2-I</h1><p>Request received.</p></body></html>"
-    return make_response(html, 200)
+    # Real cameras redirect root requests to the login page
+    if not path or path == "/":
+        return redirect("/doc/page/login.asp", code=302)
+    
+    # Unmatched paths typically return a 404 on real devices
+    html = "<html><body><p>404 Not Found</p></body></html>"
+    return make_response(html, 404)
 
 if __name__ == "__main__":
+    # Start the tarpit in the background on an alternate port (e.g. 2223)
+    tarpit_port = int(os.environ.get("TARPIT_PORT", 2223))
+    if tarpit_port > 0:
+        tarpit_thread = threading.Thread(target=start_tarpit, args=(tarpit_port,), daemon=True)
+        tarpit_thread.start()
+
     app.run(host="0.0.0.0", port=int(os.environ.get("HONEYPOT_PORT", 8080)), debug=False)
