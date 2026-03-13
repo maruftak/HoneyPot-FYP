@@ -1,6 +1,6 @@
 #!/bin/bash
 # honeyPot — Start Script
-# Run: sudo ./START.sh
+# Run: sudo ./start.sh
 set -e
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -16,7 +16,7 @@ fi
 echo -e "${CYAN}"
 # Root check
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}[!] Root required for low ports. Run: sudo ./START.sh${NC}"; exit 1
+    echo -e "${RED}[!] Root required for low ports. Run: sudo ./start.sh${NC}"; exit 1
 fi
 
 # Python check

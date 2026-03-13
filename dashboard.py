@@ -224,16 +224,50 @@ def api_top_credentials():
 def api_malware_urls():
     hours = request.args.get("hours", 168, type=int)
     rows  = db.get_malware_urls(hours)
-    return jsonify({
-        "urls": [{
-            "url":        r["url"],
-            "family":     r["family"] or "Unknown",
-            "arch":       r["arch"] or "unknown",
-            "count":      r["cnt"],
-            "unique_ips": r["unique_ips"],
-            "last":       r["last_seen"],
-        } for r in rows]
-    })
+    
+    # Safely extract URLs directly from Telnet commands if db.py misses them
+    extracted_urls = {}
+    import re
+    for s in db.get_recent_attacks(hours, limit=5000):
+        try:
+            cmds = json.loads(s.get("commands", "[]"))
+        except:
+            cmds = []
+        
+        for cmd in cmds:
+            urls = re.findall(r'(https?://[^\s;\"\']+)', cmd)
+            urls += re.findall(r'(ftp://[^\s;\"\']+)', cmd)
+            if 'wget ' in cmd or 'tftp ' in cmd:
+                # Catch pure IP droppers like: wget x.x.x.x/payload
+                for p in cmd.split():
+                    if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', p):
+                        urls.append("http://" + p)
+            
+            for u in urls:
+                if u not in extracted_urls:
+                    extracted_urls[u] = {"url": u, "family": "Mirai/IoT Botnet", "arch": "arm/mips", "count": 0, "ips": set(), "last": s.get("timestamp", "")}
+                extracted_urls[u]["count"] += 1
+                extracted_urls[u]["ips"].add(s.get("source_ip", ""))
+                if s.get("timestamp", "") > extracted_urls[u]["last"]:
+                    extracted_urls[u]["last"] = s.get("timestamp", "")
+
+    existing_urls = {r["url"] for r in rows} if rows else set()
+    merged = []
+    if rows:
+        for r in rows:
+            merged.append({
+                "url": r["url"], "family": r["family"] or "Unknown", "arch": r["arch"] or "unknown",
+                "count": r["cnt"], "unique_ips": r["unique_ips"], "last": r["last_seen"]
+            })
+            
+    for u, d in extracted_urls.items():
+        if u not in existing_urls:
+            merged.append({"url": d["url"], "family": d["family"], "arch": d["arch"], "count": d["count"], "unique_ips": len(d["ips"]), "last": d["last"]})
+            
+    # Sort merged list to show highest hit URLs at the top
+    merged = sorted(merged, key=lambda x: x["count"], reverse=True)
+
+    return jsonify({"urls": merged})
 
 @app.route("/api/honeytokens")
 @cached(10)

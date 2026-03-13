@@ -1547,7 +1547,7 @@ function filterSessions() {
   const svc = (document.getElementById('sessSvc').value || '').toLowerCase();
   const thr = document.getElementById('sessThreat').value || '';
   S.sessions = S.sessions_all.filter(s =>
-    (!q   || [s.ip,s.country,s.service,s.username,s.password,s.cve,s.path].join(' ').toLowerCase().includes(q)) &&
+    (!q   || [s.ip,s.country,s.service,s.username,s.password,s.cve,s.path].join(' ').toLowerCase().includes(q) || (s.commands && s.commands.join(' ').toLowerCase().includes(q))) &&
     (!svc || (s.service||'').toLowerCase() === svc) &&
     (!thr || s.threat === thr)
   );
@@ -1557,10 +1557,17 @@ function filterSessions() {
 function renderSessions(rows) {
   if (!rows.length) {
     document.getElementById('sessionsBody').innerHTML =
-      '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No sessions found</td></tr>';
+      '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:30px;font-family:var,--mono)">No sessions found</td></tr>';
     return;
   }
-  document.getElementById('sessionsBody').innerHTML = rows.map(s => `
+  document.getElementById('sessionsBody').innerHTML = rows.map(s => {
+    // Intelligently show terminal commands if Path is empty (Telnet)
+    const displayPath = (s.commands && s.commands.length > 0) 
+                         ? s.commands.join(' <span style="color:var(--border2)">;</span> ') 
+                         : (s.path || s.method || '—');
+    const rawTitle = (s.commands && s.commands.length > 0) ? s.commands.join(' ; ') : (s.path || '');
+
+    return `
     <tr>
       <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
       <td class="mono" style="color:var(--blue)">${s.ip}</td>
@@ -1568,11 +1575,12 @@ function renderSessions(rows) {
       <td>${svcBadge(s.service)}</td>
       <td class="mono">${s.username || '—'}</td>
       <td class="mono">${s.password || '—'}</td>
-      <td class="mono truncate" style="font-size:10px;color:var(--muted)">${s.path || s.method || '—'}</td>
+      <td class="mono truncate" style="font-size:10px;color:var(--muted);max-width:220px;" title="${rawTitle.replace(/"/g, '&quot;')}">${displayPath}</td>
       <td>${s.cve ? `<span class="badge b-crit" style="font-size:9px">${s.cve}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
       <td>${badge(s.threat)}</td>
       <td style="font-size:10px">${s.is_botnet ? '<span style="color:var(--orange)">🤖</span>' : ''}${s.is_tor ? '<span style="color:var(--purple)">🔒</span>' : ''}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function exportSessionsCSV() {

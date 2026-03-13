@@ -105,6 +105,104 @@ def ensure_session_token(ip):
 def validate_session_token(ip, token):
     return token and SESSION_NONCES.get(ip) == token
 
+def clean_telnet_input(data):
+    # Strip Telnet negotiation commands (IAC) and return decoded string
+    import re
+    cleaned = re.sub(b'\xff[\xfb-\xfe].', b'', data).replace(b'\r', b'').replace(b'\n', b'')
+    return cleaned.decode('utf-8', errors='ignore').strip()
+
+def handle_telnet_client(client, addr):
+    ip, port = addr
+    logging.info(f"Telnet connection from {ip}:{port}")
+    
+    geo = get_geo(ip)
+    session_data = {
+        "source_ip": ip, "source_port": port, "dest_port": 23,
+        "service": "telnet", "protocol": "TCP", "method": "EXEC",
+        "path": "", "user_agent": "telnet-client",
+        "country": geo["country"], "city": geo["city"],
+        "latitude": geo["latitude"], "longitude": geo["longitude"],
+        "threat_level": "high", "attack_type": ""
+    }
+
+    username = ""
+    commands_run = []
+
+    try:
+        client.settimeout(30.0) # Botnets drop quickly if unresponsive
+        
+        # Fake Login Prompt
+        client.sendall(b"Welcome to HIKVISION\r\n\r\nlogin: ")
+        username = clean_telnet_input(client.recv(1024))
+        
+        client.sendall(b"Password: ")
+        password = clean_telnet_input(client.recv(1024))
+        
+        session_data["username"] = username
+        session_data["password"] = password
+        
+        if username in ["root", "admin", "guest", "support"]:
+            session_data["threat_level"] = "critical"
+            session_data["attack_type"] = "brute-force"
+        
+        # Fake Shell
+        client.sendall(b"\r\n\r\nBusyBox v1.22.1 (2014-06-11) built-in shell (ash)\r\nEnter 'help' for a list of built-in commands.\r\n\r\n# ")
+        
+        while True:
+            cmd_data = client.recv(1024)
+            if not cmd_data:
+                break
+                
+            cmd = clean_telnet_input(cmd_data)
+            if not cmd:
+                client.sendall(b"# ")
+                continue
+                
+            commands_run.append(cmd)
+            
+            # Fake responses for common bot commands
+            if "wget " in cmd or "curl " in cmd:
+                session_data["attack_type"] = "malware_download"
+                session_data["threat_level"] = "critical"
+                client.sendall(b"Resolving host... done.\r\nConnecting to host... connected.\r\nHTTP request sent, awaiting response... 200 OK\r\nSaving to file...\r\n")
+            elif cmd in ["sh", "shell", "system", "enable"]:
+                client.sendall(b"") # Silently accept sub-shells
+            elif "busybox" in cmd:
+                client.sendall(b"BusyBox v1.22.1\r\n")
+            elif cmd == "exit" or cmd == "quit":
+                break
+            else:
+                client.sendall(f"{cmd.split()[0]}: applet not found\r\n".encode())
+            
+            client.sendall(b"# ")
+            
+    except socket.timeout:
+        pass
+    except Exception as e:
+        pass
+    finally:
+        try:
+            session_data["payload"] = "\n".join(commands_run)
+            session_data["commands"] = json.dumps(commands_run)
+            if username or commands_run:
+                log_attack(session_data)
+        except Exception:
+            pass
+        client.close()
+
+def start_telnet_server(port=23):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(("0.0.0.0", port))
+        server.listen(100)
+        logging.info(f"Realistic Telnet running on port {port}")
+        while True:
+            client, addr = server.accept()
+            threading.Thread(target=handle_telnet_client, args=(client, addr), daemon=True).start()
+    except Exception as e:
+        logging.error(f"Telnet failed to start on port {port}: {e}")
+
 def tarpit_connection(client_socket, client_address):
     try:
         ip = client_address[0]
@@ -416,6 +514,12 @@ def catch_all(path):
     return make_response(html, 404)
 
 if __name__ == "__main__":
+    # Start the Telnet server in the background on Port 23
+    telnet_port = int(os.environ.get("TELNET_PORT", 23))
+    if telnet_port > 0:
+        telnet_thread = threading.Thread(target=start_telnet_server, args=(telnet_port,), daemon=True)
+        telnet_thread.start()
+
     # Start the tarpit in the background on an alternate port (e.g. 2223)
     tarpit_port = int(os.environ.get("TARPIT_PORT", 2223))
     if tarpit_port > 0:
