@@ -35,7 +35,6 @@ def clean_input(data):
 def handle_telnet_client(client, addr):
     ip, port = addr
     logging.info(f"Telnet connection from {ip}:{port}")
-    
     geo = get_geo(ip)
     session_data = {
         "source_ip": ip, "source_port": port, "dest_port": 23,
@@ -45,86 +44,114 @@ def handle_telnet_client(client, addr):
         "latitude": geo["latitude"], "longitude": geo["longitude"],
         "threat_level": "high"
     }
-
     username = ""
     commands_run = []
+    history = []
+    last_login_time = time.strftime("%a %b %d %H:%M:%S %Y", time.localtime(time.time() - 86400))
+    last_login_ip = "192.168.1.1"
 
     try:
-        client.settimeout(60.0) # Give them more time to interact
-        
-        # 1. Realistic HiLinux Banner
+        client.settimeout(60.0)
+        # Banner and motd
         client.sendall(b"\r\nWelcome to HiLinux.\r\n\r\n")
-        
+        client.sendall(f"Last login: {last_login_time} from {last_login_ip}\r\n".encode())
         login_attempts = 0
         while login_attempts < 3:
             client.sendall(b"(none) login: ")
             username = clean_input(client.recv(1024))
-            
             client.sendall(b"Password: ")
             password = clean_input(client.recv(1024))
-            
             session_data["username"] = username
             session_data["password"] = password
-            
-            # Artificial delay to simulate real PAM/shadow password checking
             time.sleep(1.5)
-            
-            # Mark as critical if they used common botnet creds
             if username in ["root", "admin", "guest", "support", "default"]:
                 session_data["threat_level"] = "critical"
                 session_data["attack_type"] = "brute-force"
                 client.sendall(b"\r\nLogin successful\r\n")
                 break
             elif login_attempts >= 1:
-                # Always let them in on the 2nd try so we can capture their malware payload!
                 client.sendall(b"\r\nLogin successful\r\n")
                 break
             else:
-                # Fake a failure on the first unknown try to grab more dictionary passwords
                 client.sendall(b"Login incorrect\r\n\r\n")
                 login_attempts += 1
-        
-        # 2. Fake Shell Simulation
+
         cwd = "/"
-        session_files = [] # Keep track of dynamically created malicious files
-        
+        session_files = []
+        fake_files = {}  # filename -> content
         while True:
-            # Dynamic prompt based on directory
-            prompt = f"{cwd} # ".replace("/root", "~").encode()
-            client.sendall(prompt)
-            
+            # Prompt: BusyBox style
+            prompt_user = username if username else "root"
+            prompt = f"{prompt_user}@{os.uname().nodename if hasattr(os, 'uname') else '(none)'}:{cwd}# " if prompt_user == "root" else f"{prompt_user}@{os.uname().nodename if hasattr(os, 'uname') else '(none)'}:{cwd}$ "
+            client.sendall(prompt.encode())
             cmd_data = client.recv(1024)
             if not cmd_data:
                 break
-                
-            # Handle Ctrl+C (0x03) gracefully like a real terminal
             if b'\x03' in cmd_data:
                 client.sendall(b"^C\r\n")
                 continue
-                
             cmd_line = clean_input(cmd_data)
             if not cmd_line:
                 continue
-                
             commands_run.append(cmd_line)
-            
-            # --- AMAZING FEATURE: Command Chaining ---
-            # Parse commands like: "cd /tmp; wget http://... && chmod +x ... ; ./..."
+            history.append(cmd_line)
             sub_commands = [c.strip() for c in re.split(r';|&&|\|\|', cmd_line) if c.strip()]
-            
-            # Execute them sequentially
             for cmd_step in sub_commands:
-                # Strip out output redirections like "> /dev/null 2>&1" so they don't mess up our parsing
                 clean_step = re.sub(r'>\s*/dev/null(?:\s*2>&1)?', '', cmd_step).strip()
+                # --- Support echo "stuff" > file.txt ---
+                m = re.match(r'^echo\s+["\']?(.*?)[\'"]?\s*>\s*([\w\.\-\_]+)$', clean_step)
+                if m:
+                    content, fname = m.group(1), m.group(2)
+                    fake_files[fname] = content
+                    if fname not in session_files:
+                        session_files.append(fname)
+                    # Do not echo to terminal if redirected (BusyBox behavior)
+                    continue
                 parts = clean_step.split()
                 if not parts:
                     continue
-                    
                 base_cmd = parts[0]
-                
-                # --- REALISTIC COMMAND RESPONSES ---
-                if base_cmd == "ls":
+
+                # --- Realistic Built-ins ---
+                if base_cmd == "clear":
+                    # BusyBox clear: clear screen (send ANSI code)
+                    client.sendall(b"\033[2J\033[H")
+                    continue
+                elif base_cmd == "help":
+                    client.sendall(b"Built-in commands:\r\n")
+                    client.sendall(b"cd ls pwd cat echo history clear exit logout help ps whoami who last df free top dmesg wget curl tftp ftpget rm chmod chown mkdir touch cp mv kill busybox export ulimit\n")
+                    continue
+                elif base_cmd in ["exit", "logout"]:
+                    client.sendall(b"logout\r\n")
+                    return
+                elif base_cmd == "busybox":
+                    client.sendall(b"BusyBox v1.22.1 (2014-06-11 17:48:36 CST) multi-call binary.\r\n")
+                    client.sendall(b"Usage: busybox [function] [arguments]...\r\n")
+                    client.sendall(b"Available applets: ls, cat, echo, pwd, cd, rm, history, clear, help, exit, ...\r\n")
+                elif base_cmd == "uptime":
+                    client.sendall(b" 12:34:56 up 14 days,  6:22,  1 user,  load average: 0.00, 0.01, 0.05\r\n")
+                elif base_cmd == "date":
+                    client.sendall((time.strftime("%a %b %d %H:%M:%S UTC %Y\r\n", time.gmtime())).encode())
+                elif base_cmd == "whoami":
+                    client.sendall(f"{username}\r\n".encode())
+                elif base_cmd == "who":
+                    client.sendall(f"{username} pts/0        {last_login_time} ({ip})\r\n".encode())
+                elif base_cmd == "last":
+                    client.sendall(f"{username} pts/0        {last_login_time}   still logged in\r\n".encode())
+                elif base_cmd == "df":
+                    client.sendall(b"Filesystem           1K-blocks      Used Available Use% Mounted on\r\n/dev/root                30568     12345     18223  41% /\r\ntmpfs                    65536         0     65536   0% /tmp\r\n")
+                elif base_cmd == "free":
+                    client.sendall(b"             total       used       free     shared    buffers     cached\r\nMem:         128000      45600      82400          0       1200      12000\r\n")
+                elif base_cmd == "top":
+                    client.sendall(b"Mem: 45600K used, 82400K free, 1200K buffers\r\nCPU:  0.0% usr  0.0% sys  0.0% nic 100.0% idle\r\n")
+                elif base_cmd == "dmesg":
+                    client.sendall(b"[    0.000000] Linux version 3.10.73 ...\r\n[    0.000000] CPU: ARM926EJ-S rev 5 (v5l)\r\n")
+                elif base_cmd == "ls":
                     out_str = ""
+                    # Show files in current directory (simulate / only)
+                    files_in_dir = []
+                    if cwd == "/":
+                        files_in_dir = session_files + list(fake_files.keys())
                     if len(parts) > 1 and ("-l" in parts[1] or "-a" in parts[1]):
                         if cwd == "/":
                             out_str = ("total 68\r\n"
@@ -145,26 +172,27 @@ def handle_telnet_client(client, addr):
                                        "drwxr-xr-x  1 root  root      6577  Feb 18 09:12  var\r\n"
                                        "drwxr-xr-x  1 root  root      4554  Feb 18 09:12  backup\r\n"
                                        "drwxr-xr-x  1 root  root      1693  Feb 18 09:12  data\r\n")
+                            for f in files_in_dir:
+                                out_str += f"-rw-r--r--  1 root  root      12  Feb 18 12:34  {f}\r\n"
                         else:
                             out_str = ("total 8\r\n"
                                        "drwx------  1 root  root      2593  Feb 18 09:12  .\r\n"
                                        "drwx------  1 root  root      2610  Feb 18 09:12  ..\r\n")
-                            
-                        for f in session_files:
-                            out_str += f"-rwxr-xr-x  1 root  root     1247  Feb 18 12:34  {f}\r\n"
+                            for f in files_in_dir:
+                                out_str += f"-rw-r--r--  1 root  root      12  Feb 18 12:34  {f}\r\n"
                         client.sendall(out_str.encode())
                         
                     elif cwd == "/":
-                        extra_files = "  ".join(session_files) + "  " if session_files else ""
+                        extra_files = "  ".join(files_in_dir) + "  " if files_in_dir else ""
                         client.sendall(f"bin  dev  etc  home  lib  mnt  proc  root  sbin  sys  tmp  usr  var  backup  data  {extra_files}\r\n".encode())
                     elif cwd in ["/root", "~"]:
-                        extra_files = "  ".join(session_files) + "  " if session_files else ""
+                        extra_files = "  ".join(files_in_dir) + "  " if files_in_dir else ""
                         client.sendall(f".bash_history  .bashrc  .profile  .ssh  passwords.txt  .env  {extra_files}\r\n".encode())
                     elif cwd in ["/tmp", "/var", "/dev"] or "tmp" in cwd:
-                        extra_files = "  ".join(session_files) + "  " if session_files else ""
+                        extra_files = "  ".join(files_in_dir) + "  " if files_in_dir else ""
                         client.sendall(f"config.json  system.log  resolv.conf  {extra_files}\r\n".encode())
                     else:
-                        extra_files = "  ".join(session_files) + "  " if session_files else ""
+                        extra_files = "  ".join(files_in_dir) + "  " if files_in_dir else ""
                         client.sendall(f"{extra_files}\r\n".encode() if extra_files else b"\r\n")
                         
                 elif base_cmd == "cd":
@@ -245,7 +273,10 @@ def handle_telnet_client(client, addr):
                 elif base_cmd == "cat":
                     if len(parts) > 1:
                         target = parts[1]
-                        if target in session_files:
+                        # --- Serve fake file content if present ---
+                        if target in fake_files:
+                            client.sendall(f"{fake_files[target]}\r\n".encode())
+                        elif target in session_files:
                             client.sendall(b"\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00\r\n") # Fake ELF header
                         elif target in ["/etc/passwd", "etc/passwd"]:
                             client.sendall(b"root:x:0:0:root:/root:/bin/ash\r\n"
@@ -328,7 +359,8 @@ def handle_telnet_client(client, addr):
                         clean_p = p.replace("-rf", "").replace("-f", "").replace("-r", "").strip()
                         if clean_p in session_files:
                             session_files.remove(clean_p)
-                            
+                        if clean_p in fake_files:
+                            del fake_files[clean_p]
                 elif base_cmd in ["chmod", "chown", "mkdir", "touch", "cp", "mv", "kill", "chattr"]:
                     pass # Silently succeed commands (makes them think it worked)
                     
@@ -377,7 +409,5 @@ def start_telnet_server(port=23): # Set directly to standard Telnet port 23
     except Exception as e:
         logging.error(f"Telnet failed to start on port {port}: {e}")
 
-if __name__ == "__main__":
-    start_telnet_server()
 if __name__ == "__main__":
     start_telnet_server()
