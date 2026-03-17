@@ -1567,7 +1567,7 @@ def handle_docker(conn, addr):
             "attack_type": "container_escape", "threat_level": "critical",
             "cve_id":      "DOCKER-ESCAPE",
             "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
+            "latitude":    gdata["latitude"], "longitude":    gdata["longitude"],
             **_intel_fields(gdata),
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], "docker")
@@ -1582,7 +1582,6 @@ def handle_docker(conn, addr):
                          + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
         else:
             conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
-
     except Exception:
         pass
     finally:
