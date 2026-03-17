@@ -1,114 +1,138 @@
-import os, time, socket
+import os
+import re
+import time
+import base64
+import threading
+import hashlib
+import random
 
-def parse_rtsp_request(data):
-    """Parse RTSP request and extract method, path, headers."""
-    lines = data.split('\n')
-    req_line = lines[0].strip()
-    method, path, *_ = req_line.split()
-    headers = {}
-    for line in lines[1:]:
-        if ':' in line:
-            k, v = line.split(':', 1)
-            headers[k.strip().lower()] = v.strip()
-    return method, path, headers
+class RTSPSession:
+    def __init__(self, ip):
+        self.ip = ip
+        self.session_id = os.urandom(4).hex()
+        self.authenticated = False
+        self.cseq = 1
+        self.stream_url = ""
+        self.last_method = ""
+        self.username = ""
+        self.password = ""
+        self.headers = {}
+        self.nonce = self._gen_nonce()
+        self.state = "INIT"  # INIT, SETUP, PLAY
 
-def build_rtsp_response(code=200, cseq='1', session=None, body=None, headers=None):
-    status_map = {200: "OK", 401: "Unauthorized", 404: "Not Found", 400: "Bad Request"}
-    resp = f"RTSP/1.0 {code} {status_map.get(code, 'OK')}\r\nCSeq: {cseq}\r\n"
-    if session:
-        resp += f"Session: {session}\r\n"
-    if headers:
-        for k, v in headers.items():
-            resp += f"{k}: {v}\r\n"
-    resp += "\r\n"
-    if body:
-        resp += body
-    return resp.encode()
+    def next_cseq(self):
+        self.cseq += 1
+        return self.cseq
+    
+    def _gen_nonce(self):
+        return os.urandom(8).hex()
+    
+    def is_expired(self):
+        return (time.time() - self.last_activity) > 60
 
-SDP_BODY = """v=0
+SDP_RESPONSE = """v=0
 o=- 0 0 IN IP4 127.0.0.1
-s=Hikvision Camera Stream
+s=Hikvision DS-2CD2043G2-I
 c=IN IP4 0.0.0.0
 t=0 0
+a=tool:libavformat 58.29.100
 m=video 0 RTP/AVP 96
 a=rtpmap:96 H264/90000
 a=control:trackID=1
+m=audio 0 RTP/AVP 8
+a=rtpmap:8 PCMA/8000
+a=control:trackID=2
 """
 
-def handle_rtsp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=None, new_ip_alert=None):
-    ip, port = addr
-    session_id = os.urandom(4).hex()
-    try:
-        conn.settimeout(12)
-        for _ in range(20):
-            try:
-                raw = conn.recv(4096)
-            except socket.timeout:
-                break
-            if not raw:
-                break
-            data = raw.decode(errors="ignore")
-            method, path, headers = parse_rtsp_request(data)
-            cseq = headers.get('cseq', '1')
-            user_agent = headers.get('user-agent', '')
-            # Optionally extract auth, username, etc.
-            username = ""
-            password = ""
-            if "authorization" in headers:
-                # Basic auth parsing
-                import base64
-                auth = headers["authorization"]
-                if "Basic" in auth:
-                    b64 = auth.split()[-1]
-                    try:
-                        up = base64.b64decode(b64).decode()
-                        username, password = up.split(":", 1)
-                    except Exception:
-                        pass
+def parse_headers(lines):
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip().lower()] = v.strip()
+    return headers
 
-            # Log attack if callback provided
-            if log_attack:
-                gdata = geoip_func(ip) if geoip_func else {}
-                log_attack({
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source_ip": ip, "source_port": port,
-                    "dest_port": 554, "service": "rtsp", "protocol": "TCP",
-                    "method": method, "path": path,
-                    "username": username, "password": password,
-                    "user_agent": user_agent,
-                    "attack_type": "camera_streaming" if username else "camera_probe",
-                    "threat_level": "high" if username else "medium",
-                    **(intel_fields_func(gdata) if intel_fields_func else {}),
-                    "country": gdata.get("country", "Unknown"),
-                    "city": gdata.get("city", ""),
-                    "latitude": gdata.get("latitude"),
-                    "longitude": gdata.get("longitude"),
-                })
-                if new_ip_alert:
-                    new_ip_alert(ip, gdata.get("country", "Unknown"), gdata.get("city", ""), "rtsp")
+def handle_rtsp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=None, new_ip_alert=None):
+    try:
+        conn.settimeout(10)
+        for _ in range(5):
+            data = b""
+            try:
+                data = conn.recv(4096)
+            except Exception:
+                break
+            if not data:
+                break
+            req = data.decode(errors="ignore")
+            lines = req.replace('\r\n', '\n').split('\n')
+            req_ln = lines[0].strip()
+            parts = req_ln.split()
+            method = parts[0] if len(parts) > 0 else "OPTIONS"
+            url = parts[1] if len(parts) > 1 else "/Streaming/Channels/101"
+            headers = parse_headers(lines)
+            cseq = headers.get("cseq", "1")
 
             # Respond to RTSP methods
             if method == "OPTIONS":
-                resp = build_rtsp_response(200, cseq, session=session_id, headers={
-                    "Public": "OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN"
-                })
+                resp = (
+                    f"RTSP/1.0 200 OK\r\n"
+                    f"CSeq: {cseq}\r\n"
+                    f"Public: DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, OPTIONS, ANNOUNCE, RECORD, GET_PARAMETER, SET_PARAMETER\r\n"
+                    f"Server: Hikvision RTSP Server\r\n\r\n"
+                )
+                conn.sendall(resp.encode())
             elif method == "DESCRIBE":
-                resp = build_rtsp_response(200, cseq, session=session_id, headers={
-                    "Content-Type": "application/sdp"
-                }, body=SDP_BODY)
+                # Always require authentication for realism
+                if "authorization" not in headers:
+                    resp = (
+                        f'RTSP/1.0 401 Unauthorized\r\n'
+                        f'CSeq: {cseq}\r\n'
+                        f'WWW-Authenticate: Digest realm="Streaming Server", nonce="{random.randint(100000,999999)}", algorithm="MD5"\r\n'
+                        f'Server: Hikvision RTSP Server\r\n\r\n'
+                    )
+                    conn.sendall(resp.encode())
+                else:
+                    sdp = SDP_RESPONSE
+                    resp = (
+                        f"RTSP/1.0 200 OK\r\n"
+                        f"CSeq: {cseq}\r\n"
+                        f"Content-Type: application/sdp\r\n"
+                        f"Content-Length: {len(sdp)}\r\n"
+                        f"Server: Hikvision RTSP Server\r\n"
+                        f"Session: {random.randint(10000000,99999999)}\r\n\r\n"
+                        f"{sdp}"
+                    )
+                    conn.sendall(resp.encode())
             elif method == "SETUP":
-                resp = build_rtsp_response(200, cseq, session=session_id, headers={
-                    "Transport": "RTP/AVP;unicast;client_port=8000-8001"
-                })
+                resp = (
+                    f"RTSP/1.0 200 OK\r\n"
+                    f"CSeq: {cseq}\r\n"
+                    f"Session: {random.randint(10000000,99999999)}\r\n"
+                    f"Transport: RTP/AVP;unicast;client_port=8000-8001;server_port=9000-9001\r\n"
+                    f"Server: Hikvision RTSP Server\r\n\r\n"
+                )
+                conn.sendall(resp.encode())
             elif method == "PLAY":
-                resp = build_rtsp_response(200, cseq, session=session_id)
-            elif method == "TEARDOWN":
-                resp = build_rtsp_response(200, cseq, session=session_id)
+                resp = (
+                    f"RTSP/1.0 200 OK\r\n"
+                    f"CSeq: {cseq}\r\n"
+                    f"Session: {random.randint(10000000,99999999)}\r\n"
+                    f"RTP-Info: url={url};seq={random.randint(10000,99999)};rtptime={random.randint(100000, 999999)}\r\n"
+                    f"Server: Hikvision RTSP Server\r\n\r\n"
+                )
+                conn.sendall(resp.encode())
             else:
-                resp = build_rtsp_response(400, cseq, session=session_id)
-            conn.sendall(resp)
+                resp = (
+                    f"RTSP/1.0 405 Method Not Allowed\r\n"
+                    f"CSeq: {cseq}\r\n"
+                    f"Server: Hikvision RTSP Server\r\n\r\n"
+                )
+                conn.sendall(resp.encode())
+            time.sleep(0.1)
     except Exception:
         pass
     finally:
-        try: conn.close()
-        except: pass
+        try:
+            conn.close()
+        except Exception:
+            pass

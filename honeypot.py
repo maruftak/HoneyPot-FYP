@@ -11,6 +11,7 @@ from collections import defaultdict
 
 import config, db, geo, alerts
 from fake_commands import FakeShell
+import rtsp_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips    = set()
@@ -742,8 +743,8 @@ aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
 <tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
 <tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
-<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
-<tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
+<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt>XAddr></tt:Imaging>
+<tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt>XAddr></tt:Media>
 </tds:Capabilities>
 </tds:GetCapabilitiesResponse>
 </SOAP-ENV:Body>
@@ -1172,141 +1173,13 @@ a=rtpmap:8 PCMA/8000
 a=control:trackID=2"""
 
 def handle_rtsp(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-    session_id = os.urandom(4).hex()
-
-    try:
-        conn.settimeout(12)
-        
-        for _ in range(20):  # handle multi-step RTSP conversation
-            try:
-                raw = conn.recv(4096).decode(errors="ignore")
-            except socket.timeout:
-                break
-            if not raw: break
-
-            lines  = raw.split("\n")
-            req_ln = lines[0].strip()
-            method = req_ln.split()[0] if req_ln.split() else "DESCRIBE"
-            
-            cseq = "1"
-            for line in lines:
-                if line.upper().startswith("CSEQ:"):
-                    cseq = line.split(":", 1)[1].strip()
-
-            # Extract auth if present
-            username = ""
-            password = ""
-            for line in lines:
-                if "authorization" in line.lower() and "digest" in line.lower():
-                    import re
-                    um = re.search(r'username="([^"]+)"', line)
-                    if um: username = um.group(1)
-                    # password is hashed in digest, but log attempt
-                    password = "(digest_response)"
-
-            # Extract stream URL
-            stream_url = ""
-            for line in lines:
-                if line.upper().startswith(("DESCRIBE", "SETUP", "PLAY", "TEARDOWN")):
-                    parts = line.split()
-                    if len(parts) >= 2 and "rtsp://" in parts[1]:
-                        stream_url = parts[1]
-
-            db.log_attack({
-                "timestamp":   _ts(), "source_ip": ip, "source_port": port,
-                "dest_port":   554, "service": "rtsp", "protocol": "TCP",
-                "method":      method,
-                "path":        stream_url or req_ln[:100],
-                "username":    username,
-                "password":    password,
-                "country":     gdata["country"], "city": gdata["city"],
-                "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-                "attack_type": "camera_streaming" if username else "camera_probe",
-                "threat_level": "high" if username else "medium",
-                **_intel_fields(gdata),
-            })
-            _new_ip_alert(ip, gdata["country"], gdata["city"], "rtsp")
-
-            # Check for honeytokens in auth
-            if username and password:
-                is_bot = _check_botnet(username, password)
-                is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
-                if is_bot:
-                    _inc("botnets")
-                    alerts.botnet_cred(ip, gdata["country"], "rtsp", username, password)
-                if is_ht_c:
-                    _inc("honeytokens")
-                    alerts.honeytoken(ip, gdata["country"], "RTSP_CRED", ht_cv, "rtsp")
-                    db.log_honeytoken(_ts(), ip, "RTSP_CRED", ht_cv, "rtsp", gdata["country"])
-
-            # Route by RTSP method
-            if method == "DESCRIBE":
-                sdp = _SDP_RESPONSE   # no {session_id} placeholder — remove .format()
-                resp = (f"RTSP/1.0 200 OK\r\n"
-                        f"CSeq: {cseq}\r\n"
-                        f"Content-Type: application/sdp\r\n"
-                        f"Content-Length: {len(sdp)}\r\n"
-                        f"Server: Hikvision RTSP Server\r\n\r\n{sdp}")
-                conn.sendall(resp.encode())
-
-            elif method == "SETUP":
-                resp = (f"RTSP/1.0 200 OK\r\n"
-                        f"CSeq: {cseq}\r\n"
-                        f"Session: {session_id};timeout=60\r\n"
-                        f"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n"
-                        f"Server: Hikvision RTSP Server\r\n\r\n")
-                conn.sendall(resp.encode())
-
-            elif method == "PLAY":
-                resp = (f"RTSP/1.0 200 OK\r\n"
-                        f"CSeq: {cseq}\r\n"
-                        f"Session: {session_id}\r\n"
-                        f"Range: npt=0.000-\r\n"
-                        f"RTP-Info: url=rtsp://192.168.1.108:554/Streaming/Channels/101/trackID=1;seq=1;rtptime=0\r\n"
-                        f"Server: Hikvision RTSP Server\r\n\r\n")
-                conn.sendall(resp.encode())
-
-            elif method == "TEARDOWN":
-                resp = (f"RTSP/1.0 200 OK\r\n"
-                        f"CSeq: {cseq}\r\n"
-                        f"Session: {session_id}\r\n"
-                        f"Server: Hikvision RTSP Server\r\n\r\n")
-                conn.sendall(resp.encode())
-                break
-
-            elif method == "OPTIONS":
-                resp = (f"RTSP/1.0 200 OK\r\n"
-                        f"CSeq: {cseq}\r\n"
-                        f"Public: DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, OPTIONS, ANNOUNCE, RECORD, GET_PARAMETER, SET_PARAMETER\r\n"
-                        f"Server: Hikvision RTSP Server\r\n\r\n")
-                conn.sendall(resp.encode())
-
-            elif method == "GET_PARAMETER":
-                resp = (f"RTSP/1.0 200 OK\r\n"
-                        f"CSeq: {cseq}\r\n"
-                        f"Session: {session_id}\r\n"
-                        f"Server: Hikvision RTSP Server\r\n\r\n")
-                conn.sendall(resp.encode())
-
-            else:
-                # Unauthorized for any other request
-                resp = (f"RTSP/1.0 401 Unauthorized\r\n"
-                        f"CSeq: {cseq}\r\n"
-                        f"WWW-Authenticate: Digest realm=\"Streaming Server\","
-                        f" nonce=\"{os.urandom(8).hex()}\","
-                        f" algorithm=\"MD5\"\r\n"
-                        f"Server: Hikvision RTSP Server\r\n\r\n")
-                conn.sendall(resp.encode())
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
+    rtsp_service.handle_rtsp(
+        conn, addr,
+        log_attack=db.log_attack,
+        geoip_func=_geoip,
+        intel_fields_func=_intel_fields,
+        new_ip_alert=_new_ip_alert
+    )
 
 # ─── ONVIF (port 8000) ───────────────────────────────────────────────────────
 _ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -1317,9 +1190,9 @@ _ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
 <tds:GetCapabilitiesResponse>
 <tds:Capabilities>
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
-<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
+<tt:Device><tt>XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
 <tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
-<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt:XAddr></tt:Imaging>
+<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt>XAddr></tt:Imaging>
 <tt:Media><tt>XAddr>http://192.168.1.108:8000/onvif/media</tt>XAddr></tt:Media>
 </tds:Capabilities>
 </tds:GetCapabilitiesResponse>
@@ -1801,4 +1674,5 @@ def main():
             alerts.shutdown(COUNTERS["sessions"], len(_seen_ips))
 
 if __name__ == "__main__":
+    main()
     main()
