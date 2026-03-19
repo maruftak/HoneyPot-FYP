@@ -16,6 +16,7 @@ import rtsp_service
 import onvif_service
 import ssh_service
 import ftp_service
+import vnc_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips    = set()
@@ -1208,28 +1209,6 @@ def handle_rtsp(conn, addr):
     """
     RTSP honeypot handler - delegates to rtsp_service module
     """
- 
-def rtsp_intel_fields(ip):
-    """
-    Wrapper function to get threat intel fields for RTSP
-    """
-    try:
-        gdata = _geoip(ip)
-        return _intel_fields(gdata)
-    except Exception:
-        return {
-            "asn": None,
-            "org": None,
-            "is_vpn": False,
-            "is_tor": False,
-            "is_proxy": False,
-        }
- 
-
-def handle_rtsp(conn, addr):
-    """
-    RTSP honeypot handler - delegates to rtsp_service module
-    """
     try:
         # Add random delay to simulate device lag
         _random_delay(80, 200)
@@ -1452,7 +1431,7 @@ _MYSQL_GREET = (
     b"8.0.32\x00"
     b"\x08\x00\x00\x00"
     b"\x2a\x4b\x7c\x26\x31\x3e\x65\x77\x00"
-    b"\xff\xf7\x08\x02\x00\xff\x81\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    b"\xff\xf7\x08\x02\x00\xff\x81\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
     b"\x4c\x4b\x6c\x41\x43\x37\x42\x42\x41\x74\x6f\x4e\x00"
     b"caching_sha2_password\x00"
 )
@@ -1591,96 +1570,44 @@ def handle_memcached(conn, addr):
         except: pass
 
 # ─── VNC (port 5900) ─────────────────────────────────────────────────────────
+def vnc_log_attack(ip, port, event_type, details):
+    try:
+        gdata = _geoip(ip)
+        log_entry = {
+            "timestamp": _ts(),
+            "source_ip": ip,
+            "dest_port": port,
+            "service": "vnc",
+            "protocol": "TCP",
+            "attack_type": event_type,
+            "country": gdata["country"],
+            "city": gdata["city"],
+            "latitude": gdata["latitude"],
+            "longitude": gdata["longitude"],
+        }
+        if isinstance(details, dict):
+            log_entry.update(details)
+        db.log_attack(log_entry)
+    except Exception as e:
+        print(f"[!] VNC log error: {e}")
+
 def handle_vnc(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
     try:
-        conn.sendall(b"RFB 003.008\n")
-        conn.settimeout(8)
-        conn.recv(12)                    # Client version
-        conn.sendall(b"\x01\x02")        # Security: VNC Auth
-        conn.recv(1)                     # Client picks type 2
-        conn.sendall(os.urandom(16))     # Challenge
-        conn.recv(16)                    # Client response
-        conn.sendall(b"\x00\x00\x00\x01")  # Auth failed
-        reason = b"Authentication failed"
-        conn.sendall(len(reason).to_bytes(4, "big") + reason)
-
-        db.log_attack({
-            "timestamp": _ts(), "source_ip": ip, "dest_port": 5900,
-            "service": "vnc", "attack_type": "remote_access", "threat_level": "high",
-            "country": gdata["country"], "city": gdata["city"],
-            "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "vnc")
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-# ─── RDP (port 3389) ─────────────────────────────────────────────────────────
-def handle_rdp(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        conn.settimeout(8)
-        conn.recv(512)
-        conn.sendall(b"\x03\x00\x00\x13\x0e\xd0\x00\x00\x124\x00\x02\x00\x08\x00\x00\x00\x00\x00")
-        db.log_attack({
-            "timestamp": _ts(), "source_ip": ip, "dest_port": 3389,
-            "service": "rdp", "attack_type": "remote_access", "threat_level": "high",
-            "country": gdata["country"], "city": gdata["city"],
-            "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "rdp")
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-# ─── Modbus ICS (port 502) ───────────────────────────────────────────────────
-def handle_modbus(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        conn.settimeout(8)
-        data = conn.recv(256)
-        if data and len(data) >= 6:
-            txid = data[0:2]
-            unit = data[6:7] if len(data) > 6 else b"\x01"
-            # Exception: Illegal function
-            conn.sendall(txid + b"\x00\x00\x00\x03" + unit + b"\x81\x01")
-
-        db.log_attack({
-            "timestamp": _ts(), "source_ip": ip, "dest_port": 502,
-            "service": "modbus", "attack_type": "ics_scada", "threat_level": "critical",
-            "country": gdata["country"], "city": gdata["city"],
-            "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "modbus")
-        alerts.generic("MODBUS", "Modbus/ICS Probe", [
-            ("IP", ip), ("Country", gdata["country"]),
-        ], ip=ip, cooldown_key=f"MODBUS:{ip}")
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
+        _random_delay(80, 200)
+        _inc("sessions")
+        vnc_service.handle_vnc(
+            conn, addr,
+            log_attack=vnc_log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=_intel_fields,
+            new_ip_alert=_new_ip_alert
+        )
+    except Exception as e:
+        print(f"[!] VNC handler error: {e}")
+        try:
+            conn.close()
+        except:
+            pass
 
 # ─── Service launcher ─────────────────────────────────────────────────────────
 def _start_tcp(handler, port, name):
@@ -1692,6 +1619,79 @@ def _start_tcp(handler, port, name):
             srv.listen(256)
             print(f"  [+] {name:<22} :{port}")
             while True:
+                try:
+                    cli, addr = srv.accept()
+                    t = threading.Thread(target=handler, args=(cli, addr), daemon=True)
+                    t.start()
+                except Exception as e:
+                    print(f"  [!] {name} accept: {e}")
+        except OSError as e:
+            print(f"  [✗] {name:<22} :{port} — {e}")
+    threading.Thread(target=_inner, daemon=True, name=name).start()
+
+# ─── Services map ─────────────────────────────────────────────────────────────
+_SERVICES = [
+    (handle_telnet,                        config.SERVICE_PORTS["telnet"],    "Telnet"),
+    (handle_ssh,                           config.SERVICE_PORTS["ssh"],       "SSH"),
+    (handle_ftp,                           config.SERVICE_PORTS["ftp"],       "FTP"),
+    (handle_smtp,                          config.SERVICE_PORTS["smtp"],      "SMTP"),
+    (handle_http,                          config.SERVICE_PORTS["http"],      "HTTP"),
+    (lambda c,a: handle_http(c,a,True),    config.SERVICE_PORTS["https"],     "HTTPS"),
+    (handle_http,                          config.SERVICE_PORTS["http_alt"],  "HTTP-Alt"),
+    (handle_rtsp,                          config.SERVICE_PORTS["rtsp"],      "RTSP"),
+    (handle_onvif,                         config.SERVICE_PORTS["onvif"],     "ONVIF"),
+    (handle_mqtt,                          config.SERVICE_PORTS["mqtt"],      "MQTT"),
+    (handle_redis,                         config.SERVICE_PORTS["redis"],     "Redis"),
+    (handle_mysql,                         config.SERVICE_PORTS["mysql"],     "MySQL"),
+    (handle_docker,                        config.SERVICE_PORTS["docker"],    "Docker API"),
+    (handle_memcached,                     config.SERVICE_PORTS["memcached"], "Memcached"),
+    (handle_vnc,                           config.SERVICE_PORTS["vnc"],       "VNC"),
+    (handle_rdp,                           config.SERVICE_PORTS["rdp"],       "RDP"),
+    (handle_modbus,                        config.SERVICE_PORTS["modbus"],    "Modbus/ICS"),
+]
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+def main():
+    db.init()
+
+    print(f"""
+╔══════════════════════════════════════════════════════════════════════╗
+║  honeyPot v{config.VERSION}  —  IoT Threat Intelligence Honeypot              ║
+║  Device: {config.DEVICE_VENDOR} {config.DEVICE_MODEL}                    ║
+║  Firmware: {config.DEVICE_FIRMWARE}                              ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Telegram: {'ENABLED ✓' if config.TELEGRAM_ENABLED else 'disabled (set TELEGRAM_TOKEN + TELEGRAM_CHAT_ID)'}                                   ║
+║  GeoIP:    {'ENABLED ✓' if os.path.exists(config.GEOIP_DB) else 'disabled (GeoLite2-City.mmdb missing)'}                                      ║
+╚══════════════════════════════════════════════════════════════════════╝""")
+
+    print("\n[*] Starting services:")
+    active = 0
+    for handler, port, name in _SERVICES:
+        if port:
+            _start_tcp(handler, port, name)
+            active += 1
+            time.sleep(0.05)
+
+    print(f"\n[✓] {active} services active | DB: {config.DB_PATH}")
+    print(f"[✓] Dashboard: python3 dashboard.py\n")
+
+    if config.TELEGRAM_ENABLED:
+        alerts.startup(active, f"{config.DEVICE_VENDOR} {config.DEVICE_MODEL}", config.DEVICE_FIRMWARE)
+    else:
+        print("[!] Telegram disabled — set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID env vars")
+
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        print(f"\n[!] Stopped | Sessions: {COUNTERS['sessions']} | Unique IPs: {len(_seen_ips)}")
+        if config.TELEGRAM_ENABLED:
+            alerts.shutdown(COUNTERS["sessions"], len(_seen_ips))
+
+if __name__ == "__main__":
+    main()
+    main()
+    main()
                 try:
                     cli, addr = srv.accept()
                     t = threading.Thread(target=handler, args=(cli, addr), daemon=True)
