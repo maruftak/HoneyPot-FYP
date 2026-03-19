@@ -13,6 +13,7 @@ import random
 import config, db, geo, alerts
 from fake_commands import FakeShell
 import rtsp_service
+import onvif_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips    = set()
@@ -1298,25 +1299,52 @@ _ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
 </SOAP-ENV:Body>
 </SOAP-ENV:Envelope>"""
 
-def handle_onvif(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
+def onvif_log_attack(ip, port, event_type, details):
+    """
+    Wrapper for ONVIF logging - converts ONVIF log format to db.log_attack format
+    """
+    try:
+        if isinstance(details, str):
+            details_dict = json.loads(details)
+        else:
+            details_dict = details
+        gdata = _geoip(ip)
+        log_entry = {
+            "timestamp": _ts(),
+            "source_ip": ip,
+            "dest_port": port,
+            "service": "onvif",
+            "protocol": "TCP",
+            "attack_type": event_type,
+            "threat_level": details_dict.get("threat_level", "medium"),
+            "country": gdata["country"],
+            "city": gdata["city"],
+            "latitude": gdata["latitude"],
+            "longitude": gdata["longitude"],
+        }
+        log_entry.update(details_dict)
+        log_entry.update(_intel_fields(gdata))
+        db.log_attack(log_entry)
+    except Exception as e:
+        print(f"[!] ONVIF log error: {e}")
 
+def handle_onvif(conn, addr):
     try:
         _random_delay(80, 200)
-        # Add fake device info to ONVIF response
-        hdr = (f"HTTP/1.1 200 OK\r\nContent-Type: application/soap+xml\r\n"
-               f"X-Device-Model: DS-2CD2043G2-I\r\n"
-               f"X-Device-Firmware: V5.7.15 build 230313\r\n"
-               f"Content-Length: {len(_ONVIF_RESP)}\r\n\r\n")
-        conn.sendall(hdr.encode() + _ONVIF_RESP)
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
+        _inc("sessions")
+        onvif_service.handle_onvif(
+            conn, addr,
+            log_attack=onvif_log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=_intel_fields,
+            new_ip_alert=_new_ip_alert
+        )
+    except Exception as e:
+        print(f"[!] ONVIF handler error: {e}")
+        try:
+            conn.close()
+        except:
+            pass
 
 # ─── MQTT (port 1883) ─────────────────────────────────────────────────────────
 def handle_mqtt(conn, addr):
@@ -1335,6 +1363,7 @@ def handle_mqtt(conn, addr):
             # Try to extract username from variable header
             try:
                 proto_len = int.from_bytes(pkt[4:6], "big")
+                idx = 2 + 2 + proto_len + 1 + 1 + 2  # skip fixed, proto_name, level, flags, keepalive
                 idx = 2 + 2 + proto_len + 1 + 1 + 2  # skip fixed, proto_name, level, flags, keepalive
                 flags = pkt[9] if len(pkt) > 9 else 0
                 # Skip client_id
