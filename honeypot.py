@@ -15,6 +15,7 @@ from fake_commands import FakeShell
 import rtsp_service
 import onvif_service
 import ssh_service
+import ftp_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips    = set()
@@ -433,101 +434,72 @@ _FTP_BANNERS = [
     "220 DVR FTP Server Ready.\r\n",
 ]
 
-def handle_ftp(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-    username = ""
-    authenticated = False
-
+# ─── FTP (port 21) ────────────────────────────────────────────────────────────
+def ftp_log_attack(ip, port, event_type, details):
+    """Wrapper for FTP logging - converts FTP log format to db.log_attack format"""
     try:
+        # Parse JSON details if string
+        if isinstance(details, str):
+            details_dict = json.loads(details)
+        else:
+            details_dict = details
+        
+        # Get geo data
+        gdata = _geoip(ip)
+        
+        # Create log entry
+        log_entry = {
+            "timestamp": _ts(),
+            "source_ip": ip,
+            "dest_port": port,
+            "service": "ftp",
+            "protocol": "TCP",
+            "attack_type": event_type,
+            "threat_level": details_dict.get("threat_level", "medium"),
+            "country": gdata["country"],
+            "city": gdata["city"],
+            "latitude": gdata["latitude"],
+            "longitude": gdata["longitude"],
+        }
+        
+        # Add all details from FTP handler
+        log_entry.update(details_dict)
+        
+        # Add intel fields
+        log_entry.update(_intel_fields(gdata))
+        
+        # Log to database
+        db.log_attack(log_entry)
+        
+    except Exception as e:
+        print(f"[!] FTP log error: {e}")
+
+def handle_ftp(conn, addr):
+    """FTP honeypot handler - delegates to ftp_service module"""
+    try:
+        # Add random delay to simulate device lag
         _random_delay(80, 200)
-        banner = random.choice(_FTP_BANNERS)
-        conn.sendall(banner.encode())
-
-        for _ in range(30):
-            conn.settimeout(20)
-            try:
-                line = conn.recv(512).decode(errors="ignore").strip()
-            except socket.timeout:
-                break
-            if not line: break
-
-            parts = line.split(" ", 1)
-            cmd   = parts[0].upper()
-            arg   = parts[1] if len(parts) > 1 else ""
-
-            if cmd == "USER":
-                username = arg
-                conn.sendall(b"331 Password required.\r\n")
-
-            elif cmd == "PASS":
-                password = arg
-                scanner_tool = _detect_scanner(f"{username} {password}")
-                is_bot   = _check_botnet(username, password)
-                is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
-
-                db.log_attack({
-                    "timestamp": _ts(), "source_ip": ip, "source_port": port,
-                    "dest_port": 21, "service": "ftp", "protocol": "TCP",
-                    "username": username, "password": password,
-                    "country": gdata["country"], "city": gdata["city"],
-                    "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-                    "attack_type": "brute_force", "threat_level": "high" if is_bot else "medium",
-                    "is_botnet": is_bot,
-                    **_intel_fields(gdata),
-                })
-                _new_ip_alert(ip, gdata["country"], gdata["city"], "ftp")
-                _inc("logins")
-
-                if is_bot:
-                    _inc("botnets")
-                    alerts.botnet_cred(ip, gdata["country"], "ftp", username, password)
-                if is_ht_c:
-                    _inc("honeytokens")
-                    alerts.honeytoken(ip, gdata["country"], "FTP_CRED", ht_cv, "ftp")
-                    db.log_honeytoken(_ts(), ip, "FTP_CRED", ht_cv, "ftp", gdata["country"])
-
-                if is_bot or is_ht_c:
-                    conn.sendall(b"230 Login successful.\r\n")
-                    authenticated = True
-                else:
-                    conn.sendall(b"530 Login incorrect.\r\n")
-
-            elif cmd == "SYST":
-                conn.sendall(b"215 UNIX Type: L8\r\n")
-            elif cmd == "FEAT":
-                conn.sendall(b"211-Features:\r\n PASV\r\n UTF8\r\n211 End\r\n")
-            elif cmd == "PWD":
-                conn.sendall(b'257 "/" is current directory.\r\n')
-            elif cmd == "TYPE":
-                conn.sendall(b"200 Switching to Binary mode.\r\n")
-            elif cmd == "PASV" and authenticated:
-                conn.sendall(b"227 Entering Passive Mode (192,168,1,108,195,215).\r\n")
-            elif cmd == "LIST" and authenticated:
-                conn.sendall(b"150 Here comes the directory listing.\r\n")
-                conn.sendall(b"-rw-r--r-- 1 root root    4096 Feb 18 09:00 passwords.txt\r\n")
-                conn.sendall(b"-rw-r--r-- 1 root root   65536 Feb 18 09:00 admin_backup.zip\r\n")
-                conn.sendall(b"-rw-r--r-- 1 root root  131072 Feb 18 09:00 recordings.tar.gz\r\n")
-                conn.sendall(b"226 Directory send OK.\r\n")
-            elif cmd == "RETR" and authenticated:
-                ht_f, ht_fv = _check_honeytoken_file(arg)
-                if ht_f:
-                    _inc("honeytokens")
-                    alerts.honeytoken(ip, gdata["country"], "FTP_DOWNLOAD", arg, "ftp")
-                    db.log_honeytoken(_ts(), ip, "FTP_DOWNLOAD", arg, "ftp", gdata["country"])
-                conn.sendall(b"550 Failed to open file.\r\n")
-            elif cmd == "QUIT":
-                conn.sendall(b"221 Goodbye.\r\n"); break
-            else:
-                conn.sendall(b"500 Unknown command.\r\n")
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
+        
+        # Increment session counter
+        _inc("sessions")
+        
+        # Call the ultimate FTP service handler
+        ftp_service.handle_ftp(
+            conn, addr,
+            log_attack=ftp_log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=lambda ip: _intel_fields(_geoip(ip)),
+            new_ip_alert=_new_ip_alert,
+            check_honeytoken_file=_check_honeytoken_file,
+            check_botnet=_check_botnet,
+            check_honeytoken_cred=_check_honeytoken_cred,
+        )
+    except Exception as e:
+        print(f"[!] FTP handler error: {e}")
+        try:
+            conn.close()
+        except:
+            pass
 
 # ─── SMTP (port 25) ───────────────────────────────────────────────────────────
 def handle_smtp(conn, addr):
