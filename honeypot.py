@@ -14,6 +14,7 @@ import config, db, geo, alerts
 from fake_commands import FakeShell
 import rtsp_service
 import onvif_service
+import ssh_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips    = set()
@@ -385,67 +386,44 @@ _SSH_BANNERS = [
     b"SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13\r\n",
 ]
 
-def handle_ssh(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
+def ssh_log_attack(ip, port, event_type, details):
+    try:
+        gdata = _geoip(ip)
+        log_entry = {
+            "timestamp": _ts(),
+            "source_ip": ip,
+            "dest_port": port,
+            "service": "ssh",
+            "protocol": "TCP",
+            "attack_type": event_type,
+            "country": gdata["country"],
+            "city": gdata["city"],
+            "latitude": gdata["latitude"],
+            "longitude": gdata["longitude"],
+        }
+        if isinstance(details, dict):
+            log_entry.update(details)
+        db.log_attack(log_entry)
+    except Exception as e:
+        print(f"[!] SSH log error: {e}")
 
+def handle_ssh(conn, addr):
     try:
         _random_delay(80, 200)
-        banner = random.choice(_SSH_BANNERS)
-        conn.sendall(banner)
-
-        conn.settimeout(10)
-        client_data = b""
+        _inc("sessions")
+        ssh_service.handle_ssh(
+            conn, addr,
+            log_attack=ssh_log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=_intel_fields,
+            new_ip_alert=_new_ip_alert
+        )
+    except Exception as e:
+        print(f"[!] SSH handler error: {e}")
         try:
-            client_data = conn.recv(512)
-        except socket.timeout:
+            conn.close()
+        except:
             pass
-
-        ua = client_data.decode(errors="ignore")[:200]
-
-        # Replace old scanner detection with new unified function
-        scanner = _detect_scanner(ua)
-
-        db.log_attack({
-            "timestamp": _ts(), "source_ip": ip, "source_port": port,
-            "dest_port": 22, "service": "ssh", "protocol": "TCP",
-            "user_agent": ua,
-            "scanner_tool": scanner,
-            "attack_type": "scanner" if scanner else "banner_grab",
-            "threat_level": "medium", "country": gdata["country"], "city": gdata["city"],
-            "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "ssh")
-        if scanner:
-            print(f"  [SSH] Tool detected: {scanner} from {ip}")
-
-        # Keep alive briefly for scanners
-        time.sleep(random.uniform(1.0, 2.5))
-        for _ in range(3):
-            try:
-                conn.settimeout(5)
-                data = conn.recv(4096)
-                if not data: break
-                if b"SSH-" in data:
-                    # Another banner — they're trying password auth
-                    db.log_attack({
-                        "timestamp": _ts(), "source_ip": ip,
-                        "dest_port": 22, "service": "ssh",
-                        "attack_type": "brute_force", "threat_level": "high",
-                        "country": gdata["country"], "city": gdata["city"],
-                        "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-                        **_intel_fields(gdata),
-                    })
-            except: break
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
 
 # ─── FTP (port 21) ────────────────────────────────────────────────────────────
 _FTP_BANNERS = [
@@ -1236,6 +1214,28 @@ def rtsp_log_attack(ip, port, event_type, details):
     except Exception as e:
         print(f"[!] RTSP log error: {e}")
  
+ 
+def rtsp_intel_fields(ip):
+    """
+    Wrapper function to get threat intel fields for RTSP
+    """
+    try:
+        gdata = _geoip(ip)
+        return _intel_fields(gdata)
+    except Exception:
+        return {
+            "asn": None,
+            "org": None,
+            "is_vpn": False,
+            "is_tor": False,
+            "is_proxy": False,
+        }
+ 
+
+def handle_rtsp(conn, addr):
+    """
+    RTSP honeypot handler - delegates to rtsp_service module
+    """
  
 def rtsp_intel_fields(ip):
     """
