@@ -8,6 +8,7 @@ Run as root:  sudo python3 honeypot.py
 
 import socket, threading, os, json, time, re, datetime
 from collections import defaultdict
+import random
 
 import config, db, geo, alerts
 from fake_commands import FakeShell
@@ -26,6 +27,16 @@ COUNTERS = {
     "botnets": 0, "cves": 0, "malware": 0,
     "honeytokens": 0, "tor": 0,
 }
+
+# Add randomization for banners and session IDs
+def _random_mac():
+    return "44:%02X:%02X:%02X:%02X:%02X" % tuple(random.randint(0,255) for _ in range(5))
+
+def _random_session_id():
+    return ''.join(random.choices('ABCDEF0123456789', k=8))
+
+def _random_delay(min_ms=80, max_ms=220):
+    time.sleep(random.uniform(min_ms, max_ms) / 1000)
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 def _ts():
@@ -230,9 +241,14 @@ def handle_telnet(conn, addr):
     authenticated  = False
 
     try:
-        conn.sendall(_TELNET_BANNERS[hash(ip) % len(_TELNET_BANNERS)].encode())
+        # Add random delay to simulate device lag
+        _random_delay(100, 400)
+        # Randomize banner per connection
+        banner = random.choice(_TELNET_BANNERS)
+        conn.sendall(banner.encode())
 
         for attempt in range(12):
+            _random_delay(80, 200)
             conn.settimeout(25)
             try:
                 uraw = conn.recv(256)
@@ -290,6 +306,7 @@ def handle_telnet(conn, addr):
 
         # ── Shell session ──────────────────────────────────────────────────
         for _ in range(150):
+            _random_delay(30, 120)
             try:
                 conn.settimeout(120)
                 raw = conn.recv(4096)
@@ -374,7 +391,8 @@ def handle_ssh(conn, addr):
     _inc("sessions")
 
     try:
-        banner = _SSH_BANNERS[hash(ip) % len(_SSH_BANNERS)]
+        _random_delay(80, 200)
+        banner = random.choice(_SSH_BANNERS)
         conn.sendall(banner)
 
         conn.settimeout(10)
@@ -404,7 +422,7 @@ def handle_ssh(conn, addr):
             print(f"  [SSH] Tool detected: {scanner} from {ip}")
 
         # Keep alive briefly for scanners
-        time.sleep(1.5)
+        time.sleep(random.uniform(1.0, 2.5))
         for _ in range(3):
             try:
                 conn.settimeout(5)
@@ -445,7 +463,9 @@ def handle_ftp(conn, addr):
     authenticated = False
 
     try:
-        conn.sendall(_FTP_BANNERS[hash(ip) % len(_FTP_BANNERS)].encode())
+        _random_delay(80, 200)
+        banner = random.choice(_FTP_BANNERS)
+        conn.sendall(banner.encode())
 
         for _ in range(30):
             conn.settimeout(20)
@@ -742,7 +762,7 @@ aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
 <tds:Capabilities>
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
 <tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
-<tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
+<tt:Events><tt:XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
 <tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt>XAddr></tt:Imaging>
 <tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt>XAddr></tt:Media>
 </tds:Capabilities>
@@ -1172,14 +1192,93 @@ m=audio 0 RTP/AVP 8
 a=rtpmap:8 PCMA/8000
 a=control:trackID=2"""
 
+def rtsp_log_attack(ip, port, event_type, details):
+    """
+    Wrapper function for RTSP logging - converts RTSP log format to db.log_attack format
+    """
+    try:
+        # Parse JSON details if it's a string
+        if isinstance(details, str):
+            import json
+            details_dict = json.loads(details)
+        else:
+            details_dict = details
+        
+        # Get geo data
+        gdata = _geoip(ip)
+        
+        # Create log entry
+        log_entry = {
+            "timestamp": _ts(),
+            "source_ip": ip,
+            "source_port": details_dict.get("source_port", 0),
+            "dest_port": port,
+            "service": "rtsp",
+            "protocol": "TCP",
+            "attack_type": event_type,
+            "threat_level": details_dict.get("threat_level", "medium"),
+            "country": gdata["country"],
+            "city": gdata["city"],
+            "latitude": gdata["latitude"],
+            "longitude": gdata["longitude"],
+        }
+        
+        # Add all details from RTSP handler
+        log_entry.update(details_dict)
+        
+        # Add intel fields
+        log_entry.update(_intel_fields(gdata))
+        
+        # Log to database
+        db.log_attack(log_entry)
+        
+    except Exception as e:
+        print(f"[!] RTSP log error: {e}")
+ 
+ 
+def rtsp_intel_fields(ip):
+    """
+    Wrapper function to get threat intel fields for RTSP
+    """
+    try:
+        gdata = _geoip(ip)
+        return _intel_fields(gdata)
+    except Exception:
+        return {
+            "asn": None,
+            "org": None,
+            "is_vpn": False,
+            "is_tor": False,
+            "is_proxy": False,
+        }
+ 
+
 def handle_rtsp(conn, addr):
-    rtsp_service.handle_rtsp(
-        conn, addr,
-        log_attack=db.log_attack,
-        geoip_func=_geoip,
-        intel_fields_func=_intel_fields,
-        new_ip_alert=_new_ip_alert
-    )
+    """
+    RTSP honeypot handler - delegates to rtsp_service module
+    """
+    try:
+        # Add random delay to simulate device lag
+        _random_delay(80, 200)
+        
+        # Increment session counter
+        _inc("sessions")
+        
+        # Call the enhanced RTSP service handler
+        rtsp_service.handle_rtsp(
+            conn, addr,
+            log_attack=rtsp_log_attack,           # Now defined above
+            geoip_func=_geoip,                    # Existing function
+            intel_fields_func=rtsp_intel_fields,  # Now defined above
+            new_ip_alert=_new_ip_alert            # Existing function
+        )
+    except Exception as e:
+        # Log any errors
+        print(f"[!] RTSP handler error: {e}")
+        try:
+            conn.close()
+        except:
+            pass
 
 # ─── ONVIF (port 8000) ───────────────────────────────────────────────────────
 _ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -1192,7 +1291,7 @@ _ONVIF_RESP = b"""<?xml version="1.0" encoding="UTF-8"?>
 <tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
 <tt:Device><tt>XAddr>http://192.168.1.108:8000/onvif/device_service</tt>XAddr></tt:Device>
 <tt:Events><tt>XAddr>http://192.168.1.108:8000/onvif/event</tt>XAddr></tt:Events>
-<tt:Imaging><tt:XAddr>http://192.168.1.108:8000/onvif/imaging</tt>XAddr></tt:Imaging>
+<tt:Imaging><tt>XAddr>http://192.168.1.108:8000/onvif/imaging</tt>XAddr></tt:Imaging>
 <tt:Media><tt>XAddr>http://192.168.1.108:8000/onvif/media</tt>XAddr></tt:Media>
 </tds:Capabilities>
 </tds:GetCapabilitiesResponse>
@@ -1206,25 +1305,13 @@ def handle_onvif(conn, addr):
     _inc("sessions")
 
     try:
-        conn.settimeout(8)
-        raw = conn.recv(4096)
-        if not raw: return
-
-        db.log_attack({
-            "timestamp":   _ts(), "source_ip": ip, "dest_port": 8000,
-            "service":     "onvif", "protocol": "TCP",
-            "payload":     raw.decode(errors="ignore")[:200],
-            "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-            "attack_type": "camera_discovery", "threat_level": "medium",
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "onvif")
-
+        _random_delay(80, 200)
+        # Add fake device info to ONVIF response
         hdr = (f"HTTP/1.1 200 OK\r\nContent-Type: application/soap+xml\r\n"
+               f"X-Device-Model: DS-2CD2043G2-I\r\n"
+               f"X-Device-Firmware: V5.7.15 build 230313\r\n"
                f"Content-Length: {len(_ONVIF_RESP)}\r\n\r\n")
         conn.sendall(hdr.encode() + _ONVIF_RESP)
-
     except Exception:
         pass
     finally:
@@ -1357,7 +1444,7 @@ def handle_redis(conn, addr):
         try: conn.close()
         except: pass
 
-# ─── MySQL (port 3306) ────────────────────────────────────────────────────────
+# ─── MySQL (port 3306) ─────────────────────────────────────────────────────────────────
 _MYSQL_GREET = (
     b"\x4a\x00\x00\x00"
     b"\x0a"
@@ -1674,5 +1761,6 @@ def main():
             alerts.shutdown(COUNTERS["sessions"], len(_seen_ips))
 
 if __name__ == "__main__":
+    main()
     main()
     main()
