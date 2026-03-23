@@ -54,7 +54,7 @@ DEVICE_IP       = "0.0.0.0"   # filled at startup
 # Set port to 0 to disable a service
 SERVICE_PORTS = {
     "telnet":    23,
-    "ssh":       22,
+    "ssh":       2222,  # Changed from 22 to 2222
     "ftp":       21,
     "smtp":      25,
     "http":      80,

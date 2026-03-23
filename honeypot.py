@@ -1684,7 +1684,7 @@ def _start_tcp(handler, port, name):
 
 _SERVICES = [
     (handle_telnet,                     config.SERVICE_PORTS["telnet"],    "Telnet"),
-    (handle_ssh,                        config.SERVICE_PORTS["ssh"],       "SSH"),
+    (handle_ssh,                        2222,                             "SSH"),  # Changed from config.SERVICE_PORTS["ssh"] to 2222
     (handle_ftp,                        config.SERVICE_PORTS["ftp"],       "FTP"),
     (handle_smtp,                       config.SERVICE_PORTS["smtp"],      "SMTP"),
     (handle_http,                       config.SERVICE_PORTS["http"],      "HTTP"),

