@@ -7,47 +7,59 @@ SQLite backend for all attack logging and dashboard queries.
 import sqlite3, json, datetime, os, logging, sys
 from pathlib import Path
 from threading import Lock
-from config import DB_PATH, LOG_DIR
+import config
+
+# ── Single canonical DB path — pulled from config, nowhere else ───────────────
+DB_PATH = config.DB_PATH
+LOG_DIR = config.LOG_DIR
 
 _lock = Lock()
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS attacks (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp        TEXT    NOT NULL,
-    source_ip        TEXT    NOT NULL,
-    source_port      INTEGER DEFAULT 0,
-    dest_port        INTEGER DEFAULT 0,
-    service          TEXT    NOT NULL,
-    protocol         TEXT    DEFAULT 'TCP',
-    method           TEXT    DEFAULT '',
-    path             TEXT    DEFAULT '',
-    user_agent       TEXT    DEFAULT '',
-    payload          TEXT    DEFAULT '',
-    username         TEXT    DEFAULT '',
-    password         TEXT    DEFAULT '',
-    country          TEXT    DEFAULT 'Unknown',
-    city             TEXT    DEFAULT '',
-    latitude         REAL,
-    longitude        REAL,
-    attack_type      TEXT    DEFAULT '',
-    threat_level     TEXT    DEFAULT 'low',
-    cve_id           TEXT    DEFAULT '',
-    session_id       TEXT    DEFAULT '',
-    is_botnet        INTEGER DEFAULT 0,
-    is_tor           INTEGER DEFAULT 0,
-    is_vpn           INTEGER DEFAULT 0,
-    is_proxy         INTEGER DEFAULT 0,
-    asn              TEXT    DEFAULT '',
-    org              TEXT    DEFAULT '',
-    commands         TEXT    DEFAULT '[]',
-    raw_payload      TEXT    DEFAULT '',
-    query_string     TEXT    DEFAULT '',
-    referer          TEXT    DEFAULT '',
-    host_header      TEXT    DEFAULT '',
-    origin           TEXT    DEFAULT '',
-    attack_patterns  TEXT    DEFAULT ''
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp            TEXT    NOT NULL,
+    source_ip            TEXT    NOT NULL,
+    source_port          INTEGER DEFAULT 0,
+    dest_port            INTEGER DEFAULT 0,
+    service              TEXT    NOT NULL DEFAULT '',
+    protocol             TEXT    DEFAULT 'TCP',
+    method               TEXT    DEFAULT '',
+    path                 TEXT    DEFAULT '',
+    user_agent           TEXT    DEFAULT '',
+    payload              TEXT    DEFAULT '',
+    username             TEXT    DEFAULT '',
+    password             TEXT    DEFAULT '',
+    country              TEXT    DEFAULT 'Unknown',
+    city                 TEXT    DEFAULT '',
+    latitude             REAL,
+    longitude            REAL,
+    attack_type          TEXT    DEFAULT '',
+    threat_level         TEXT    DEFAULT 'low',
+    cve_id               TEXT    DEFAULT '',
+    session_id           TEXT    DEFAULT '',
+    is_botnet            INTEGER DEFAULT 0,
+    is_tor               INTEGER DEFAULT 0,
+    is_vpn               INTEGER DEFAULT 0,
+    is_proxy             INTEGER DEFAULT 0,
+    asn                  TEXT    DEFAULT '',
+    org                  TEXT    DEFAULT '',
+    commands             TEXT    DEFAULT '[]',
+    raw_payload          TEXT    DEFAULT '',
+    query_string         TEXT    DEFAULT '',
+    referer              TEXT    DEFAULT '',
+    host_header          TEXT    DEFAULT '',
+    origin               TEXT    DEFAULT '',
+    attack_patterns      TEXT    DEFAULT '',
+    scanner_tool         TEXT    DEFAULT '',
+    vpn_provider         TEXT    DEFAULT '',
+    vpn_exit_country     TEXT    DEFAULT '',
+    tor_exit_node        INTEGER DEFAULT 0,
+    tor_exit_ip          TEXT    DEFAULT '',
+    proxy_type           TEXT    DEFAULT '',
+    anonymized           INTEGER DEFAULT 0,
+    anonymization_method TEXT    DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS cve_attempts (
@@ -130,6 +142,8 @@ CREATE INDEX IF NOT EXISTS idx_atk_ts   ON attacks(timestamp);
 CREATE INDEX IF NOT EXISTS idx_atk_ip   ON attacks(source_ip);
 CREATE INDEX IF NOT EXISTS idx_atk_svc  ON attacks(service);
 CREATE INDEX IF NOT EXISTS idx_atk_ctry ON attacks(country);
+CREATE INDEX IF NOT EXISTS idx_atk_tor  ON attacks(is_tor);
+CREATE INDEX IF NOT EXISTS idx_atk_vpn  ON attacks(is_vpn);
 CREATE INDEX IF NOT EXISTS idx_cve_ts   ON cve_attempts(timestamp);
 CREATE INDEX IF NOT EXISTS idx_mal_ts   ON malware_urls(timestamp);
 CREATE INDEX IF NOT EXISTS idx_ht_ts    ON honeytoken_triggers(timestamp);
@@ -138,48 +152,93 @@ CREATE INDEX IF NOT EXISTS idx_chain_ip ON attack_chains(source_ip);
 CREATE INDEX IF NOT EXISTS idx_fp_ip    ON device_fingerprints(source_ip);
 """
 
-LOG_FILE = Path(LOG_DIR) / "db.err"
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-try:
-    logging.basicConfig(filename=str(LOG_FILE), level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
-except PermissionError:
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
+# Every column that may be absent from older DB files.
+# init() attempts ALTER TABLE for each — sqlite3.OperationalError
+# ("duplicate column name") is silently swallowed; that is intentional.
+_MIGRATION_COLUMNS = [
+    ("query_string",         "TEXT    DEFAULT ''"),
+    ("referer",              "TEXT    DEFAULT ''"),
+    ("host_header",          "TEXT    DEFAULT ''"),
+    ("origin",               "TEXT    DEFAULT ''"),
+    ("attack_patterns",      "TEXT    DEFAULT ''"),
+    ("scanner_tool",         "TEXT    DEFAULT ''"),
+    ("is_vpn",               "INTEGER DEFAULT 0"),
+    ("is_proxy",             "INTEGER DEFAULT 0"),
+    ("asn",                  "TEXT    DEFAULT ''"),
+    ("org",                  "TEXT    DEFAULT ''"),
+    # ── anonymization fields (v1.1) ───────────────────────────────────────────
+    ("vpn_provider",         "TEXT    DEFAULT ''"),
+    ("vpn_exit_country",     "TEXT    DEFAULT ''"),
+    ("tor_exit_node",        "INTEGER DEFAULT 0"),
+    ("tor_exit_ip",          "TEXT    DEFAULT ''"),
+    ("proxy_type",           "TEXT    DEFAULT ''"),
+    ("anonymized",           "INTEGER DEFAULT 0"),
+    ("anonymization_method", "TEXT    DEFAULT ''"),
+]
 
+
+# ─── Logging setup ────────────────────────────────────────────────────────────
+def _setup_logging():
+    log_file = Path(LOG_DIR) / "db.err"
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            filename=str(log_file), level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s"
+        )
+    except PermissionError:
+        logging.basicConfig(
+            stream=sys.stdout, level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s"
+        )
+
+_setup_logging()
+
+
+# ─── Init ─────────────────────────────────────────────────────────────────────
 def init():
-    """Initialise database and create tables."""
+    """Create tables and migrate missing columns into the canonical DB_PATH."""
     os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+
+    print(f"[DB] Using database: {DB_PATH}")
+
     with _lock:
         conn = sqlite3.connect(DB_PATH)
         conn.executescript(SCHEMA)
-        with conn:
-            for col, typ in [
-                ("query_string",   "TEXT"),
-                ("referer",        "TEXT"),
-                ("host_header",    "TEXT"),
-                ("origin",         "TEXT"),
-                ("attack_patterns","TEXT"),
-                ("scanner_tool",   "TEXT"),
-                ("is_vpn",         "INTEGER DEFAULT 0"),
-                ("is_proxy",       "INTEGER DEFAULT 0"),
-                ("asn",            "TEXT DEFAULT ''"),
-                ("org",            "TEXT DEFAULT ''"),
-            ]:
-                try:
-                    conn.execute(f"ALTER TABLE attacks ADD COLUMN {col} {typ}")
-                except: pass
         conn.commit()
+
+        migrated = []
+        for col, typ in _MIGRATION_COLUMNS:
+            try:
+                conn.execute(f"ALTER TABLE attacks ADD COLUMN {col} {typ}")
+                conn.commit()
+                migrated.append(col)
+            except sqlite3.OperationalError:
+                pass  # column already exists — expected
+
         conn.close()
+
+    if migrated:
+        print(f"[DB] Migrated {len(migrated)} column(s): {', '.join(migrated)}")
     print(f"[DB] Initialised: {DB_PATH}")
 
+
+# ─── Internal helpers ─────────────────────────────────────────────────────────
 def _connect():
     conn = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def _now():
     return datetime.datetime.utcnow().isoformat()
+
+
+def _cutoff(hours):
+    return (datetime.datetime.utcnow()
+            - datetime.timedelta(hours=hours)).isoformat()
+
 
 # ─── Write operations ─────────────────────────────────────────────────────────
 def log_attack(d: dict):
@@ -187,118 +246,167 @@ def log_attack(d: dict):
         try:
             conn = _connect()
             conn.execute("""
-                INSERT INTO attacks
-                  (timestamp, source_ip, source_port, dest_port, service, protocol,
-                   method, path, user_agent, payload, username, password,
-                   country, city, latitude, longitude,
-                   attack_type, threat_level, cve_id, session_id,
-                   is_botnet, is_tor, is_vpn, is_proxy, asn, org,
-                   commands, raw_payload,
-                   query_string, referer, host_header, origin,
-                   attack_patterns, scanner_tool)
-                VALUES
-                  (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO attacks (
+                    timestamp,        source_ip,        source_port,      dest_port,
+                    service,          protocol,         method,           path,
+                    user_agent,       payload,          username,         password,
+                    country,          city,             latitude,         longitude,
+                    attack_type,      threat_level,     cve_id,           session_id,
+                    is_botnet,        is_tor,           is_vpn,           is_proxy,
+                    asn,              org,
+                    commands,         raw_payload,
+                    query_string,     referer,          host_header,      origin,
+                    attack_patterns,  scanner_tool,
+                    vpn_provider,     vpn_exit_country,
+                    tor_exit_node,    tor_exit_ip,
+                    proxy_type,       anonymized,       anonymization_method
+                ) VALUES (
+                    ?,?,?,?,  ?,?,?,?,  ?,?,?,?,
+                    ?,?,?,?,  ?,?,?,?,  ?,?,?,?,
+                    ?,?,      ?,?,      ?,?,?,?,
+                    ?,?,      ?,?,      ?,?,      ?,?,?
+                )
             """, (
-                d.get("timestamp",   _now()),
-                d.get("source_ip",   d.get("ip", "")),
-                d.get("source_port", 0),
-                d.get("dest_port",   d.get("destination_port", 0)),
-                d.get("service",     ""),
-                d.get("protocol",    "TCP"),
-                d.get("method",      ""),
-                d.get("path",        "")[:512],               # use actual path, not payload
-                d.get("user_agent",  "")[:512],
-                d.get("payload",     "")[:1024],
-                d.get("username",    ""),
-                d.get("password",    ""),
-                d.get("country",     "Unknown"),
-                d.get("city",        ""),
-                d.get("latitude",    None),
-                d.get("longitude",   None),
-                d.get("attack_type", ""),
-                d.get("threat_level","low"),
-                d.get("cve_id",      ""),
-                d.get("session_id",  ""),
-                1 if d.get("is_botnet")  else 0,
-                1 if d.get("is_tor")     else 0,
-                1 if d.get("is_vpn")     else 0,
-                1 if d.get("is_proxy")   else 0,
-                str(d.get("asn",  "") or "")[:100],
-                str(d.get("org",  "") or "")[:100],
+                d.get("timestamp",    _now()),
+                d.get("source_ip",    d.get("ip", "")),
+                int(d.get("source_port", 0) or 0),
+                int(d.get("dest_port",   d.get("destination_port", 0)) or 0),
+
+                str(d.get("service",  "") or ""),
+                str(d.get("protocol", "TCP") or "TCP"),
+                str(d.get("method",   "") or ""),
+                str(d.get("path",     "") or "")[:512],
+
+                str(d.get("user_agent", "") or "")[:512],
+                str(d.get("payload",    "") or "")[:1024],
+                str(d.get("username",   "") or ""),
+                str(d.get("password",   "") or ""),
+
+                str(d.get("country",  "Unknown") or "Unknown"),
+                str(d.get("city",     "") or ""),
+                d.get("latitude",  None),
+                d.get("longitude", None),
+
+                str(d.get("attack_type",  "") or ""),
+                str(d.get("threat_level", "low") or "low"),
+                str(d.get("cve_id",       "") or ""),
+                str(d.get("session_id",   "") or ""),
+
+                1 if d.get("is_botnet") else 0,
+                1 if d.get("is_tor")    else 0,
+                1 if d.get("is_vpn")    else 0,
+                1 if d.get("is_proxy")  else 0,
+
+                str(d.get("asn", "") or "")[:100],
+                str(d.get("org", "") or "")[:100],
+
                 json.dumps(d.get("commands", [])),
-                d.get("raw_payload",     "")[:2048],
-                d.get("query_string",    "")[:512],
-                d.get("referer",         "")[:512],
-                d.get("host_header",     "")[:512],
-                d.get("origin",          "")[:512],
-                d.get("attack_patterns", "")[:512],
-                d.get("scanner_tool",    "")[:100],
+                str(d.get("raw_payload", "") or "")[:2048],
+
+                str(d.get("query_string", "") or "")[:512],
+                str(d.get("referer",      "") or "")[:512],
+                str(d.get("host_header",  "") or "")[:512],
+                str(d.get("origin",       "") or "")[:512],
+
+                str(d.get("attack_patterns", "") or "")[:512],
+                str(d.get("scanner_tool",    "") or "")[:100],
+
+                # ── anonymization ─────────────────────────────────────────────
+                str(d.get("vpn_provider",         "") or "")[:100],
+                str(d.get("vpn_exit_country",     "") or "")[:100],
+                1 if d.get("tor_exit_node") else 0,
+                str(d.get("tor_exit_ip",          "") or "")[:64],
+                str(d.get("proxy_type",           "") or "")[:100],
+                1 if d.get("anonymized")    else 0,
+                str(d.get("anonymization_method", "") or "")[:200],
             ))
             conn.commit()
             conn.close()
         except Exception as e:
             logging.exception("log_attack error: %s", e)
+            print(f"[DB][ERROR] log_attack: {e}")
 
-def log_cve(timestamp, source_ip, cve_id, cve_name, severity, service, payload, country="Unknown"):
+
+def log_cve(timestamp, source_ip, cve_id, cve_name, severity,
+            service, payload, country="Unknown"):
     with _lock:
         try:
             conn = _connect()
             conn.execute(
-                "INSERT INTO cve_attempts(timestamp,source_ip,cve_id,cve_name,severity,service,payload,country) VALUES(?,?,?,?,?,?,?,?)",
-                (timestamp, source_ip, cve_id, cve_name, severity, service, payload[:1024], country)
+                "INSERT INTO cve_attempts"
+                " (timestamp,source_ip,cve_id,cve_name,severity,service,payload,country)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (timestamp, source_ip, cve_id, cve_name, severity,
+                 service, str(payload or "")[:1024], country)
             )
             conn.commit()
             conn.close()
         except Exception as e:
             logging.exception("log_cve error: %s", e)
 
-def log_malware(timestamp, source_ip, url, command, family="Unknown", arch="unknown", country="Unknown"):
+
+def log_malware(timestamp, source_ip, url, command,
+                family="Unknown", arch="unknown", country="Unknown"):
     with _lock:
         try:
             conn = _connect()
             conn.execute(
-                "INSERT INTO malware_urls(timestamp,source_ip,url,command,family,arch,country) VALUES(?,?,?,?,?,?,?)",
-                (timestamp, source_ip, url, command[:512], family, arch, country)
+                "INSERT INTO malware_urls"
+                " (timestamp,source_ip,url,command,family,arch,country)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (timestamp, source_ip, url,
+                 str(command or "")[:512], family, arch, country)
             )
             conn.commit()
             conn.close()
         except Exception as e:
             logging.exception("log_malware error: %s", e)
 
-def log_honeytoken(timestamp, source_ip, token_type, token_value, service, country, city="", commands=None):
+
+def log_honeytoken(timestamp, source_ip, token_type, token_value,
+                   service, country, city="", commands=None):
     with _lock:
         try:
             conn = _connect()
             conn.execute(
-                "INSERT INTO honeytoken_triggers(timestamp,source_ip,token_type,token_value,service,country,city,commands) VALUES(?,?,?,?,?,?,?,?)",
-                (timestamp, source_ip, token_type, token_value, service, country, city, json.dumps(commands or []))
+                "INSERT INTO honeytoken_triggers"
+                " (timestamp,source_ip,token_type,token_value,"
+                "  service,country,city,commands)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (timestamp, source_ip, token_type, token_value,
+                 service, country, city, json.dumps(commands or []))
             )
             conn.commit()
             conn.close()
         except Exception as e:
             logging.exception("log_honeytoken error: %s", e)
 
+
 def log_threat_score(timestamp, source_ip, risk_score, risk_level, factors=None):
-    """Log threat intelligence score for IP"""
     with _lock:
         try:
             conn = _connect()
             conn.execute(
-                "INSERT INTO threat_scores(timestamp,source_ip,risk_score,risk_level,factors) VALUES(?,?,?,?,?)",
-                (timestamp, source_ip, risk_score, risk_level, json.dumps(factors or []))
+                "INSERT INTO threat_scores"
+                " (timestamp,source_ip,risk_score,risk_level,factors)"
+                " VALUES(?,?,?,?,?)",
+                (timestamp, source_ip, risk_score, risk_level,
+                 json.dumps(factors or []))
             )
             conn.commit()
             conn.close()
         except Exception as e:
             logging.exception("log_threat_score error: %s", e)
 
+
 def log_attack_chain(timestamp, source_ip, chain_id, stages):
-    """Log detected attack chain/progression"""
     with _lock:
         try:
             conn = _connect()
             conn.execute(
-                "INSERT INTO attack_chains(timestamp,source_ip,chain_id,stages,is_active) VALUES(?,?,?,?,1)",
+                "INSERT INTO attack_chains"
+                " (timestamp,source_ip,chain_id,stages,is_active)"
+                " VALUES(?,?,?,?,1)",
                 (timestamp, source_ip, chain_id, json.dumps(stages or []))
             )
             conn.commit()
@@ -306,13 +414,16 @@ def log_attack_chain(timestamp, source_ip, chain_id, stages):
         except Exception as e:
             logging.exception("log_attack_chain error: %s", e)
 
-def log_device_fingerprint(timestamp, source_ip, device_type, vendor, model, firmware):
-    """Log detected device type from banner/response"""
+
+def log_device_fingerprint(timestamp, source_ip, device_type,
+                           vendor, model, firmware):
     with _lock:
         try:
             conn = _connect()
             conn.execute(
-                "INSERT INTO device_fingerprints(timestamp,source_ip,device_type,vendor,model,firmware) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO device_fingerprints"
+                " (timestamp,source_ip,device_type,vendor,model,firmware)"
+                " VALUES(?,?,?,?,?,?)",
                 (timestamp, source_ip, device_type, vendor, model, firmware)
             )
             conn.commit()
@@ -320,52 +431,49 @@ def log_device_fingerprint(timestamp, source_ip, device_type, vendor, model, fir
         except Exception as e:
             logging.exception("log_device_fingerprint error: %s", e)
 
+
 def update_ip_profile(source_ip, attack_data):
-    """Update IP profile with aggregated stats"""
     with _lock:
         try:
             conn = _connect()
-            # Check if profile exists
-            existing = conn.execute("SELECT id FROM ip_profiles WHERE source_ip=?", (source_ip,)).fetchone()
-            
+            existing = conn.execute(
+                "SELECT id FROM ip_profiles WHERE source_ip=?",
+                (source_ip,)
+            ).fetchone()
             if existing:
                 conn.execute("""
-                    UPDATE ip_profiles SET
-                        total_attacks = total_attacks + 1,
+                    UPDATE ip_profiles
+                    SET total_attacks = total_attacks + 1,
                         is_botnet = MAX(is_botnet, ?),
-                        is_tor = MAX(is_tor, ?),
+                        is_tor    = MAX(is_tor,    ?),
                         last_seen = ?
                     WHERE source_ip = ?
                 """, (
                     1 if attack_data.get("is_botnet") else 0,
-                    1 if attack_data.get("is_tor") else 0,
-                    _now(),
-                    source_ip
+                    1 if attack_data.get("is_tor")    else 0,
+                    _now(), source_ip
                 ))
             else:
                 conn.execute("""
                     INSERT INTO ip_profiles
-                    (source_ip, total_attacks, unique_services, is_botnet, is_tor, last_seen, first_seen)
+                    (source_ip, total_attacks, unique_services,
+                     is_botnet, is_tor, last_seen, first_seen)
                     VALUES(?,1,1,?,?,?,?)
                 """, (
                     source_ip,
                     1 if attack_data.get("is_botnet") else 0,
-                    1 if attack_data.get("is_tor") else 0,
-                    _now(),
-                    _now()
+                    1 if attack_data.get("is_tor")    else 0,
+                    _now(), _now()
                 ))
-            
             conn.commit()
             conn.close()
         except Exception as e:
             logging.exception("update_ip_profile error: %s", e)
 
-# ─── Read operations ──────────────────────────────────────────────────────────
-def _cutoff(hours):
-    return (datetime.datetime.utcnow() - datetime.timedelta(hours=hours)).isoformat()
 
+# ─── Read operations ──────────────────────────────────────────────────────────
 def query(sql, params=()):
-    """Generic read query — returns list of Row dicts."""
+    """Generic read — returns list of dicts."""
     try:
         conn = _connect()
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
@@ -374,6 +482,7 @@ def query(sql, params=()):
     except Exception as e:
         logging.exception("query error: %s", e)
         return []
+
 
 def scalar(sql, params=()):
     """Returns first column of first row, or 0."""
@@ -386,69 +495,74 @@ def scalar(sql, params=()):
         logging.exception("scalar error: %s", e)
         return 0
 
+
 def get_stats(hours=24):
     c = _cutoff(hours)
-    svc_rows = query("SELECT service, COUNT(*) n FROM attacks WHERE timestamp>? GROUP BY service", (c,))
+    svc_rows = query(
+        "SELECT service, COUNT(*) n FROM attacks"
+        " WHERE timestamp>? GROUP BY service", (c,)
+    )
     svc = {r["service"]: r["n"] for r in svc_rows}
 
-    # ISAPI hits — paths containing /ISAPI/
     isapi_hits = scalar(
-        "SELECT COUNT(*) FROM attacks WHERE timestamp>? AND path LIKE '%/ISAPI/%'", (c,)
+        "SELECT COUNT(*) FROM attacks"
+        " WHERE timestamp>? AND path LIKE '%/ISAPI/%'", (c,)
     )
-    # Decoy interactions — attackers who hit HIK-specific paths
     decoy_interactions = scalar("""
         SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?
         AND (
-            path LIKE '%/ISAPI/%' OR
-            path LIKE '%/doc/page/login%' OR
-            path LIKE '%/PSIA/%' OR
-            path LIKE '%/onvif/%' OR
-            path LIKE '%/SDK/%' OR
-            path LIKE '%/Streaming/channels%' OR
+            path LIKE '%/ISAPI/%'                OR
+            path LIKE '%/doc/page/login%'        OR
+            path LIKE '%/PSIA/%'                 OR
+            path LIKE '%/onvif/%'                OR
+            path LIKE '%/SDK/%'                  OR
+            path LIKE '%/Streaming/channels%'    OR
             path LIKE '%/Security/sessionLogin%' OR
             path LIKE '%/System/deviceInfo%'
         )
     """, (c,))
 
     return {
-        "total_attacks":        scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>?", (c,)),
-        "unique_ips":           scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?", (c,)),
-        "country_count":        scalar("SELECT COUNT(DISTINCT country) FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown','')", (c,)),
-        "botnet_count":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_botnet=1", (c,)),
-        "tor_count":            scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_tor=1", (c,)),
-        "vpn_count":            scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_vpn=1", (c,)),
-        "proxy_count":          scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_proxy=1", (c,)),
-        "scanner_count":        scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND scanner_tool!='' AND scanner_tool IS NOT NULL", (c,)),
-        "cve_exploits":         scalar("SELECT COUNT(*) FROM cve_attempts WHERE timestamp>?", (c,)),
-        "malware_downloads":    scalar("SELECT COUNT(*) FROM malware_urls WHERE timestamp>?", (c,)),
-        "honeytokens_triggered":scalar("SELECT COUNT(*) FROM honeytoken_triggers WHERE timestamp>?", (c,)),
-        "http_attacks":         svc.get("http", 0) + svc.get("https", 0) + svc.get("http_alt", 0),
-        "telnet_attacks":       svc.get("telnet", 0),
-        "ssh_attacks":          svc.get("ssh", 0),
-        "ftp_attacks":          svc.get("ftp", 0),
-        "rtsp_attacks":         svc.get("rtsp", 0),
-        "onvif_attacks":        svc.get("onvif", 0),
-        "mqtt_attacks":         svc.get("mqtt", 0),
-        "redis_attacks":        svc.get("redis", 0),
-        "mysql_attacks":        svc.get("mysql", 0),
-        "docker_attacks":       svc.get("docker", 0),
-        "memcached_attacks":    svc.get("memcached", 0),
-        "vnc_attacks":          svc.get("vnc", 0),
-        "rdp_attacks":          svc.get("rdp", 0),
-        "modbus_attacks":       svc.get("modbus", 0),
-        "smtp_attacks":         svc.get("smtp", 0),
-        "isapi_hits":           isapi_hits,
-        "decoy_interactions":   decoy_interactions,
-        "services":             svc,
+        "total_attacks":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>?", (c,)),
+        "unique_ips":            scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?", (c,)),
+        "country_count":         scalar("SELECT COUNT(DISTINCT country) FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown','')", (c,)),
+        "botnet_count":          scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_botnet=1", (c,)),
+        "tor_count":             scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_tor=1", (c,)),
+        "vpn_count":             scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_vpn=1", (c,)),
+        "proxy_count":           scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_proxy=1", (c,)),
+        "anonymized_count":      scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND anonymized=1", (c,)),
+        "scanner_count":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND scanner_tool!='' AND scanner_tool IS NOT NULL", (c,)),
+        "cve_exploits":          scalar("SELECT COUNT(*) FROM cve_attempts WHERE timestamp>?", (c,)),
+        "malware_downloads":     scalar("SELECT COUNT(*) FROM malware_urls WHERE timestamp>?", (c,)),
+        "honeytokens_triggered": scalar("SELECT COUNT(*) FROM honeytoken_triggers WHERE timestamp>?", (c,)),
+        "http_attacks":          svc.get("http", 0) + svc.get("https", 0) + svc.get("http_alt", 0),
+        "telnet_attacks":        svc.get("telnet",    0),
+        "ssh_attacks":           svc.get("ssh",       0),
+        "ftp_attacks":           svc.get("ftp",       0),
+        "rtsp_attacks":          svc.get("rtsp",      0),
+        "onvif_attacks":         svc.get("onvif",     0),
+        "mqtt_attacks":          svc.get("mqtt",      0),
+        "redis_attacks":         svc.get("redis",     0),
+        "mysql_attacks":         svc.get("mysql",     0),
+        "docker_attacks":        svc.get("docker",    0),
+        "memcached_attacks":     svc.get("memcached", 0),
+        "vnc_attacks":           svc.get("vnc",       0),
+        "rdp_attacks":           svc.get("rdp",       0),
+        "modbus_attacks":        svc.get("modbus",    0),
+        "smtp_attacks":          svc.get("smtp",      0),
+        "isapi_hits":            isapi_hits,
+        "decoy_interactions":    decoy_interactions,
+        "services":              svc,
     }
+
 
 def get_geo_data(hours=24):
     c = _cutoff(hours)
     return query("""
         SELECT latitude, longitude, country,
-               COUNT(*) cnt,
+               COUNT(*)       cnt,
                SUM(is_botnet) bots,
-               SUM(is_tor) tors,
+               SUM(is_tor)    tors,
                MAX(timestamp) last_seen
         FROM attacks
         WHERE timestamp>? AND latitude IS NOT NULL AND longitude IS NOT NULL
@@ -456,28 +570,32 @@ def get_geo_data(hours=24):
         ORDER BY cnt DESC
     """, (c,))
 
+
 def get_recent_attacks(hours=24, limit=200, service=None, threat=None):
-    c   = _cutoff(hours)
-    sql = "SELECT * FROM attacks WHERE timestamp>?"
+    c      = _cutoff(hours)
+    sql    = "SELECT * FROM attacks WHERE timestamp>?"
     params = [c]
     if service:
-        sql += " AND service=?"; params.append(service.lower())
+        sql += " AND service=?";      params.append(service.lower())
     if threat:
         sql += " AND threat_level=?"; params.append(threat)
     sql += " ORDER BY timestamp DESC LIMIT ?"
     params.append(limit)
     return query(sql, params)
 
-def get_timeline(hours=24):
-    c  = _cutoff(hours)
-    if hours <= 24:
-        fmt, trunc = "%Y-%m-%dT%H:00", "strftime('%Y-%m-%dT%H:00', timestamp)"
-        step = datetime.timedelta(hours=1)
-    else:
-        fmt, trunc = "%Y-%m-%d", "strftime('%Y-%m-%d', timestamp)"
-        step = datetime.timedelta(days=1)
 
-    rows = query(f"""
+def get_timeline(hours=24):
+    c = _cutoff(hours)
+    if hours <= 24:
+        fmt   = "%Y-%m-%dT%H:00"
+        trunc = "strftime('%Y-%m-%dT%H:00', timestamp)"
+        step  = datetime.timedelta(hours=1)
+    else:
+        fmt   = "%Y-%m-%d"
+        trunc = "strftime('%Y-%m-%d', timestamp)"
+        step  = datetime.timedelta(days=1)
+
+    rows    = query(f"""
         SELECT {trunc} bucket,
                COUNT(*) total,
                SUM(is_botnet) botnets,
@@ -485,145 +603,188 @@ def get_timeline(hours=24):
         FROM attacks WHERE timestamp>?
         GROUP BY bucket ORDER BY bucket
     """, (c,))
-
-    # Fill missing buckets so charts always render
-    start = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
-    buckets = {}
-    for r in rows:
-        buckets[r["bucket"]] = {"bucket": r["bucket"], "total": r["total"], "botnets": r["botnets"], "cves": r["cves"]}
-
-    filled = []
-    cur = start
+    buckets = {r["bucket"]: r for r in rows}
+    filled  = []
+    cur     = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
     while cur <= datetime.datetime.utcnow():
         b = cur.strftime(fmt)
-        filled.append(buckets.get(b, {"bucket": b, "total": 0, "botnets": 0, "cves": 0}))
+        filled.append(buckets.get(
+            b, {"bucket": b, "total": 0, "botnets": 0, "cves": 0}
+        ))
         cur += step
     return filled
+
 
 def get_top_ips(hours=24, limit=20):
     c = _cutoff(hours)
     return query("""
-        SELECT source_ip, country, COUNT(*) cnt,
-               SUM(is_botnet) bots, SUM(is_tor) tors,
-               MAX(timestamp) last_seen,
+        SELECT source_ip,
+               country,
+               COUNT(*)                       cnt,
+               SUM(is_botnet)                 bots,
+               SUM(is_tor)                    tors,
+               SUM(is_vpn)                    vpns,
+               MAX(timestamp)                 last_seen,
                GROUP_CONCAT(DISTINCT service) services,
-               MAX(scanner_tool) scanner_tool
+               MAX(scanner_tool)              scanner_tool,
+               MAX(vpn_provider)              vpn_provider,
+               MAX(anonymization_method)      anonymization_method
         FROM attacks WHERE timestamp>?
         GROUP BY source_ip ORDER BY cnt DESC LIMIT ?
     """, (c, limit))
+
 
 def get_top_countries(hours=24, limit=20):
     c = _cutoff(hours)
     return query("""
         SELECT country, COUNT(*) cnt, COUNT(DISTINCT source_ip) ips
-        FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown', '')
+        FROM attacks
+        WHERE timestamp>? AND country NOT IN ('Unknown','')
         GROUP BY country ORDER BY cnt DESC LIMIT ?
     """, (c, limit))
+
 
 def get_top_credentials(hours=168, limit=30):
     c = _cutoff(hours)
     return query("""
         SELECT username, password, COUNT(*) cnt, SUM(is_botnet) bots
-        FROM attacks WHERE timestamp>? AND username!='' AND username IS NOT NULL
+        FROM attacks
+        WHERE timestamp>? AND username!='' AND username IS NOT NULL
         GROUP BY username, password ORDER BY cnt DESC LIMIT ?
     """, (c, limit))
+
 
 def get_cve_data(hours=168):
     c = _cutoff(hours)
     return query("""
         SELECT cve_id, cve_name, severity, service,
-               COUNT(*) cnt, COUNT(DISTINCT source_ip) unique_ips,
+               COUNT(*) cnt,
+               COUNT(DISTINCT source_ip) unique_ips,
                MAX(timestamp) last_seen
         FROM cve_attempts WHERE timestamp>?
         GROUP BY cve_id ORDER BY cnt DESC
     """, (c,))
 
+
 def get_malware_urls(hours=168):
     c = _cutoff(hours)
     return query("""
-        SELECT url, family, arch, COUNT(*) cnt,
+        SELECT url, family, arch,
+               COUNT(*) cnt,
                COUNT(DISTINCT source_ip) unique_ips,
                MAX(timestamp) last_seen
         FROM malware_urls WHERE timestamp>?
         GROUP BY url ORDER BY cnt DESC LIMIT 50
     """, (c,))
 
+
 def get_honeytoken_data(hours=168):
-    c = _cutoff(hours)
-    rows = query("SELECT * FROM honeytoken_triggers WHERE timestamp>? ORDER BY timestamp DESC", (c,))
+    c    = _cutoff(hours)
+    rows = query(
+        "SELECT * FROM honeytoken_triggers"
+        " WHERE timestamp>? ORDER BY timestamp DESC", (c,)
+    )
     from collections import Counter
     by_file = Counter(r["token_value"] for r in rows)
     return {
-        "total":       len(rows),
-        "unique_ips":  len({r["source_ip"] for r in rows}),
-        "by_file":     [{"path": p, "count": n} for p, n in by_file.most_common()],
-        "recent":      rows[:30],
+        "total":      len(rows),
+        "unique_ips": len({r["source_ip"] for r in rows}),
+        "by_file":    [{"path": p, "count": n}
+                       for p, n in by_file.most_common()],
+        "recent":     rows[:30],
     }
 
-def get_alerts(hours=24, limit=25):   # was hours=1 — too short
-    c = _cutoff(hours)
+
+def get_alerts(hours=24, limit=25):
+    c      = _cutoff(hours)
     alerts = []
 
-    for r in query("SELECT * FROM cve_attempts WHERE timestamp>? ORDER BY timestamp DESC LIMIT 8", (c,)):
+    for r in query("SELECT * FROM cve_attempts WHERE timestamp>?"
+                   " ORDER BY timestamp DESC LIMIT 8", (c,)):
         alerts.append({
-            "timestamp": r["timestamp"],
-            "type": "CVE_EXPLOIT",
-            "severity": "critical",
-            "ip": r["source_ip"],
-            "country": r["country"],
-            "message": f"{r['cve_id']} — {r['cve_name']} from {r['source_ip']}",
+            "timestamp": r["timestamp"], "type": "CVE_EXPLOIT",
+            "severity":  "critical",
+            "ip":        r["source_ip"], "country": r["country"],
+            "message":   f"{r['cve_id']} — {r['cve_name']} from {r['source_ip']}",
         })
-    for r in query("SELECT * FROM honeytoken_triggers WHERE timestamp>? ORDER BY timestamp DESC LIMIT 8", (c,)):
+
+    for r in query("SELECT * FROM honeytoken_triggers WHERE timestamp>?"
+                   " ORDER BY timestamp DESC LIMIT 8", (c,)):
         alerts.append({
-            "timestamp": r["timestamp"],
-            "type": "HONEYTOKEN",
-            "severity": "critical",
-            "ip": r["source_ip"],
-            "country": r["country"],
-            "message": f"Honeytoken [{r['token_type']}] {r['token_value']} — {r['source_ip']} ({r['country']})",
+            "timestamp": r["timestamp"], "type": "HONEYTOKEN",
+            "severity":  "critical",
+            "ip":        r["source_ip"], "country": r["country"],
+            "message":   (f"Honeytoken [{r['token_type']}] {r['token_value']}"
+                          f" — {r['source_ip']} ({r['country']})"),
         })
-    for r in query("SELECT * FROM attacks WHERE timestamp>? AND is_botnet=1 ORDER BY timestamp DESC LIMIT 8", (c,)):
+
+    for r in query("SELECT * FROM attacks WHERE timestamp>? AND is_botnet=1"
+                   " ORDER BY timestamp DESC LIMIT 8", (c,)):
         alerts.append({
-            "timestamp": r["timestamp"],
-            "type": "BOTNET",
-            "severity": "high",
-            "ip": r["source_ip"],
-            "country": r["country"],
-            "message": f"Botnet cred {r['username']}/{r['password']} — {r['source_ip']} ({r['country']})",
+            "timestamp": r["timestamp"], "type": "BOTNET",
+            "severity":  "high",
+            "ip":        r["source_ip"], "country": r["country"],
+            "message":   (f"Botnet cred {r['username']}/{r['password']}"
+                          f" — {r['source_ip']} ({r['country']})"),
         })
-    for r in query("SELECT * FROM attacks WHERE timestamp>? AND service='docker' ORDER BY timestamp DESC LIMIT 5", (c,)):
+
+    for r in query("SELECT * FROM attacks WHERE timestamp>? AND service='docker'"
+                   " ORDER BY timestamp DESC LIMIT 5", (c,)):
         alerts.append({
-            "timestamp": r["timestamp"],
-            "type": "DOCKER",
-            "severity": "critical",
-            "ip": r["source_ip"],
-            "country": r["country"],
-            "message": f"Docker API escape attempt — {r['source_ip']} ({r['country']}) path: {r['path'][:60]}",
+            "timestamp": r["timestamp"], "type": "DOCKER",
+            "severity":  "critical",
+            "ip":        r["source_ip"], "country": r["country"],
+            "message":   (f"Docker API escape — {r['source_ip']}"
+                          f" ({r['country']}) path: {r['path'][:60]}"),
+        })
+
+    for r in query("SELECT * FROM attacks WHERE timestamp>? AND is_tor=1"
+                   " ORDER BY timestamp DESC LIMIT 5", (c,)):
+        alerts.append({
+            "timestamp": r["timestamp"], "type": "TOR",
+            "severity":  "high",
+            "ip":        r["source_ip"], "country": r["country"],
+            "message":   (f"Tor exit node — {r['source_ip']}"
+                          f" ({r['country']}) exit: "
+                          f"{r.get('tor_exit_ip') or 'unknown'}"),
+        })
+
+    for r in query("SELECT * FROM attacks WHERE timestamp>? AND is_vpn=1"
+                   " ORDER BY timestamp DESC LIMIT 5", (c,)):
+        provider = r.get("vpn_provider") or "unknown provider"
+        alerts.append({
+            "timestamp": r["timestamp"], "type": "VPN",
+            "severity":  "medium",
+            "ip":        r["source_ip"], "country": r["country"],
+            "message":   (f"VPN attack ({provider}) — {r['source_ip']}"
+                          f" ({r['country']})"),
         })
 
     alerts.sort(key=lambda x: x["timestamp"], reverse=True)
     return alerts[:limit]
 
+
 def get_service_breakdown(hours=24):
     c = _cutoff(hours)
     return query("""
-        SELECT service, dest_port, COUNT(*) cnt,
+        SELECT service, dest_port,
+               COUNT(*) cnt,
                COUNT(DISTINCT source_ip) unique_ips,
-               SUM(is_botnet) bots,
-               MAX(timestamp) last_seen
+               SUM(is_botnet)  bots,
+               MAX(timestamp)  last_seen
         FROM attacks WHERE timestamp>?
         GROUP BY service ORDER BY cnt DESC
     """, (c,))
 
+
 def get_hourly_heatmap():
-    """Return 24 attack counts (one per hour-of-day, UTC) over last 7 days."""
+    """24 attack counts (one per UTC hour-of-day) over last 7 days."""
     rows = query("""
         SELECT CAST(strftime('%H', timestamp) AS INTEGER) AS hour,
                COUNT(*) cnt
         FROM attacks
         WHERE timestamp > datetime('now', '-7 days')
-        GROUP BY hour
-        ORDER BY hour
+        GROUP BY hour ORDER BY hour
     """)
     bucket = [0] * 24
     for r in rows:
@@ -632,17 +793,18 @@ def get_hourly_heatmap():
             bucket[h] = r["cnt"]
     return bucket
 
+
 def get_botnet_distribution():
-    """Classify botnet sessions into families using command heuristics."""
     rows = query("""
         SELECT commands FROM attacks
         WHERE is_botnet=1 AND commands!='[]'
         AND timestamp > datetime('now', '-7 days')
     """)
     import json as _json
-    families = {"Mirai": 0, "Gafgyt": 0, "Sora": 0, "Muhstik": 0, "Mozi": 0, "Other": 0}
+    families   = {"Mirai": 0, "Gafgyt": 0, "Sora": 0,
+                  "Muhstik": 0, "Mozi": 0, "Other": 0}
     indicators = {
-        "Mirai":   ["busybox", "/bin/busybox", "cat /proc/mounts", "echo -ne", "MIRAI"],
+        "Mirai":   ["busybox", "/bin/busybox", "cat /proc/mounts", "MIRAI"],
         "Gafgyt":  ["HTTPFLOOD", "UDPFLOOD", "PING", "HOLD", "tftp -g"],
         "Sora":    ["SORA", "/bin/busybox SORA"],
         "Muhstik": ["muhstik", "JOIN #", "irc"],
@@ -654,7 +816,7 @@ def get_botnet_distribution():
             cmds = _json.loads(r["commands"])
         except Exception:
             cmds = []
-        s = " ".join(cmds).lower()
+        s       = " ".join(cmds).lower()
         matched = False
         for fam, kws in indicators.items():
             if any(kw.lower() in s for kw in kws):
@@ -665,15 +827,17 @@ def get_botnet_distribution():
             families["Other"] += 1
         total += 1
 
-    # If no command data, at least count botnet hits by credential
     if total == 0:
-        cnt = scalar("SELECT COUNT(*) FROM attacks WHERE is_botnet=1 AND timestamp > datetime('now','-7 days')")
+        cnt = scalar(
+            "SELECT COUNT(*) FROM attacks"
+            " WHERE is_botnet=1 AND timestamp > datetime('now','-7 days')"
+        )
         families["Other"] = cnt
+
     return {"families": families, "total": sum(families.values())}
 
+
 def get_report_data(hours=24):
-    c  = _cutoff(hours)
-    t  = get_timeline(hours)
     return {
         "generated_at":  datetime.datetime.utcnow().isoformat(),
         "period_hours":  hours,
@@ -681,6 +845,6 @@ def get_report_data(hours=24):
         "top_ips":       get_top_ips(hours, 10),
         "top_countries": get_top_countries(hours, 10),
         "cve_data":      get_cve_data(hours),
-        "timeline":      t,
+        "timeline":      get_timeline(hours),
         "services":      get_service_breakdown(hours),
     }
