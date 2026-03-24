@@ -20,6 +20,7 @@ import onvif_service
 import ssh_service
 import ftp_service
 import vnc_service
+import mqtt_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips   = set()
@@ -1265,59 +1266,18 @@ def handle_onvif(conn, addr):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def handle_mqtt(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-    username = ""
-
-    try:
-        conn.settimeout(10)
-        pkt = conn.recv(256)
-        if not pkt: return
-
-        if (pkt[0] & 0xF0) == 0x10:
-            try:
-                proto_len = int.from_bytes(pkt[4:6], "big")
-                idx = 2 + 2 + proto_len + 1 + 1 + 2
-                flags = pkt[9] if len(pkt) > 9 else 0
-                if idx + 2 <= len(pkt):
-                    cid_len = int.from_bytes(pkt[idx:idx+2], "big")
-                    idx += 2 + cid_len
-                if (flags & 0x80) and idx + 2 <= len(pkt):
-                    ulen = int.from_bytes(pkt[idx:idx+2], "big")
-                    username = pkt[idx+2:idx+2+ulen].decode(errors="ignore")
-            except Exception:
-                pass
-
-            conn.sendall(b"\x20\x02\x00\x00")  # CONNACK accepted
-            db.log_attack({
-                "timestamp":   _ts(), "source_ip": ip, "dest_port": 1883,
-                "service":     "mqtt", "protocol": "TCP",
-                "username":    username,
-                "country":     gdata["country"], "city": gdata["city"],
-                "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-                "attack_type": "iot_protocol", "threat_level": "medium",
-                **_intel_fields(gdata),
-            })
-            _new_ip_alert(ip, gdata["country"], gdata["city"], "mqtt")
-
-            for _ in range(15):
-                try:
-                    conn.settimeout(8)
-                    p = conn.recv(512)
-                    if not p: break
-                    t = (p[0] & 0xF0) >> 4
-                    if t == 12:   conn.sendall(b"\xd0\x00")
-                    elif t == 8:  conn.sendall(b"\x90\x03\x00\x01\x00")
-                    elif t == 14: break
-                except: break
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
+    threading.Thread(
+        target=mqtt_service.handle_mqtt,
+        args=(conn, addr),
+        kwargs=dict(
+            log_attack        = db.log_attack,      # required
+            server_port       = 1883,               # critical: must be the actual server port
+            geoip_func        = _geoip,             # optional
+            intel_fields_func = _intel_fields,      # optional
+            new_ip_alert      = _new_ip_alert,      # optional
+        ),
+        daemon=True,
+    ).start()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
