@@ -70,6 +70,7 @@ SERVICE_PORTS = {
     "vnc":       5900,
     "rdp":       3389,
     "modbus":    502,
+    "coap":      5683,  # ← Added CoAP protocol port
 }
 
 # ─── Threat Intelligence ──────────────────────────────────────────────────────

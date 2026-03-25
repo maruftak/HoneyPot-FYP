@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 honeyPot — Core Engine
-Emulates a Hikvision IP camera. 17 services. Real logging. Telegram alerts.
+Emulates a Hikvision IP camera. 18 services. Real logging. Telegram alerts.
 
 Run as root:  sudo python3 honeypot.py
 """
@@ -21,6 +21,7 @@ import ssh_service
 import ftp_service
 import vnc_service
 import mqtt_service
+import coap_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips   = set()
@@ -38,9 +39,9 @@ COUNTERS = {
     "cves":        0,
     "malware":     0,
     "honeytokens": 0,
-    "tor":         0,   # NEW: connections from Tor exit nodes
-    "vpn":         0,   # NEW: connections from known VPN providers
-    "proxy":       0,   # NEW: connections from proxy/datacenter IPs
+    "tor":         0,
+    "vpn":         0,
+    "proxy":       0,
 }
 
 # ─── Randomisation helpers ────────────────────────────────────────────────────
@@ -87,8 +88,6 @@ def _is_rate_limited(ip):
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  TOR EXIT NODE DETECTION
-#  Live list fetched from torproject.org, refreshed every 6 hours.
-#  Used by _geoip() so every single service gets Tor detection automatically.
 # ══════════════════════════════════════════════════════════════════════════════
 
 _tor_exit_nodes: set = set()
@@ -150,14 +149,9 @@ def _is_tor_exit(ip: str) -> bool:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  VPN / PROXY / DATACENTER PROVIDER IDENTIFICATION
-#  Matches ASN org/ISP strings against known provider keywords.
-#  Returns a human-readable provider name or None.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Each key is the display name; value is a list of lowercase substrings
-# to match against the combined org + asn_org + isp string.
 _VPN_SIGNATURES: dict = {
-    # ── Commercial VPN providers ─────────────────────────────────────────────
     "NordVPN":               ["nordvpn", "nord vpn", "tefincom"],
     "ExpressVPN":            ["expressvpn", "express vpn", "kape technologies"],
     "Mullvad":               ["mullvad", "amagicom"],
@@ -177,7 +171,6 @@ _VPN_SIGNATURES: dict = {
     "IVPN":                  ["ivpn"],
     "VyprVPN":               ["vyprvpn", "golden frog"],
     "Private VPN":           ["privatevpn", "privax"],
-    # ── Datacenter / hosting providers (common attacker infrastructure) ───────
     "AWS":                   ["amazon", "aws", "amazon.com", "amazon technologies"],
     "DigitalOcean":          ["digitalocean"],
     "Linode/Akamai":         ["linode", "akamai"],
@@ -199,7 +192,6 @@ _VPN_SIGNATURES: dict = {
     "DataPacket":            ["datapacket"],
 }
 
-# MaxMind connection_type / user_type → human label
 _PROXY_TYPE_LABELS: dict = {
     "corporate":   "Corporate Proxy",
     "residential": "Residential Proxy",
@@ -212,7 +204,6 @@ _PROXY_TYPE_LABELS: dict = {
 
 
 def _identify_vpn_provider(org: str, asn_org: str = "", isp: str = "") -> str | None:
-    """Return the best-match VPN/datacenter provider name, or None."""
     combined = " ".join(filter(None, [org, asn_org, isp])).lower()
     if not combined.strip():
         return None
@@ -223,29 +214,19 @@ def _identify_vpn_provider(org: str, asn_org: str = "", isp: str = "") -> str | 
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  ENRICHED GEOIP  ← single entry point for ALL 17 services
-#
-#  Every service calls _geoip(ip).  The returned dict always contains:
-#    Standard geo fields:  country, city, latitude, longitude, asn, org, isp
-#    Anonymization flags:  is_tor, is_vpn, is_proxy
-#    Detail fields:        tor_exit_node, tor_exit_ip
-#                          vpn_provider, vpn_exit_country
-#                          proxy_type
-#    Aggregate:            anonymized (bool), anonymization_method (str)
+#  ENRICHED GEOIP
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _geoip(ip: str) -> dict:
     g: dict = {
-        # Geo
-        "country":   "Unknown",
-        "city":      "",
-        "latitude":  0.0,
-        "longitude": 0.0,
-        "asn":       None,
-        "asn_org":   None,
-        "org":       None,
-        "isp":       None,
-        # Anonymization (defaults — overwritten below for real IPs)
+        "country":              "Unknown",
+        "city":                 "",
+        "latitude":             0.0,
+        "longitude":            0.0,
+        "asn":                  None,
+        "asn_org":              None,
+        "org":                  None,
+        "isp":                  None,
         "is_vpn":               False,
         "is_tor":               False,
         "is_proxy":             False,
@@ -260,7 +241,6 @@ def _geoip(ip: str) -> dict:
     }
 
     if not ip.startswith(("127.", "10.", "192.168.", "::1")):
-        # ── Standard geo lookup ───────────────────────────────────────────────
         try:
             g.update(geo.lookup(ip) or {})
         except Exception:
@@ -270,30 +250,23 @@ def _geoip(ip: str) -> dict:
                 g.update(geo.asn_lookup(ip) or {})
         except Exception:
             pass
-        # ── MaxMind privacy / anonymization data ──────────────────────────────
         try:
             if hasattr(geo, "privacy_lookup"):
                 priv = geo.privacy_lookup(ip) or {}
                 g.update(priv)
                 g["is_vpn"]   = bool(priv.get("is_vpn"))
-                g["is_tor"]   = bool(
-                    priv.get("is_tor") or priv.get("is_tor_exit_node")
-                )
-                g["is_proxy"] = bool(
-                    priv.get("is_proxy") or priv.get("is_anonymous_proxy")
-                )
+                g["is_tor"]   = bool(priv.get("is_tor") or priv.get("is_tor_exit_node"))
+                g["is_proxy"] = bool(priv.get("is_proxy") or priv.get("is_anonymous_proxy"))
                 raw_ptype     = priv.get("connection_type") or priv.get("user_type") or ""
                 g["proxy_type"] = _PROXY_TYPE_LABELS.get(raw_ptype.lower(), raw_ptype or None)
         except Exception:
             pass
 
-        # ── Tor cross-reference against live exit list ────────────────────────
         if g["is_tor"] or _is_tor_exit(ip):
             g["is_tor"]        = True
             g["tor_exit_node"] = True
             g["tor_exit_ip"]   = ip
 
-        # ── VPN provider identification ───────────────────────────────────────
         vpn_provider = _identify_vpn_provider(
             g.get("org", "") or "",
             g.get("asn_org", "") or "",
@@ -302,7 +275,6 @@ def _geoip(ip: str) -> dict:
         g["vpn_provider"]     = vpn_provider
         g["vpn_exit_country"] = g.get("country") if g["is_vpn"] else None
 
-    # ── Human-readable anonymization summary ─────────────────────────────────
     methods = []
     if g["is_tor"]:
         methods.append("Tor")
@@ -313,54 +285,43 @@ def _geoip(ip: str) -> dict:
         pt = g.get("proxy_type")
         methods.append(f"Proxy ({pt})" if pt else "Proxy")
 
-    g["anonymized"]            = bool(methods)
-    g["anonymization_method"]  = " + ".join(methods) if methods else None
+    g["anonymized"]           = bool(methods)
+    g["anonymization_method"] = " + ".join(methods) if methods else None
 
     return g
 
 
 def _intel_fields(g: dict) -> dict:
-    """
-    Flatten all intelligence + anonymization fields into a flat dict.
-    Merged into every db.log_attack() call across all services.
-    """
     g = g or {}
     return {
-        # Network identity
         "asn":                  g.get("asn") or g.get("asn_org") or g.get("org"),
         "org":                  g.get("org") or g.get("isp") or g.get("asn_org"),
-        # Anonymization flags
         "is_vpn":               g.get("is_vpn", False),
         "is_tor":               g.get("is_tor", False),
         "is_proxy":             g.get("is_proxy", False) or g.get("proxy", False),
-        # VPN detail
         "vpn_provider":         g.get("vpn_provider"),
         "vpn_exit_country":     g.get("vpn_exit_country"),
-        # Tor detail
         "tor_exit_node":        g.get("tor_exit_node", False),
         "tor_exit_ip":          g.get("tor_exit_ip"),
-        # Proxy detail
         "proxy_type":           g.get("proxy_type"),
-        # Convenience aggregate
         "anonymized":           g.get("anonymized", False),
         "anonymization_method": g.get("anonymization_method"),
     }
 
 
-# ─── New-IP alert (fires once per unique IP) ──────────────────────────────────
+# ─── New-IP alert ─────────────────────────────────────────────────────────────
 def _new_ip_alert(ip: str, country: str, city: str, service: str):
     if ip not in _seen_ips:
         _seen_ips.add(ip)
         alerts.new_attacker(ip, country, city, service)
 
-        # Fire anonymization-specific Telegram alerts
         gdata = _geoip(ip)
         if gdata.get("is_tor"):
             _inc("tor")
             try:
                 alerts.tor_attacker(ip, country, service, gdata.get("tor_exit_ip"))
             except AttributeError:
-                pass   # alerts.tor_attacker not yet added — safe to skip
+                pass
         elif gdata.get("is_vpn"):
             _inc("vpn")
             try:
@@ -475,7 +436,7 @@ def _detect_botnet_family(cmd_str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TELNET (port 23) — full fake BusyBox shell
+#  TELNET (port 23)
 # ══════════════════════════════════════════════════════════════════════════════
 
 _TELNET_BANNERS = [
@@ -520,7 +481,7 @@ def handle_telnet(conn, addr):
                 break
             password = praw.strip().decode(errors="ignore") if praw else ""
 
-            is_bot        = _check_botnet(username, password)
+            is_bot         = _check_botnet(username, password)
             is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
             login_attempts.append({"username": username, "password": password,
                                     "is_botnet": is_bot, "attempt": attempt + 1})
@@ -612,14 +573,14 @@ def handle_telnet(conn, addr):
     finally:
         if all_commands or login_attempts:
             db.log_attack({
-                "timestamp":   _ts(), "source_ip": ip, "source_port": port,
-                "dest_port":   23, "service": "telnet", "protocol": "TCP",
-                "country":     gdata["country"], "city": gdata["city"],
-                "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-                "attack_type": "session_complete",
+                "timestamp":    _ts(), "source_ip": ip, "source_port": port,
+                "dest_port":    23, "service": "telnet", "protocol": "TCP",
+                "country":      gdata["country"], "city": gdata["city"],
+                "latitude":     gdata["latitude"], "longitude": gdata["longitude"],
+                "attack_type":  "session_complete",
                 "threat_level": "high" if all_commands else "medium",
-                "session_id":  sid, "commands": all_commands,
-                "is_botnet":   any(la["is_botnet"] for la in login_attempts),
+                "session_id":   sid, "commands": all_commands,
+                "is_botnet":    any(la["is_botnet"] for la in login_attempts),
                 **_intel_fields(gdata),
             })
         try: conn.close()
@@ -627,7 +588,7 @@ def handle_telnet(conn, addr):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SSH (port 22)
+#  SSH (port 2222)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ssh_log_attack(ip, port, event_type, details):
@@ -1040,7 +1001,6 @@ def handle_http(conn, addr, https=False):
         attack_patterns = []
         threat_level = "low"
 
-        # Attack pattern detection
         if any(x in full_path for x in ["../","..\\","%2e%2e","....//","..;/"]):
             attack_patterns.append("directory_traversal"); threat_level = "high"
         if any(x in full_path or x in post_body for x in ["|",";","`","$","&&","||","\n","$(","${"]):
@@ -1127,7 +1087,6 @@ def handle_http(conn, addr, https=False):
         })
         _new_ip_alert(ip, gdata["country"], gdata["city"], svc)
 
-        # Response routing
         if path in HTTP_ROUTES:
             status, ct, body = HTTP_ROUTES[path]
             if method == "POST" and path in ("/web/login","/doc/page/login.asp","/admin","/cgi-bin/admin/param.cgi"):
@@ -1270,11 +1229,11 @@ def handle_mqtt(conn, addr):
         target=mqtt_service.handle_mqtt,
         args=(conn, addr),
         kwargs=dict(
-            log_attack        = db.log_attack,      # required
-            server_port       = 1883,               # critical: must be the actual server port
-            geoip_func        = _geoip,             # optional
-            intel_fields_func = _intel_fields,      # optional
-            new_ip_alert      = _new_ip_alert,      # optional
+            log_attack        = db.log_attack,
+            server_port       = 1883,
+            geoip_func        = _geoip,
+            intel_fields_func = _intel_fields,
+            new_ip_alert      = _new_ip_alert,
         ),
         daemon=True,
     ).start()
@@ -1544,7 +1503,6 @@ def handle_rdp(conn, addr):
         pkt = conn.recv(1024)
         if not pkt: return
 
-        # X.224 Connection Confirm
         conn.sendall(
             b"\x03\x00\x00\x13"
             b"\x0e\xd0\x00\x00"
@@ -1604,7 +1562,6 @@ def handle_modbus(conn, addr):
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "modbus")
 
-            # Modbus exception: ILLEGAL_FUNCTION
             resp = transaction_id + b"\x00\x00\x00\x03\x01" + bytes([function_code | 0x80, 0x01])
             conn.sendall(resp)
 
@@ -1616,7 +1573,41 @@ def handle_modbus(conn, addr):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SERVICE LAUNCHER
+#  CoAP (port 5683 UDP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_coap(srv_sock, addr, data=b""):
+    """
+    CoAP UDP handler.
+
+    Called by _start_udp with:
+      srv_sock — the shared UDP socket (only used for sendto)
+      addr     — (ip, port) of the sender
+      data     — the datagram already read by recvfrom in _start_udp
+
+    We never call recv/recvfrom or settimeout on srv_sock here.
+    """
+    ip, _ = addr
+    if _is_rate_limited(ip):
+        return
+    _inc("sessions")
+    try:
+        coap_service.handle_coap(
+            srv_sock, addr,
+            data=data,
+            log_attack            = db.log_attack,
+            geoip_func            = _geoip,
+            intel_fields_func     = _intel_fields,
+            new_ip_alert          = _new_ip_alert,
+            check_honeytoken_file = _check_honeytoken_file,
+            inc_counter           = _inc,
+        )
+    except Exception as e:
+        print(f"[!] CoAP handler error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SERVICE LAUNCHERS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _start_tcp(handler, port, name):
@@ -1638,28 +1629,60 @@ def _start_tcp(handler, port, name):
     threading.Thread(target=_inner, daemon=True, name=name).start()
 
 
+def _start_udp(handler, port, name):
+    """
+    UDP listener — used for CoAP and any future UDP services.
+
+    The key rule: recvfrom is called HERE in the loop, and the datagram
+    bytes are passed to the handler thread.  The handler must never call
+    recv/recvfrom or settimeout on the shared socket.
+    """
+    def _inner():
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind((config.HONEYPOT_HOST, port))
+            print(f"  [+] {name:<22} :{port} (UDP)")
+            while True:
+                try:
+                    data, addr = srv.recvfrom(4096)          # blocking, no timeout
+                    threading.Thread(
+                        target=handler,
+                        args=(srv, addr, data),              # ← data passed here
+                        daemon=True,
+                    ).start()
+                except Exception as e:
+                    print(f"  [!] {name} recvfrom: {e}")
+        except OSError as e:
+            print(f"  [✗] {name:<22} :{port} (UDP) — {e}")
+    threading.Thread(target=_inner, daemon=True, name=name).start()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SERVICES MAP
+#  Each entry: (handler, port, name, protocol)
+#  protocol = "tcp" | "udp"
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SERVICES = [
-    (handle_telnet,                     config.SERVICE_PORTS["telnet"],    "Telnet"),
-    (handle_ssh,                        2222,                             "SSH"),  # Changed from config.SERVICE_PORTS["ssh"] to 2222
-    (handle_ftp,                        config.SERVICE_PORTS["ftp"],       "FTP"),
-    (handle_smtp,                       config.SERVICE_PORTS["smtp"],      "SMTP"),
-    (handle_http,                       config.SERVICE_PORTS["http"],      "HTTP"),
-    (lambda c,a: handle_http(c,a,True), config.SERVICE_PORTS["https"],     "HTTPS"),
-    (handle_http,                       config.SERVICE_PORTS["http_alt"],  "HTTP-Alt"),
-    (handle_rtsp,                       config.SERVICE_PORTS["rtsp"],      "RTSP"),
-    (handle_onvif,                      config.SERVICE_PORTS["onvif"],     "ONVIF"),
-    (handle_mqtt,                       config.SERVICE_PORTS["mqtt"],      "MQTT"),
-    (handle_redis,                      config.SERVICE_PORTS["redis"],     "Redis"),
-    (handle_mysql,                      config.SERVICE_PORTS["mysql"],     "MySQL"),
-    (handle_docker,                     config.SERVICE_PORTS["docker"],    "Docker API"),
-    (handle_memcached,                  config.SERVICE_PORTS["memcached"], "Memcached"),
-    (handle_vnc,                        config.SERVICE_PORTS["vnc"],       "VNC"),
-    (handle_rdp,                        config.SERVICE_PORTS["rdp"],       "RDP"),
-    (handle_modbus,                     config.SERVICE_PORTS["modbus"],    "Modbus/ICS"),
+    (handle_telnet,                     config.SERVICE_PORTS["telnet"],    "Telnet",      "tcp"),
+    (handle_ssh,                        config.SERVICE_PORTS["ssh"],       "SSH",         "tcp"),
+    (handle_ftp,                        config.SERVICE_PORTS["ftp"],       "FTP",         "tcp"),
+    (handle_smtp,                       config.SERVICE_PORTS["smtp"],      "SMTP",        "tcp"),
+    (handle_http,                       config.SERVICE_PORTS["http"],      "HTTP",        "tcp"),
+    (lambda c,a: handle_http(c,a,True), config.SERVICE_PORTS["https"],     "HTTPS",       "tcp"),
+    (handle_http,                       config.SERVICE_PORTS["http_alt"],  "HTTP-Alt",    "tcp"),
+    (handle_rtsp,                       config.SERVICE_PORTS["rtsp"],      "RTSP",        "tcp"),
+    (handle_onvif,                      config.SERVICE_PORTS["onvif"],     "ONVIF",       "tcp"),
+    (handle_mqtt,                       config.SERVICE_PORTS["mqtt"],      "MQTT",        "tcp"),
+    (handle_redis,                      config.SERVICE_PORTS["redis"],     "Redis",       "tcp"),
+    (handle_mysql,                      config.SERVICE_PORTS["mysql"],     "MySQL",       "tcp"),
+    (handle_docker,                     config.SERVICE_PORTS["docker"],    "Docker API",  "tcp"),
+    (handle_memcached,                  config.SERVICE_PORTS["memcached"], "Memcached",   "tcp"),
+    (handle_vnc,                        config.SERVICE_PORTS["vnc"],       "VNC",         "tcp"),
+    (handle_rdp,                        config.SERVICE_PORTS["rdp"],       "RDP",         "tcp"),
+    (handle_modbus,                     config.SERVICE_PORTS["modbus"],    "Modbus/ICS",  "tcp"),
+    (handle_coap,                       config.SERVICE_PORTS["coap"],      "CoAP",        "udp"),
 ]
 
 
@@ -1680,17 +1703,18 @@ def main():
 ║  GeoIP:    {'ENABLED ✓' if os.path.exists(config.GEOIP_DB) else 'disabled (GeoLite2-City.mmdb missing)'}                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝""")
 
-    # ── Load Tor exit list + start background refresh ─────────────────────────
     print("\n[*] Loading threat intelligence feeds:")
     _load_tor_exit_nodes()
     threading.Thread(target=_tor_refresh_worker, daemon=True, name="TorExitRefresh").start()
 
-    # ── Start all services ────────────────────────────────────────────────────
     print("\n[*] Starting services:")
     active = 0
-    for handler, port, name in _SERVICES:
+    for handler, port, name, proto in _SERVICES:
         if port:
-            _start_tcp(handler, port, name)
+            if proto == "udp":
+                _start_udp(handler, port, name)
+            else:
+                _start_tcp(handler, port, name)
             active += 1
             time.sleep(0.05)
 
