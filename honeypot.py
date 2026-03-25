@@ -23,6 +23,7 @@ import vnc_service
 import mqtt_service
 import coap_service
 import hik_sdk_service
+import tftp_service
 import http_service          # ← new modular HTTP handler
 
 # ─── State ────────────────────────────────────────────────────────────────────
@@ -842,217 +843,6 @@ def handle_mqtt(conn, addr):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Redis (port 6379)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def handle_redis(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        for _ in range(25):
-            conn.settimeout(15)
-            try:
-                data = conn.recv(1024)
-            except socket.timeout:
-                break
-            if not data: break
-            raw = data.decode(errors="ignore").strip()
-            cmd = raw.upper().split()[0] if raw.split() else ""
-
-            if cmd == "CONFIG" and "SET" in raw.upper():
-                _inc("cves")
-                alerts.redis_rce(ip, gdata["country"], raw[:100])
-                db.log_cve(_ts(), ip, "REDIS-RCE", "Redis CONFIG SET RCE", "critical",
-                           "redis", raw[:500], gdata["country"])
-                db.log_attack({
-                    "timestamp": _ts(), "source_ip": ip, "dest_port": 6379,
-                    "service": "redis", "payload": raw[:200], "cve_id": "REDIS-RCE",
-                    "attack_type": "rce_attempt", "threat_level": "critical",
-                    "country": gdata["country"], "latitude": gdata["latitude"],
-                    "longitude": gdata["longitude"], **_intel_fields(gdata),
-                })
-            else:
-                db.log_attack({
-                    "timestamp": _ts(), "source_ip": ip, "dest_port": 6379,
-                    "service": "redis", "payload": raw[:200],
-                    "attack_type": "nosql_probe", "threat_level": "high",
-                    "country": gdata["country"], "city": gdata["city"],
-                    "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-                    **_intel_fields(gdata),
-                })
-            _new_ip_alert(ip, gdata["country"], gdata["city"], "redis")
-
-            if cmd == "PING":       conn.sendall(b"+PONG\r\n")
-            elif cmd == "AUTH":     conn.sendall(b"-ERR invalid password\r\n")
-            elif cmd == "INFO":     conn.sendall(b"$120\r\n# Server\r\nredis_version:7.0.11\r\nredis_mode:standalone\r\nos:Linux 5.15.0\r\narch_bits:64\r\nuptime_in_seconds:86400\r\n\r\n")
-            elif cmd == "CONFIG":   conn.sendall(b"-ERR unknown command 'config'\r\n")
-            elif cmd == "SLAVEOF":  conn.sendall(b"+OK\r\n")
-            elif cmd == "SAVE":     conn.sendall(b"+OK\r\n")
-            elif cmd == "FLUSHALL": conn.sendall(b"+OK\r\n")
-            elif cmd == "SET":      conn.sendall(b"+OK\r\n")
-            elif cmd == "GET":      conn.sendall(b"$-1\r\n")
-            elif cmd == "KEYS":     conn.sendall(b"*0\r\n")
-            elif cmd in ("QUIT","EXIT"): conn.sendall(b"+OK\r\n"); break
-            else:                   conn.sendall(b"-ERR unknown command\r\n")
-
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  MySQL (port 3306)
-# ══════════════════════════════════════════════════════════════════════════════
-
-_MYSQL_GREET = (
-    b"\x4a\x00\x00\x00\x0a" b"8.0.32\x00"
-    b"\x08\x00\x00\x00\x2a\x4b\x7c\x26\x31\x3e\x65\x77\x00"
-    b"\xff\xf7\x08\x02\x00\xff\x81\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    b"\x4c\x4b\x6c\x41\x43\x37\x42\x42\x41\x74\x6f\x4e\x00"
-    b"caching_sha2_password\x00"
-)
-
-def handle_mysql(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        conn.sendall(_MYSQL_GREET)
-        conn.settimeout(10)
-        data = conn.recv(4096)
-        username = "root"
-        if data:
-            try:
-                text  = data[4:].decode(errors="ignore")
-                parts = [p for p in text.split("\x00") if 2 < len(p) < 40 and p.isprintable()]
-                if parts: username = parts[0]
-            except Exception:
-                pass
-
-        db.log_attack({
-            "timestamp":   _ts(), "source_ip": ip, "dest_port": 3306,
-            "service":     "mysql", "username": username,
-            "attack_type": "db_auth", "threat_level": "high",
-            "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "mysql")
-        conn.sendall(
-            b"\x2e\x00\x00\x02\xff\x15\x04\x23\x32\x38\x30\x30\x30"
-            b"Access denied for user 'root'@'10.0.0.1' (using password: YES)"
-        )
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Docker API (port 2375)
-# ══════════════════════════════════════════════════════════════════════════════
-
-_DOCKER_VER = b'{"Version":"24.0.7","ApiVersion":"1.43","MinAPIVersion":"1.12","GitCommit":"af33977","GoVersion":"go1.20.10","Os":"linux","Arch":"amd64","KernelVersion":"5.15.0"}'
-
-def handle_docker(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions"); _inc("cves")
-
-    try:
-        conn.settimeout(10)
-        raw = conn.recv(8192)
-        if not raw: return
-        raw_str  = raw.decode(errors="ignore")
-        req_line = raw_str.split("\n")[0].strip()
-        path     = req_line.split()[1] if len(req_line.split()) > 1 else "/"
-
-        alerts.docker_escape(ip, gdata["country"], path)
-        db.log_cve(_ts(), ip, "DOCKER-ESCAPE", "Docker API Container Escape",
-                   "critical", "docker", raw_str[:500], gdata["country"])
-        db.log_attack({
-            "timestamp":   _ts(), "source_ip": ip, "dest_port": 2375,
-            "service":     "docker",
-            "method":      req_line.split()[0] if req_line.split() else "",
-            "path":        path, "payload": raw_str[:300],
-            "attack_type": "container_escape", "threat_level": "critical",
-            "cve_id":      "DOCKER-ESCAPE",
-            "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "docker")
-
-        if "version" in path.lower() or path in ("/", ""):
-            body = _DOCKER_VER
-            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nApi-Version: 1.43\r\n"
-                         + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
-        elif "/containers/json" in path:
-            body = b'[{"Id":"4f2a8b1cabc123","Names":["/webapp"],"Image":"nginx:1.24","Status":"Up 14 hours","Ports":[{"PrivatePort":80,"PublicPort":8080,"Type":"tcp"}]}]'
-            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                         + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
-        else:
-            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length:  2\r\n\r\n{}")
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Memcached (port 11211)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def handle_memcached(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        for _ in range(10):
-            conn.settimeout(10)
-            try: data = conn.recv(512)
-            except socket.timeout: break
-            if not data: break
-            raw = data.decode(errors="ignore").strip()
-            cmd = raw.split()[0].lower() if raw.split() else ""
-
-            db.log_attack({
-                "timestamp": _ts(), "source_ip": ip, "dest_port": 11211,
-                "service": "memcached", "payload": raw[:100],
-                "attack_type": "nosql_probe", "threat_level": "medium",
-                "country": gdata["country"], "city": gdata["city"],
-                "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-                **_intel_fields(gdata),
-            })
-            _new_ip_alert(ip, gdata["country"], gdata["city"], "memcached")
-
-            if cmd == "stats":       conn.sendall(b"STAT version 1.6.17\r\nSTAT uptime 86400\r\nSTAT curr_items 0\r\nEND\r\n")
-            elif cmd == "version":   conn.sendall(b"VERSION 1.6.17\r\n")
-            elif cmd == "flush_all": conn.sendall(b"OK\r\n")
-            elif cmd == "set":       conn.sendall(b"STORED\r\n")
-            elif cmd == "get":       conn.sendall(b"END\r\n")
-            elif cmd == "quit":      break
-            else:                    conn.sendall(b"ERROR\r\n")
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 #  VNC (port 5900)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1086,48 +876,6 @@ def handle_vnc(conn, addr):
         )
     except Exception as e:
         print(f"[!] VNC handler error: {e}")
-        try: conn.close()
-        except: pass
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  RDP (port 3389)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def handle_rdp(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        conn.settimeout(8)
-        pkt = conn.recv(1024)
-        if not pkt: return
-
-        conn.sendall(
-            b"\x03\x00\x00\x13"
-            b"\x0e\xd0\x00\x00"
-            b"\x12\x34\x00\x00"
-            b"\x00"
-            b"\x02\x01\x08"
-            b"\x00\x00\x00\x00"
-        )
-
-        db.log_attack({
-            "timestamp":   _ts(), "source_ip": ip, "dest_port": 3389,
-            "service":     "rdp", "protocol": "TCP",
-            "payload":     pkt[:200].hex(),
-            "attack_type": "rdp_probe", "threat_level": "high",
-            "country":     gdata["country"], "city": gdata["city"],
-            "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], "rdp")
-
-    except Exception:
-        pass
-    finally:
         try: conn.close()
         except: pass
 
@@ -1199,6 +947,30 @@ def handle_coap(srv_sock, addr, data=b""):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  TFTP (port 69 UDP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_tftp(srv_sock, addr, data=b""):
+    ip, _ = addr
+    if _is_rate_limited(ip):
+        return
+    _inc("sessions")
+    try:
+        tftp_service.handle_tftp(
+            srv_sock, addr,
+            data=data,
+            log_attack            = db.log_attack,
+            geoip_func            = _geoip,
+            intel_fields_func     = _intel_fields,
+            new_ip_alert          = _new_ip_alert,
+            check_honeytoken_file = _check_honeytoken_file,
+            inc_counter           = _inc,
+        )
+    except Exception as e:
+        print(f"[!] TFTP handler error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  SERVICE LAUNCHERS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1257,16 +1029,11 @@ _SERVICES = [
     (handle_rtsp,                       config.SERVICE_PORTS["rtsp"],      "RTSP",          "tcp"),
     (handle_onvif,                      config.SERVICE_PORTS["onvif"],     "ONVIF",         "tcp"),
     (handle_mqtt,                       config.SERVICE_PORTS["mqtt"],      "MQTT",          "tcp"),
-    (handle_redis,                      config.SERVICE_PORTS["redis"],     "Redis",         "tcp"),
-    (handle_mysql,                      config.SERVICE_PORTS["mysql"],     "MySQL",         "tcp"),
-    (handle_docker,                     config.SERVICE_PORTS["docker"],    "Docker API",    "tcp"),
-    (handle_memcached,                  config.SERVICE_PORTS["memcached"], "Memcached",     "tcp"),
     (handle_vnc,                        config.SERVICE_PORTS["vnc"],       "VNC",           "tcp"),
-    (handle_rdp,                        config.SERVICE_PORTS["rdp"],       "RDP",           "tcp"),
     (handle_modbus,                     config.SERVICE_PORTS["modbus"],    "Modbus/ICS",    "tcp"),
     (handle_coap,                       config.SERVICE_PORTS["coap"],      "CoAP",          "udp"),
     (handle_hik_sdk,                    config.SERVICE_PORTS["hik_sdk"],   "Hikvision-SDK", "tcp"),
-    # SMTP removed — add back by inserting (handle_smtp, config.SERVICE_PORTS["smtp"], "SMTP", "tcp")
+    (handle_tftp,                       config.SERVICE_PORTS["tftp"],      "TFTP",          "udp"),
 ]
 
 

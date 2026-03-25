@@ -290,9 +290,9 @@ def api_service_stats():
     hours = request.args.get("hours", 24, type=int)
     rows  = db.get_service_breakdown(hours)
     KNOWN = {
-        "telnet":23,"ssh":22,"ftp":21,"smtp":25,"http":80,"https":443,
-        "http_alt":8080,"rtsp":554,"onvif":8000,"mqtt":1883,"redis":6379,
-        "mysql":3306,"docker":2375,"memcached":11211,"vnc":5900,"rdp":3389,"modbus":502,
+        "telnet":23,"ssh":2222,"ftp":21,"tftp":69,"http":80,"https":443,
+        "http_alt":8080,"rtsp":554,"onvif":8000,"mqtt":1883,
+        "vnc":5900,"modbus":502,"coap":5683,"hik_sdk":8200,
     }
     seen, result = set(), []
     for r in rows:

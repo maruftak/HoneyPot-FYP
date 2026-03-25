@@ -56,19 +56,14 @@ SERVICE_PORTS = {
     "telnet":    23,
     "ssh":       2222,  # Changed from 22 to 2222
     "ftp":       21,
-    "smtp":      25,
+    "tftp":      69,    # UDP — Mirai payload delivery / firmware overwrite
     "http":      80,
     "https":     443,
     "http_alt":  8080,
     "rtsp":      554,
     "onvif":     8000,
     "mqtt":      1883,
-    "redis":     6379,
-    "mysql":     3306,
-    "docker":    2375,
-    "memcached": 11211,
     "vnc":       5900,
-    "rdp":       3389,
     "modbus":    502,
     "coap":      5683,  # ← Added CoAP protocol port
     "hik_sdk":   8200,  # ← Add Hikvision SDK port
