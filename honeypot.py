@@ -23,6 +23,7 @@ import vnc_service
 import mqtt_service
 import coap_service
 import hik_sdk_service
+import http_service          # ← new modular HTTP handler
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips   = set()
@@ -126,7 +127,6 @@ def _load_tor_exit_nodes():
                 }
                 if ips:
                     _tor_exit_nodes = ips
-                    # FIX: was {:,{}} which is invalid syntax — use {:,} instead
                     print(f"  [+] Tor exit nodes: {len(ips):,} loaded")
                     break
             except Exception as e:
@@ -632,10 +632,6 @@ def handle_ssh(conn, addr):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def handle_hik_sdk(conn, addr):
-    """
-    Thin wrapper around hik_sdk_service.handle_hik_sdk.
-    Injects all helper functions from honeypot.py — same pattern as handle_ssh.
-    """
     try:
         _random_delay(80, 200)
         _inc("sessions")
@@ -657,10 +653,8 @@ def handle_hik_sdk(conn, addr):
         )
     except Exception as e:
         print(f"[!] Hik-SDK handler error: {e}")
-        try:
-            conn.close()
-        except Exception:
-            pass
+        try: conn.close()
+        except: pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -706,468 +700,38 @@ def handle_ftp(conn, addr):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SMTP (port 25)
+#  HTTP / HTTPS (ports 80, 443, 8080)  ← delegated to http_service.py
 # ══════════════════════════════════════════════════════════════════════════════
 
-def handle_smtp(conn, addr):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-
-    try:
-        conn.sendall(b"220 mail.camera-system.local ESMTP Postfix\r\n")
-        for _ in range(20):
-            conn.settimeout(15)
-            try:
-                line = conn.recv(1024).decode(errors="ignore").strip()
-            except socket.timeout:
-                break
-            if not line: break
-
-            db.log_attack({
-                "timestamp":   _ts(), "source_ip": ip, "dest_port": 25,
-                "service":     "smtp", "payload": line[:200],
-                "attack_type": "smtp_probe", "threat_level": "low",
-                "country":     gdata["country"], "city": gdata["city"],
-                "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
-                **_intel_fields(gdata),
-            })
-            _new_ip_alert(ip, gdata["country"], gdata["city"], "smtp")
-
-            cmd = line.split()[0].upper() if line.split() else ""
-            if cmd in ("EHLO", "HELO"):
-                conn.sendall(b"250-mail.camera-system.local\r\n250-PIPELINING\r\n250-AUTH LOGIN PLAIN\r\n250 HELP\r\n")
-            elif cmd == "AUTH":
-                conn.sendall(b"535 5.7.8 Authentication credentials invalid\r\n")
-            elif cmd in ("MAIL", "RCPT"):
-                conn.sendall(b"250 OK\r\n")
-            elif cmd == "DATA":
-                conn.sendall(b"354 End data with <CR><LF>.<CR><LF>\r\n")
-            elif cmd == "QUIT":
-                conn.sendall(b"221 Bye\r\n"); break
-            else:
-                conn.sendall(b"500 Command not recognized\r\n")
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except: pass
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  HTTP / HTTPS (ports 80, 443, 8080)
-# ══════════════════════════════════════════════════════════════════════════════
-
-HTTP_ROUTES = {
-    "/": (200, "text/html", """<!DOCTYPE html>
-<html><head><title>IP Camera Web Manager</title></head>
-<body style="background:#111;color:#0f0;font-family:monospace;padding:40px;text-align:center">
-<h1>&#127909; Hikvision DS-2CD2043G2-I</h1>
-<p>Firmware: V5.7.15 build 230313 | MAC: 44:19:B6:7A:2C:D9</p>
-<p style="margin-top:30px">
-  <a href="/doc/page/login.asp" style="color:#0ff">Web Interface</a> &nbsp;|&nbsp;
-  <a href="/ISAPI/System/deviceInfo" style="color:#0ff">Device Info</a> &nbsp;|&nbsp;
-  <a href="/admin" style="color:#0ff">Admin Panel</a>
-</p></body></html>"""),
-
-    "/doc/page/login.asp": (200, "text/html", """<!DOCTYPE html>
-<html><head><title>Hikvision — Login</title></head>
-<body style="background:#1a1a1a;color:#ccc;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0">
-<div style="background:#222;padding:40px;border-radius:8px;min-width:300px">
-<h2 style="color:#fff;text-align:center">&#128247; Hikvision</h2>
-<form method="POST" action="/doc/page/login.asp" style="display:flex;flex-direction:column;gap:12px">
-  <input name="username" placeholder="Username" style="padding:10px;background:#333;border:1px solid #555;color:#fff;border-radius:4px">
-  <input name="password" type="password" placeholder="Password" style="padding:10px;background:#333;border:1px solid #555;color:#fff;border-radius:4px">
-  <button type="submit" style="padding:10px;background:#0066cc;color:#fff;border:none;border-radius:4px;cursor:pointer">Login</button>
-</form></div></body></html>"""),
-
-    "/admin": (200, "text/html", """<!DOCTYPE html>
-<html><head><title>Hikvision Admin Panel</title></head>
-<body style="background:#1a1a1a;color:#ccc;font-family:sans-serif;padding:30px">
-<h2 style="color:#fff">&#9881; Hikvision Administrator Panel</h2>
-<p style="color:#888">Device: DS-2CD2043G2-I | Firmware: V5.7.15 build 230313</p>
-<hr style="border-color:#333">
-<form method="POST" action="/admin" style="max-width:300px">
-  <div style="margin-bottom:12px"><label>Username</label><br>
-    <input name="user" value="admin" style="width:100%;padding:8px;background:#333;border:1px solid #555;color:#fff;border-radius:4px;margin-top:4px">
-  </div>
-  <div style="margin-bottom:12px"><label>Password</label><br>
-    <input type="password" name="pass" style="width:100%;padding:8px;background:#333;border:1px solid #555;color:#fff;border-radius:4px;margin-top:4px">
-  </div>
-  <button type="submit" style="padding:10px 20px;background:#cc3300;color:#fff;border:none;border-radius:4px;cursor:pointer">Login</button>
-</form>
-<p style="color:#444;font-size:11px;margin-top:20px">
-  <a href="/.env" style="color:#555">config</a> |
-  <a href="/backup/passwords.txt" style="color:#555">backup</a> |
-  <a href="/ISAPI/System/deviceInfo" style="color:#555">device info</a>
-</p></body></html>"""),
-
-    "/ISAPI/System/deviceInfo": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
-<DeviceInfo version="2.0">
-  <deviceName>IPCamera</deviceName>
-  <deviceID>44194e2a-5b9c-4c9a-9c4b-12ef8e4d5f6a</deviceID>
-  <model>DS-2CD2043G2-I</model>
-  <serialNumber>DS-2CD2043G2-I20230313CCCH012345678</serialNumber>
-  <macAddress>44:19:B6:7A:2C:D9</macAddress>
-  <firmwareVersion>V5.7.15 build 230313</firmwareVersion>
-  <firmwareReleasedDate>build 230313</firmwareReleasedDate>
-  <encoderVersion>V9.0</encoderVersion>
-  <deviceType>IPCamera</deviceType>
-  <telecontrolID>88</telecontrolID>
-</DeviceInfo>"""),
-
-    "/ISAPI/Security/userCheck": (200, "application/xml",
-        '<?xml version="1.0"?><userCheck><statusValue>200</statusValue><statusString>OK</statusString></userCheck>'),
-
-    "/ISAPI/Security/sessionLogin/capabilities": (200, "application/xml",
-        '<?xml version="1.0"?><SessionLoginCap><sessionID>3D1633C7</sessionID><challenge>aK9Jxm3</challenge><iterations>100</iterations><isIrreversible>true</isIrreversible></SessionLoginCap>'),
-
-    "/ISAPI/Security/users": (401, "application/xml",
-        '<?xml version="1.0"?><ResponseStatus><requestURL>/ISAPI/Security/users</requestURL><statusCode>401</statusCode><statusString>Unauthorized</statusString></ResponseStatus>'),
-
-    "/ISAPI/Security/users/1": (200, "application/xml",
-        '<?xml version="1.0" encoding="UTF-8"?><User version="2.0"><id>1</id><userName>admin</userName><userLevel>Administrator</userLevel></User>'),
-
-    "/ISAPI/System/Network/interfaces/1/ipAddress": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
-<IPAddress version="2.0">
-  <ipVersion>v4</ipVersion><addressingType>static</addressingType>
-  <ipAddress>192.168.1.108</ipAddress><subnetMask>255.255.255.0</subnetMask>
-  <DefaultGateway><ipAddress>192.168.1.1</ipAddress></DefaultGateway>
-</IPAddress>"""),
-
-    "/ISAPI/ContentMgmt/StreamingProxy": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
-<StreamingProxyChannelStatus version="2.0">
-  <id>1</id>
-  <sourceInputPortDescriptor>
-    <proxyProtocol>RTSP</proxyProtocol>
-    <sourceInputPort>rtsp://192.168.1.108:554/Streaming/Channels/101</sourceInputPort>
-    <streamType>main</streamType>
-  </sourceInputPortDescriptor>
-  <online>true</online>
-</StreamingProxyChannelStatus>"""),
-
-    "/ISAPI/System/Video/inputs/channels/1/status": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
-<VideoInputChannelStatus version="2.0">
-  <id>1</id><videoInputStatusDescription>OK</videoInputStatusDescription>
-  <resolution><width>2688</width><height>1520</height></resolution>
-</VideoInputChannelStatus>"""),
-
-    "/ISAPI/System/capabilities": (200, "application/xml", """<?xml version="1.0" encoding="UTF-8"?>
-<SystemCap version="2.0">
-  <isSupportDDNS>true</isSupportDDNS><isSupportNFS>true</isSupportNFS>
-  <isSupportConfigEncrypt>true</isSupportConfigEncrypt>
-  <NetworkCap><isSupportWireless>false</isSupportWireless></NetworkCap>
-</SystemCap>"""),
-
-    "/.env": (200, "text/plain", """APP_ENV=production
-DB_HOST=192.168.1.50\nDB_PORT=5432\nDB_NAME=camera_db
-DB_USER=admin\nDB_PASS=SuperSecret2024!
-API_KEY=sk-proj-abc123xyz789def456ghi
-JWT_SECRET=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZG1pbiI6dHJ1ZX0
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-SMTP_PASS=MailPass2024!
-"""),
-
-    "/.aws/credentials": (200, "text/plain", """[default]
-aws_access_key_id = AKIAIOSFODNN7EXAMPLE
-aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-region = us-east-1
-
-[backup]
-aws_access_key_id = AKIAI44QH8DHBEXAMPLE
-aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
-"""),
-
-    "/etc/passwd": (200, "text/plain",
-        "root:x:0:0:root:/root:/bin/ash\nadmin:x:500:500:Administrator:/home/admin:/bin/ash\nnobody:x:65534:65534:nobody:/nonexistent:/bin/false\n"),
-
-    "/robots.txt": (200, "text/plain",
-        "User-agent: *\nDisallow: /admin/\nDisallow: /backup/\nDisallow: /.env\nDisallow: /.git/\nDisallow: /ISAPI/\n"),
-
-    "/wp-login.php": (200, "text/html", """<!DOCTYPE html>
-<html><head><title>Log In &lsaquo; WordPress</title></head>
-<body class="login"><div id="login"><h1><a href="/">Site</a></h1>
-<form method="post" action="/wp-login.php">
-<label>Username or Email<input type="text" name="log" size="20"></label>
-<label>Password<input type="password" name="pwd" size="20"></label>
-<input type="submit" name="wp-submit" value="Log In">
-<input type="hidden" name="redirect_to" value="/wp-admin/">
-</form></div></body></html>"""),
-
-    "/wp-config.php":  (403, "text/plain", "403 Forbidden"),
-
-    "/phpMyAdmin/": (200, "text/html",
-        '<html><body style="background:#1a1a1a;color:#ccc;padding:20px"><h2>phpMyAdmin 5.2.1</h2>'
-        '<form method="post"><input name="pma_username" placeholder="Username" style="padding:5px"> '
-        '<input type="password" name="pma_password" placeholder="Password" style="padding:5px"> '
-        '<input type="submit" value="Go"></form></body></html>'),
-
-    "/phpmyadmin/": (200, "text/html",
-        '<html><body style="background:#1a1a1a;color:#ccc;padding:20px"><h2>phpMyAdmin 5.2.1</h2></body></html>'),
-
-    "/actuator/env": (200, "application/json",
-        '{"activeProfiles":["production"],"propertySources":[{"name":"applicationConfig","properties":'
-        '{"spring.datasource.password":{"value":"Sup3rS3cret2024!"},"jwt.secret":{"value":"change-in-prod"},'
-        '"api.key":{"value":"sk-api-EXAMPLE123"}}}]}'),
-
-    "/actuator": (200, "application/json",
-        '{"_links":{"self":{"href":"/actuator"},"health":{"href":"/actuator/health"},'
-        '"env":{"href":"/actuator/env"},"metrics":{"href":"/actuator/metrics"}}}'),
-
-    "/manager/html": (401, "text/html",
-        '<html><head><title>Apache Tomcat Manager</title></head>'
-        '<body><h1>401 Unauthorized</h1><p>Realm: "Tomcat Manager Application"</p></body></html>'),
-
-    "/console": (200, "text/html",
-        '<html><body style="background:#1a1a1a;color:#ccc;padding:20px"><h2>JBoss Management Console</h2>'
-        '<form method="post"><input name="j_username" placeholder="Username"> '
-        '<input type="password" name="j_password" placeholder="Password"> '
-        '<input type="submit" value="Login"></form></body></html>'),
-
-    "/.git/config": (200, "text/plain",
-        '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n'
-        '[remote "origin"]\n\turl = https://github.com/internal/camera-firmware.git\n'
-        '\tfetch = +refs/heads/*:refs/remotes/origin/*\n'
-        '[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n'),
-
-    "/docker-compose.yml": (200, "text/plain",
-        'version: "3.8"\nservices:\n  camera:\n    image: hikvision/ipc:latest\n'
-        '    ports:\n      - "80:80"\n      - "554:554"\n    environment:\n'
-        '      - ADMIN_PASS=Admin@2024!\n      - DB_URL=postgresql://admin:Sup3rS3cret2024@db:5432/cameras\n'),
-
-    "/phpinfo.php": (200, "text/html",
-        "<html><body style='font-family:sans-serif'><h1>PHP Version 7.4.33</h1>"
-        "<table><tr><td>System</td><td>Linux camera 5.4.0</td></tr>"
-        "<tr><td>Server API</td><td>Apache 2.0 Handler</td></tr></table></body></html>"),
-
-    "/backup/passwords.txt": (200, "text/plain",
-        "== Device Admin Credentials ==\nadmin:Admin@2024\nroot:ProductionKey999\ndbuser:MyDB_P@ssw0rd\n"),
-
-    "/install.php": (200, "text/html",
-        "<html><body style='padding:20px;background:#1a1a1a;color:#ccc'>"
-        "<h2>Installation Wizard</h2><p>Step 1: Database Configuration</p>"
-        "<form><input name='db_host' value='localhost'> <input name='db_user' value='root'> "
-        "<input type='password' name='db_pass'><button>Next</button></form></body></html>"),
-
-    "/System/configurationFile": (200, "application/octet-stream",
-        "HIKVISION_CONFIG_V5.7.15\nadmin:Admin@2024\nrtsp_pass:RtspP@ss123\n"),
-
-    "/cgi-bin/admin/param.cgi": (200, "text/html",
-        '<html><body style="background:#111;color:#ccc;font-family:monospace;padding:20px">'
-        '<h3>Hikvision CGI Interface</h3>'
-        '<form method="POST">User: <input name="usr"> Pass: <input type="password" name="pwd">'
-        '<input type="submit" value="Submit"></form></body></html>'),
-
-    "/web/login": (200, "text/html", """<!DOCTYPE html>
-<html><head><title>Hikvision — Web Login</title></head>
-<body style="background:#1a1a1a;color:#ccc;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0">
-<div style="background:#222;padding:40px;border-radius:8px;min-width:320px">
-<h2 style="color:#fff;text-align:center">&#128247; Hikvision Web Interface</h2>
-<p style="color:#888;text-align:center;font-size:12px">DS-2CD2043G2-I | V5.7.15</p>
-<form method="POST" action="/web/login" style="display:flex;flex-direction:column;gap:12px;margin-top:20px">
-  <input name="username" placeholder="Username" value="admin" style="padding:10px;background:#333;border:1px solid #555;color:#fff;border-radius:4px">
-  <input name="password" type="password" placeholder="Password" style="padding:10px;background:#333;border:1px solid #555;color:#fff;border-radius:4px">
-  <button type="submit" style="padding:10px;background:#0066cc;color:#fff;border:none;border-radius:4px;cursor:pointer">Login</button>
-</form>
-<p style="color:#555;font-size:11px;text-align:center;margin-top:16px">Default: admin / 12345</p>
-</div></body></html>"""),
-
-    "/onvif/device_service": (200, "application/soap+xml", """<?xml version="1.0" encoding="UTF-8"?>
-<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope"
-  xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
-  xmlns:tt="http://www.onvif.org/ver10/schema">
-<SOAP-ENV:Body><tds:GetCapabilitiesResponse><tds:Capabilities>
-<tt:Analytics><tt:XAddr>http://192.168.1.108:8000/onvif/analytics</tt:XAddr></tt:Analytics>
-<tt:Device><tt:XAddr>http://192.168.1.108:8000/onvif/device_service</tt:XAddr></tt:Device>
-<tt:Media><tt:XAddr>http://192.168.1.108:8000/onvif/media</tt:XAddr></tt:Media>
-</tds:Capabilities></tds:GetCapabilitiesResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>"""),
-
-    "/api/v1/endpoints/activate": (200, "application/json",
-        '{"status":"ok","endpoint":"activated","token":"eyJhbGciOiJIUzI1NiJ9.eyJhZG1pbiI6dHJ1ZX0.INVALID"}'),
-
-    "/ztp/cgi-bin/handler": (200, "application/json", '{"result":"ok","code":0}'),
-
-    "/v1/about": (200, "application/json",
-        f'{{"name":"{getattr(config,"PROJECT_NAME","honeyPot")}",'
-        f'"status":"running","device":"Hikvision DS-2CD2043G2-I","firmware":"V5.7.15 build 230313"}}'),
-}
-
-_HTTP_SERVER_HEADERS = [
-    "App-webs/", "Apache/2.4.41 (Ubuntu)",
-    "nginx/1.18.0", "GoAhead-Webs", "Boa/0.94.14rc21",
-]
-_HTTP_SRV_HDR = _HTTP_SERVER_HEADERS[0]
-
-def _http_resp(status, ct, body, extra=""):
-    if isinstance(body, str): body = body.encode()
-    status_map = {200:"OK",302:"Found",401:"Unauthorized",403:"Forbidden",404:"Not Found"}
-    hdr = (f"HTTP/1.1 {status} {status_map.get(status,'OK')}\r\n"
-           f"Server: {_HTTP_SRV_HDR}\r\n"
-           f"Content-Type: {ct}\r\n"
-           f"Content-Length: {len(body)}\r\n"
-           f"Connection: close\r\n{extra}\r\n")
-    return hdr.encode() + body
+# Bundle all injected helpers once so the lambda stays clean
+_HTTP_KWARGS = dict(
+    ts_func                    = _ts,
+    geoip_func                 = _geoip,
+    intel_fields_func          = _intel_fields,
+    new_ip_alert_func          = _new_ip_alert,
+    log_attack_func            = db.log_attack,
+    check_cve_func             = _check_cve,
+    check_honeytoken_file_func = _check_honeytoken_file,
+    check_botnet_func          = _check_botnet,
+    check_honeytoken_cred_func = _check_honeytoken_cred,
+    log_cve_func               = db.log_cve,
+    log_honeytoken_func        = db.log_honeytoken,
+    log_malware_func           = db.log_malware,
+    inc_counter_func           = _inc,
+    alert_funcs                = {
+        "cve_exploit": alerts.cve_exploit,
+        "honeytoken":  alerts.honeytoken,
+        "botnet_cred": alerts.botnet_cred,
+    },
+    is_rate_limited_func       = _is_rate_limited,
+)
 
 def handle_http(conn, addr, https=False):
-    ip, port = addr
-    if _is_rate_limited(ip): conn.close(); return
-    gdata = _geoip(ip)
-    _inc("sessions")
-    svc   = "https" if https else "http"
-    dport = 443 if https else (8080 if port == 8080 else 80)
-
     try:
-        conn.settimeout(8)
-        raw = conn.recv(16384)
-        if not raw: return
-        raw_str   = raw.decode(errors="ignore")
-        lines     = raw_str.split("\n")
-        req_ln    = lines[0].strip().split()
-        method    = req_ln[0] if req_ln else "GET"
-        full_path = req_ln[1] if len(req_ln) > 1 else "/"
-        path      = full_path.split("?")[0]
-        query     = full_path.split("?")[1] if "?" in full_path else ""
-
-        ua      = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("user-agent:")), "")
-        referer = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("referer:")), "")
-        host    = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("host:")), "")
-        origin  = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("origin:")), "")
-        post_body = raw_str.split("\r\n\r\n", 1)[1][:1000] if "\r\n\r\n" in raw_str else ""
-
-        attack_patterns = []
-        threat_level = "low"
-
-        if any(x in full_path for x in ["../","..\\","%2e%2e","....//","..;/"]):
-            attack_patterns.append("directory_traversal"); threat_level = "high"
-        if any(x in full_path or x in post_body for x in ["|",";","`","$","&&","||","\n","$(","${"]):
-            attack_patterns.append("command_injection"); threat_level = "critical"
-        if any(x in full_path.lower() or x in post_body.lower()
-               for x in ["'","union","select","insert","delete","drop","exec","1=1","' or '"]):
-            attack_patterns.append("sql_injection"); threat_level = "high"
-        if any(x in full_path.lower() or x in post_body.lower()
-               for x in ["<script","javascript:","onerror=","onload="]):
-            attack_patterns.append("xss"); threat_level = "medium"
-
-        for pattern, name in {
-            "/cgi-bin/":"cgi_exploit", "/shell?":"web_shell",
-            "/api/jsonws/invoke":"liferay_rce", "/vendor/phpunit":"phpunit_rce",
-            "/.aws/":"aws_creds_leak", "/.kube/":"kubernetes_creds",
-            "/actuator/":"spring_boot_exposure", "/solr/":"apache_solr_exploit",
-            "/console/":"jboss_exploit", "/manager/":"tomcat_exploit",
-            "/goform/":"dlink_tplink_exploit",
-        }.items():
-            if pattern in path.lower():
-                attack_patterns.append(name); threat_level = "critical"
-
-        if method == "POST" and any(x in path.lower() for x in ["/login","/admin","/auth","/signin"]):
-            attack_patterns.append("credential_harvest"); threat_level = "high"
-        if any(x in ua.lower() for x in ["xmrig","miner","stratum","nicehash"]):
-            attack_patterns.append("cryptominer"); threat_level = "critical"
-        if any(x in ua.lower() for x in ["masscan","zgrab","shodan","censys","nmap","nikto","sqlmap","metasploit","burp"]):
-            attack_patterns.append("automated_scanner"); threat_level = "medium"
-        if any(sf in path.lower() for sf in ["/.env","/wp-config.php","/.git/config","/id_rsa","/.ssh/","/.aws/credentials"]):
-            attack_patterns.append("sensitive_file_access"); threat_level = "critical"
-
-        full_request = raw_str[:2000]
-        cve_id, cve = _check_cve(full_request, svc)
-        if cve_id:
-            _inc("cves"); attack_patterns.append(f"cve_{cve_id}"); threat_level = "critical"
-            alerts.cve_exploit(ip, gdata["country"], cve_id, cve["name"], cve["severity"], svc, path)
-            db.log_cve(_ts(), ip, cve_id, cve["name"], cve["severity"], svc, full_request[:1000], gdata["country"])
-
-        ht_f, ht_fv = _check_honeytoken_file(path)
-        if ht_f:
-            _inc("honeytokens"); attack_patterns.append("honeytoken_file"); threat_level = "critical"
-            alerts.honeytoken(ip, gdata["country"], "HTTP_GET", path, svc)
-            db.log_honeytoken(_ts(), ip, "HTTP_GET", path, svc, gdata["country"], gdata["city"])
-
-        username = ""; password = ""
-        if method == "POST" and post_body:
-            for part in post_body.replace("&", "\n").splitlines():
-                if "=" in part:
-                    k, v = part.split("=", 1)
-                    if k.lower() in ("username","user","usr","log","j_username","login","email"):
-                        username = v[:50]
-                    if k.lower() in ("password","pass","pwd","j_password","passwd"):
-                        password = v[:50]
-            if username or password:
-                is_bot = _check_botnet(username, password)
-                is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
-                if is_bot:
-                    _inc("botnets"); attack_patterns.append("botnet_credential"); threat_level = "critical"
-                    alerts.botnet_cred(ip, gdata["country"], svc, username, password)
-                if is_ht_c:
-                    _inc("honeytokens"); attack_patterns.append("honeytoken_credential"); threat_level = "critical"
-                    alerts.honeytoken(ip, gdata["country"], "HTTP_CRED", ht_cv, svc)
-                    db.log_honeytoken(_ts(), ip, "HTTP_CRED", ht_cv, svc, gdata["country"])
-
-        scanner_tool = _detect_scanner(ua + " " + full_request[:500])
-
-        db.log_attack({
-            "timestamp":       _ts(),     "source_ip":    ip,
-            "source_port":     port,       "dest_port":    dport,
-            "service":         svc,        "protocol":     "TCP",
-            "method":          method,     "path":         path[:500],
-            "query_string":    query[:500],"user_agent":   ua[:256],
-            "referer":         referer[:256], "host_header": host[:256],
-            "origin":          origin[:256],  "username":   username,
-            "password":        password,   "payload":      post_body[:500],
-            "raw_payload":     full_request[:1000],
-            "attack_patterns": ",".join(attack_patterns) if attack_patterns else "",
-            "country":         gdata["country"], "city":   gdata["city"],
-            "latitude":        gdata["latitude"],"longitude": gdata["longitude"],
-            "attack_type":     attack_patterns[0] if attack_patterns else "web_scan",
-            "threat_level":    threat_level, "cve_id":     cve_id or "",
-            "scanner_tool":    scanner_tool,
-            **_intel_fields(gdata),
-        })
-        _new_ip_alert(ip, gdata["country"], gdata["city"], svc)
-
-        if path in HTTP_ROUTES:
-            status, ct, body = HTTP_ROUTES[path]
-            if method == "POST" and path in ("/web/login","/doc/page/login.asp","/admin","/cgi-bin/admin/param.cgi"):
-                conn.sendall(_http_resp(401, "text/html",
-                    b"<html><body style='background:#1a1a1a;color:#f55;padding:20px'>"
-                    b"<p>Invalid username or password.</p>"
-                    b"<a href='javascript:history.back()' style='color:#0af'>Back</a></body></html>"))
-                return
-            conn.sendall(_http_resp(status, ct, body))
-        elif any(x in path for x in ["wp-","wordpress"]):
-            conn.sendall(_http_resp(200, "text/html", HTTP_ROUTES["/wp-login.php"][2]))
-        elif any(x in path.lower() for x in ["phpmyadmin","pma"]):
-            conn.sendall(_http_resp(200, "text/html", HTTP_ROUTES["/phpMyAdmin/"][2]))
-        elif "backup" in path.lower() or path.endswith((".sql",".zip",".tar.gz")):
-            conn.sendall(_http_resp(403, "text/html", b"<h1>403 Forbidden</h1>"))
-        elif path.startswith("/api"):
-            intel = _intel_fields(gdata)
-            body  = json.dumps({
-                "status": "ok", "version": "1.0.0", "ip": ip,
-                "country": gdata["country"], "city": gdata["city"],
-                "latitude": gdata["latitude"], "longitude": gdata["longitude"],
-                "asn": intel["asn"], "org": intel["org"],
-                "is_vpn": intel["is_vpn"],
-                "vpn_provider": intel["vpn_provider"],
-                "vpn_exit_country": intel["vpn_exit_country"],
-                "is_tor": intel["is_tor"],
-                "tor_exit_node": intel["tor_exit_node"],
-                "is_proxy": intel["is_proxy"],
-                "proxy_type": intel["proxy_type"],
-                "anonymized": intel["anonymized"],
-                "anonymization_method": intel["anonymization_method"],
-            }).encode()
-            conn.sendall(_http_resp(200, "application/json", body))
-        elif path.startswith("/ISAPI"):
-            conn.sendall(_http_resp(401, "application/xml",
-                b'<?xml version="1.0"?><ResponseStatus><statusCode>401</statusCode>'
-                b'<statusString>Unauthorized</statusString></ResponseStatus>'))
-        else:
-            conn.sendall(_http_resp(404, "text/html", b"<html><body><h1>404 Not Found</h1></body></html>"))
-
-    except Exception:
-        pass
-    finally:
+        _random_delay(40, 120)
+        http_service.handle_http(conn, addr, https, **_HTTP_KWARGS)
+    except Exception as e:
+        print(f"[!] HTTP handler error: {e}")
         try: conn.close()
         except: pass
 
@@ -1615,16 +1179,6 @@ def handle_modbus(conn, addr):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def handle_coap(srv_sock, addr, data=b""):
-    """
-    CoAP UDP handler.
-
-    Called by _start_udp with:
-      srv_sock — the shared UDP socket (only used for sendto)
-      addr     — (ip, port) of the sender
-      data     — the datagram already read by recvfrom in _start_udp
-
-    We never call recv/recvfrom or settimeout on srv_sock here.
-    """
     ip, _ = addr
     if _is_rate_limited(ip):
         return
@@ -1668,13 +1222,6 @@ def _start_tcp(handler, port, name):
 
 
 def _start_udp(handler, port, name):
-    """
-    UDP listener — used for CoAP and any future UDP services.
-
-    The key rule: recvfrom is called HERE in the loop, and the datagram
-    bytes are passed to the handler thread.  The handler must never call
-    recv/recvfrom or settimeout on the shared socket.
-    """
     def _inner():
         try:
             srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1683,10 +1230,10 @@ def _start_udp(handler, port, name):
             print(f"  [+] {name:<22} :{port} (UDP)")
             while True:
                 try:
-                    data, addr = srv.recvfrom(4096)          # blocking, no timeout
+                    data, addr = srv.recvfrom(4096)
                     threading.Thread(
                         target=handler,
-                        args=(srv, addr, data),              # ← data passed here
+                        args=(srv, addr, data),
                         daemon=True,
                     ).start()
                 except Exception as e:
@@ -1698,15 +1245,12 @@ def _start_udp(handler, port, name):
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SERVICES MAP
-#  Each entry: (handler, port, name, protocol)
-#  protocol = "tcp" | "udp"
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SERVICES = [
     (handle_telnet,                     config.SERVICE_PORTS["telnet"],    "Telnet",        "tcp"),
     (handle_ssh,                        config.SERVICE_PORTS["ssh"],       "SSH",           "tcp"),
     (handle_ftp,                        config.SERVICE_PORTS["ftp"],       "FTP",           "tcp"),
-    (handle_smtp,                       config.SERVICE_PORTS["smtp"],      "SMTP",          "tcp"),
     (handle_http,                       config.SERVICE_PORTS["http"],      "HTTP",          "tcp"),
     (lambda c,a: handle_http(c,a,True), config.SERVICE_PORTS["https"],     "HTTPS",         "tcp"),
     (handle_http,                       config.SERVICE_PORTS["http_alt"],  "HTTP-Alt",      "tcp"),
@@ -1722,6 +1266,7 @@ _SERVICES = [
     (handle_modbus,                     config.SERVICE_PORTS["modbus"],    "Modbus/ICS",    "tcp"),
     (handle_coap,                       config.SERVICE_PORTS["coap"],      "CoAP",          "udp"),
     (handle_hik_sdk,                    config.SERVICE_PORTS["hik_sdk"],   "Hikvision-SDK", "tcp"),
+    # SMTP removed — add back by inserting (handle_smtp, config.SERVICE_PORTS["smtp"], "SMTP", "tcp")
 ]
 
 
