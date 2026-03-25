@@ -6,9 +6,11 @@ Serves dashboard.html + all /api/* endpoints.
 Usage:  python3 dashboard.py [--port 5001]
 """
 
+import csv
+import io
 import json
 import os, time, datetime
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, Response
 from flask_cors import CORS
 
 import db, config
@@ -96,62 +98,98 @@ def api_geo_data():
         "honeypot": {"lat": 32.65, "lon": 51.67, "label": "honeyPot Sensor (Isfahan)"},
     })
 
+def _build_session_row(r):
+    cmds = []
+    try:
+        cmds = json.loads(r.get("commands", "[]"))
+    except Exception:
+        pass
+    return {
+        "ts":                   r.get("timestamp",""),
+        "ip":                   r.get("source_ip",""),
+        "country":              r.get("country","Unknown"),
+        "city":                 r.get("city",""),
+        "service":              (r.get("service","") or "").upper(),
+        "port":                 r.get("dest_port",0),
+        "method":               r.get("method",""),
+        "path":                 (r.get("path","") or "")[:80],
+        "username":             r.get("username",""),
+        "password":             r.get("password",""),
+        "user_agent":           (r.get("user_agent","") or "")[:100],
+        "cve":                  r.get("cve_id",""),
+        "threat":               r.get("threat_level","low"),
+        "is_botnet":            bool(r.get("is_botnet",0)),
+        "is_tor":               bool(r.get("is_tor",0)),
+        "is_vpn":               bool(r.get("is_vpn",0)),
+        "is_proxy":             bool(r.get("is_proxy",0)),
+        "vpn_provider":         r.get("vpn_provider",""),
+        "vpn_exit_country":     r.get("vpn_exit_country",""),
+        "tor_exit_node":        bool(r.get("tor_exit_node",0)),
+        "tor_exit_ip":          r.get("tor_exit_ip",""),
+        "proxy_type":           r.get("proxy_type",""),
+        "anonymized":           bool(r.get("anonymized",0)),
+        "anonymization_method": r.get("anonymization_method",""),
+        "scanner_tool":         r.get("scanner_tool",""),
+        "attack_type":          r.get("attack_type",""),
+        "attack_patterns":      r.get("attack_patterns",""),
+        "asn":                  r.get("asn",""),
+        "org":                  r.get("org",""),
+        "commands":             cmds[:5],
+    }
+
+def _apply_session_filters(rows, filters):
+    """Apply in-memory filters that db layer doesn't support."""
+    is_tor   = filters.get("is_tor")
+    is_vpn   = filters.get("is_vpn")
+    is_proxy = filters.get("is_proxy")
+    is_botnet= filters.get("is_botnet")
+    country  = (filters.get("country") or "").lower()
+    attack_t = (filters.get("attack_type") or "").lower()
+    cve_id   = (filters.get("cve_id") or "").lower()
+    src_ip   = (filters.get("ip") or "").strip()
+    from_ts  = filters.get("from_ts") or ""
+    to_ts    = filters.get("to_ts") or ""
+
+    result = []
+    for r in rows:
+        if is_tor    == "1" and not r.get("is_tor"):   continue
+        if is_vpn    == "1" and not r.get("is_vpn"):   continue
+        if is_proxy  == "1" and not r.get("is_proxy"): continue
+        if is_botnet == "1" and not r.get("is_botnet"):continue
+        if country and (r.get("country","") or "").lower() != country: continue
+        if attack_t and attack_t not in (r.get("attack_type","") or "").lower(): continue
+        if cve_id   and cve_id   not in (r.get("cve_id","") or "").lower(): continue
+        if src_ip   and r.get("source_ip","") != src_ip: continue
+        ts = r.get("timestamp","")
+        if from_ts and ts < from_ts: continue
+        if to_ts   and ts > to_ts:   continue
+        result.append(r)
+    return result
+
 @app.route("/api/sessions")
 @cached(2)
 def api_sessions():
-    hours   = request.args.get("hours",   24,  type=int)
-    limit   = request.args.get("limit",   200, type=int)
-    service = request.args.get("service", "")
-    threat  = request.args.get("threat",  "")
-    is_tor  = request.args.get("is_tor",  "")
-    is_vpn  = request.args.get("is_vpn",  "")
-    is_proxy= request.args.get("is_proxy","")
+    hours    = request.args.get("hours",       24,  type=int)
+    limit    = request.args.get("limit",       500, type=int)
+    service  = request.args.get("service",     "")
+    threat   = request.args.get("threat",      "")
+    filters  = {
+        "is_tor":     request.args.get("is_tor",   ""),
+        "is_vpn":     request.args.get("is_vpn",   ""),
+        "is_proxy":   request.args.get("is_proxy", ""),
+        "is_botnet":  request.args.get("is_botnet",""),
+        "country":    request.args.get("country",  ""),
+        "attack_type":request.args.get("attack_type",""),
+        "cve_id":     request.args.get("cve_id",   ""),
+        "ip":         request.args.get("ip",        ""),
+        "from_ts":    request.args.get("from_ts",   ""),
+        "to_ts":      request.args.get("to_ts",     ""),
+    }
 
-    rows = db.get_recent_attacks(hours, limit, service or None, threat or None)
-    result = []
-    for r in rows:
-        # client-side filter for anonymization flags (db may not support)
-        if is_tor   == "1" and not r.get("is_tor"):   continue
-        if is_vpn   == "1" and not r.get("is_vpn"):   continue
-        if is_proxy == "1" and not r.get("is_proxy"): continue
-
-        cmds = []
-        try:
-            cmds = json.loads(r.get("commands", "[]"))
-        except Exception:
-            pass
-        result.append({
-            "ts":                   r.get("timestamp",""),
-            "ip":                   r.get("source_ip",""),
-            "country":              r.get("country","Unknown"),
-            "city":                 r.get("city",""),
-            "service":              (r.get("service","") or "").upper(),
-            "port":                 r.get("dest_port",0),
-            "method":               r.get("method",""),
-            "path":                 r.get("path","")[:80],
-            "username":             r.get("username",""),
-            "password":             r.get("password",""),
-            "user_agent":           r.get("user_agent","")[:100],
-            "cve":                  r.get("cve_id",""),
-            "threat":               r.get("threat_level","low"),
-            "is_botnet":            bool(r.get("is_botnet",0)),
-            "is_tor":               bool(r.get("is_tor",0)),
-            "is_vpn":               bool(r.get("is_vpn",0)),
-            "is_proxy":             bool(r.get("is_proxy",0)),
-            "vpn_provider":         r.get("vpn_provider",""),
-            "vpn_exit_country":     r.get("vpn_exit_country",""),
-            "tor_exit_node":        bool(r.get("tor_exit_node",0)),
-            "tor_exit_ip":          r.get("tor_exit_ip",""),
-            "proxy_type":           r.get("proxy_type",""),
-            "anonymized":           bool(r.get("anonymized",0)),
-            "anonymization_method": r.get("anonymization_method",""),
-            "scanner_tool":         r.get("scanner_tool",""),
-            "attack_type":          r.get("attack_type",""),
-            "attack_patterns":      r.get("attack_patterns",""),
-            "asn":                  r.get("asn",""),
-            "org":                  r.get("org",""),
-            "commands":             cmds[:5],
-        })
+    rows    = db.get_recent_attacks(hours, limit * 4, service or None, threat or None)
+    rows    = _apply_session_filters(rows, filters)
+    rows    = rows[:limit]
+    result  = [_build_session_row(r) for r in rows]
     return jsonify({"sessions": result, "total": len(result)})
 
 @app.route("/api/chart-data")
@@ -762,6 +800,690 @@ def _generate_recommendations(stats, cves, default_creds, rtsp_hits):
     return recs
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  EXPORT ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/export/csv")
+def api_export_csv():
+    """Download filtered attacks as CSV."""
+    hours    = request.args.get("hours",    168,  type=int)
+    limit    = request.args.get("limit",    10000,type=int)
+    service  = request.args.get("service",  "")
+    threat   = request.args.get("threat",   "")
+    filters  = {
+        "is_tor":     request.args.get("is_tor",""),
+        "is_vpn":     request.args.get("is_vpn",""),
+        "is_proxy":   request.args.get("is_proxy",""),
+        "is_botnet":  request.args.get("is_botnet",""),
+        "country":    request.args.get("country",""),
+        "attack_type":request.args.get("attack_type",""),
+        "cve_id":     request.args.get("cve_id",""),
+        "ip":         request.args.get("ip",""),
+        "from_ts":    request.args.get("from_ts",""),
+        "to_ts":      request.args.get("to_ts",""),
+    }
+
+    rows = db.get_recent_attacks(hours, limit * 2, service or None, threat or None)
+    rows = _apply_session_filters(rows, filters)[:limit]
+
+    fields = ["timestamp","source_ip","country","city","service","dest_port",
+              "attack_type","threat_level","username","password","cve_id",
+              "user_agent","is_botnet","is_tor","is_vpn","is_proxy",
+              "vpn_provider","asn","org","path","method","scanner_tool"]
+
+    out = io.StringIO()
+    w   = csv.DictWriter(out, fieldnames=fields, extrasaction="ignore", lineterminator="\n")
+    w.writeheader()
+    for r in rows:
+        w.writerow({f: r.get(f,"") for f in fields})
+
+    fname = f"honeypot_attacks_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return Response(
+        out.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
+
+
+@app.route("/api/export/json")
+def api_export_json():
+    """Download filtered attacks as JSON."""
+    hours    = request.args.get("hours",    168,  type=int)
+    limit    = request.args.get("limit",    10000,type=int)
+    service  = request.args.get("service",  "")
+    threat   = request.args.get("threat",   "")
+    filters  = {
+        "is_tor":     request.args.get("is_tor",""),
+        "is_vpn":     request.args.get("is_vpn",""),
+        "is_proxy":   request.args.get("is_proxy",""),
+        "is_botnet":  request.args.get("is_botnet",""),
+        "country":    request.args.get("country",""),
+        "attack_type":request.args.get("attack_type",""),
+        "cve_id":     request.args.get("cve_id",""),
+        "ip":         request.args.get("ip",""),
+        "from_ts":    request.args.get("from_ts",""),
+        "to_ts":      request.args.get("to_ts",""),
+    }
+
+    rows   = db.get_recent_attacks(hours, limit * 2, service or None, threat or None)
+    rows   = _apply_session_filters(rows, filters)[:limit]
+    result = [_build_session_row(r) for r in rows]
+
+    payload = json.dumps({
+        "exported_at": datetime.datetime.utcnow().isoformat(),
+        "period_hours": hours,
+        "total": len(result),
+        "attacks": result,
+    }, indent=2)
+
+    fname = f"honeypot_attacks_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M')}.json"
+    return Response(
+        payload,
+        mimetype="application/json",
+        headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
+
+
+@app.route("/api/export/report-txt")
+def api_export_report_txt():
+    """Download full threat report as a plain-text file."""
+    hours   = request.args.get("hours", 24, type=int)
+    stats   = db.get_stats(hours)
+    cves    = db.get_cve_data(hours)
+    creds   = db.get_top_credentials(hours)
+    countries = db.get_top_countries(hours)
+    top_ips = db.get_top_ips(hours, 15)
+    services= db.get_service_breakdown(hours)
+    sessions= db.get_recent_attacks(hours, limit=10000)
+
+    tor_c   = sum(1 for r in sessions if r.get("is_tor"))
+    vpn_c   = sum(1 for r in sessions if r.get("is_vpn"))
+    proxy_c = sum(1 for r in sessions if r.get("is_proxy"))
+    total   = stats.get("total_attacks", 0)
+    anon_pct= round((tor_c + vpn_c + proxy_c) / max(total, 1) * 100, 1)
+
+    # Attack type breakdown
+    atypes = {}
+    for r in sessions:
+        at = r.get("attack_type","unknown") or "unknown"
+        atypes[at] = atypes.get(at, 0) + 1
+    top_atypes = sorted(atypes.items(), key=lambda x: -x[1])[:10]
+
+    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "═" * 70,
+        f"  HONEYPOT THREAT INTELLIGENCE REPORT",
+        f"  Generated: {now}  |  Period: Last {hours}h",
+        f"  Device: Hikvision DS-2CD2043G2-I  |  Firmware: V5.7.15",
+        "═" * 70,
+        "",
+        "── EXECUTIVE SUMMARY ──────────────────────────────────────────────",
+        f"  Total attack events   : {total:,}",
+        f"  Unique source IPs     : {stats.get('unique_ips',0):,}",
+        f"  Countries represented : {stats.get('country_count',0)}",
+        f"  CVE exploits detected : {stats.get('cve_exploits',0)}",
+        f"  Botnet attempts       : {stats.get('botnet_count',0)}",
+        f"  Malware downloads     : {stats.get('malware_downloads',0)}",
+        f"  Honeytoken triggers   : {stats.get('honeytokens_triggered',0)}",
+        f"  Anonymised traffic    : {tor_c + vpn_c + proxy_c} events ({anon_pct}%)",
+        f"    ├─ Tor exit nodes   : {tor_c}",
+        f"    ├─ VPN              : {vpn_c}",
+        f"    └─ Proxy            : {proxy_c}",
+        "",
+        "── TOP ATTACK TYPES ────────────────────────────────────────────────",
+    ]
+    for at, cnt in top_atypes:
+        pct = round(cnt / max(total, 1) * 100, 1)
+        lines.append(f"  {at:<40s} {cnt:>6,}  ({pct}%)")
+
+    lines += [
+        "",
+        "── SERVICE BREAKDOWN ───────────────────────────────────────────────",
+        f"  {'Service':<12} {'Port':>5}  {'Hits':>8}  {'Unique IPs':>10}",
+        "  " + "─" * 42,
+    ]
+    for s in sorted(services, key=lambda x: -x.get("cnt",0))[:17]:
+        lines.append(f"  {(s.get('service','') or '').upper():<12} {s.get('dest_port',0):>5}  {s.get('cnt',0):>8,}  {s.get('unique_ips',0):>10,}")
+
+    lines += [
+        "",
+        "── TOP SOURCE COUNTRIES ────────────────────────────────────────────",
+    ]
+    for c in countries[:15]:
+        pct = round(c["cnt"] / max(total,1) * 100, 1)
+        lines.append(f"  {(c['country'] or 'Unknown'):<25}  {c['cnt']:>8,}  ({pct}%)")
+
+    lines += [
+        "",
+        "── TOP ATTACKER IPs ────────────────────────────────────────────────",
+        f"  {'IP':<17} {'Country':<20} {'Hits':>7}  {'Flags'}",
+        "  " + "─" * 60,
+    ]
+    for ip in top_ips[:15]:
+        flags = []
+        if ip.get("bots"): flags.append("BOTNET")
+        if ip.get("tors"): flags.append("TOR")
+        lines.append(f"  {ip['source_ip']:<17} {(ip.get('country') or 'Unknown'):<20} {ip['cnt']:>7,}  {' '.join(flags)}")
+
+    lines += [
+        "",
+        "── CVE EXPLOITS DETECTED ───────────────────────────────────────────",
+        f"  {'CVE ID':<20} {'Severity':<10} {'Service':<10} {'Hits':>6}  {'Unique IPs':>10}",
+        "  " + "─" * 62,
+    ]
+    for c in cves[:15]:
+        lines.append(f"  {c.get('cve_id',''):<20} {c.get('severity',''):<10} {(c.get('service','') or '').upper():<10} {c.get('cnt',0):>6,}  {c.get('unique_ips',0):>10,}")
+
+    lines += [
+        "",
+        "── TOP CREDENTIAL ATTEMPTS ─────────────────────────────────────────",
+        f"  {'Username':<20} {'Password':<25} {'Count':>7}",
+        "  " + "─" * 55,
+    ]
+    for cr in creds[:15]:
+        lines.append(f"  {(cr.get('username','') or ''):<20} {(cr.get('password','') or ''):<25} {cr.get('cnt',0):>7,}")
+
+    lines += [
+        "",
+        "── THREAT ASSESSMENT ───────────────────────────────────────────────",
+    ]
+    lines += ["  " + l for l in _generate_threat_assessment(stats, cves, tor_c, vpn_c,
+              sum(1 for r in sessions if (r.get("service","") or "") == "rtsp"),
+              sum(1 for r in sessions if (r.get("service","") or "") == "onvif"))]
+
+    lines += [
+        "",
+        "── RECOMMENDATIONS ─────────────────────────────────────────────────",
+    ]
+    for i, rec in enumerate(_generate_recommendations(
+            stats, cves,
+            sum(1 for r in sessions if r.get("username") in ("admin","root") and r.get("password") in ("admin","12345","password","root","")),
+            sum(1 for r in sessions if (r.get("service","") or "") == "rtsp")), 1):
+        lines.append(f"  {i}. {rec}")
+
+    lines += ["", "═" * 70, "  END OF REPORT", "═" * 70]
+
+    text  = "\n".join(lines) + "\n"
+    fname = f"honeypot_report_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+    return Response(
+        text,
+        mimetype="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ATTACK TYPE BREAKDOWN
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/attack-types")
+@cached(10)
+def api_attack_types():
+    """Full breakdown of every attack_type value with counts, services, trend."""
+    hours   = request.args.get("hours",   168, type=int)
+    service = request.args.get("service", "")
+    rows    = db.get_recent_attacks(hours, limit=50000, service=service or None)
+
+    atype_stats = {}   # attack_type -> {count, unique_ips, services, threat_levels, last}
+    for r in rows:
+        at  = r.get("attack_type","unknown") or "unknown"
+        ip  = r.get("source_ip","")
+        svc = (r.get("service","") or "").upper()
+        thr = r.get("threat_level","low") or "low"
+        ts  = r.get("timestamp","")
+
+        if at not in atype_stats:
+            atype_stats[at] = {"count":0,"ips":set(),"services":{},"threats":{},"last":""}
+        d = atype_stats[at]
+        d["count"] += 1
+        d["ips"].add(ip)
+        d["services"][svc] = d["services"].get(svc,0) + 1
+        d["threats"][thr]  = d["threats"].get(thr,0)  + 1
+        if ts > d["last"]: d["last"] = ts
+
+    total = sum(d["count"] for d in atype_stats.values())
+    result = []
+    for at, d in sorted(atype_stats.items(), key=lambda x: -x[1]["count"]):
+        top_svc = max(d["services"].items(), key=lambda x: x[1])[0] if d["services"] else ""
+        top_thr = max(d["threats"].items(),  key=lambda x: x[1])[0] if d["threats"]  else "low"
+        result.append({
+            "attack_type": at,
+            "count":       d["count"],
+            "unique_ips":  len(d["ips"]),
+            "pct":         round(d["count"] / max(total,1) * 100, 1),
+            "top_service": top_svc,
+            "top_threat":  top_thr,
+            "services":    d["services"],
+            "last":        d["last"],
+        })
+
+    return jsonify({
+        "attack_types": result,
+        "total":        total,
+        "unique_types": len(result),
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SERVICE DRILL-DOWN
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/service-drill")
+@cached(10)
+def api_service_drill():
+    """Deep stats for a specific service."""
+    service = request.args.get("service", "ssh").lower()
+    hours   = request.args.get("hours",   168, type=int)
+    rows    = db.get_recent_attacks(hours, limit=20000, service=service)
+
+    total       = len(rows)
+    auth_fail   = sum(1 for r in rows if "auth_fail" in (r.get("attack_type","") or ""))
+    auth_ok     = sum(1 for r in rows if "auth_success" in (r.get("attack_type","") or ""))
+    cve_hits    = sum(1 for r in rows if r.get("cve_id"))
+    tor_hits    = sum(1 for r in rows if r.get("is_tor"))
+    vpn_hits    = sum(1 for r in rows if r.get("is_vpn"))
+    botnet_hits = sum(1 for r in rows if r.get("is_botnet"))
+
+    atypes  = {}
+    cves    = {}
+    top_ips = {}
+    countries = {}
+    scanners  = {}
+
+    for r in rows:
+        at  = r.get("attack_type","unknown") or "unknown"
+        cve = r.get("cve_id","") or ""
+        ip  = r.get("source_ip","")
+        c   = r.get("country","Unknown") or "Unknown"
+        sc  = r.get("scanner_tool","") or ""
+
+        atypes[at]  = atypes.get(at, 0) + 1
+        if cve: cves[cve] = cves.get(cve, 0) + 1
+        top_ips[ip] = top_ips.get(ip, 0) + 1
+        countries[c]= countries.get(c,  0) + 1
+        if sc: scanners[sc] = scanners.get(sc, 0) + 1
+
+    # Hourly timeline
+    timeline = {}
+    for r in rows:
+        ts = (r.get("timestamp","") or "")[:13]
+        timeline[ts] = timeline.get(ts, 0) + 1
+
+    return jsonify({
+        "service":    service.upper(),
+        "hours":      hours,
+        "total":      total,
+        "auth_failures": auth_fail,
+        "auth_successes": auth_ok,
+        "cve_exploits": cve_hits,
+        "tor_hits":   tor_hits,
+        "vpn_hits":   vpn_hits,
+        "botnet_hits":botnet_hits,
+        "attack_types": sorted(atypes.items(), key=lambda x: -x[1])[:20],
+        "cves_seen":    sorted(cves.items(),   key=lambda x: -x[1])[:10],
+        "top_ips":      sorted(top_ips.items(),key=lambda x: -x[1])[:10],
+        "top_countries":sorted(countries.items(),key=lambda x: -x[1])[:10],
+        "scanner_tools":sorted(scanners.items(),key=lambda x: -x[1])[:10],
+        "timeline": [{"bucket": k, "count": v} for k, v in sorted(timeline.items())[-48:]],
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CREDENTIAL ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DEFAULT_CREDS = {
+    ("admin","admin"),("admin","12345"),("admin","password"),("admin","123456"),
+    ("root","root"),("root","12345"),("root","toor"),("root","password"),
+    ("admin",""),("root",""),("user","user"),("guest","guest"),
+    ("admin","admin123"),("admin","hikvision"),("ubnt","ubnt"),
+    ("pi","raspberry"),("admin","1234"),("root","1234"),
+}
+
+@app.route("/api/credential-analysis")
+@cached(15)
+def api_credential_analysis():
+    """Username/password pattern analysis."""
+    hours = request.args.get("hours", 168, type=int)
+    rows  = db.get_recent_attacks(hours, limit=50000)
+
+    usernames = {}
+    passwords = {}
+    combos    = {}
+    default_c = 0
+    empty_pass= 0
+    long_pass = 0  # > 20 chars (possible hash / stuffing)
+    services_with_creds = {}
+
+    for r in rows:
+        u   = r.get("username","") or ""
+        p   = r.get("password","") or ""
+        svc = (r.get("service","") or "").upper()
+
+        if not u and not p:
+            continue
+
+        usernames[u] = usernames.get(u, 0) + 1
+        if p:
+            passwords[p] = passwords.get(p, 0) + 1
+        if not p:
+            empty_pass += 1
+        if len(p) > 20:
+            long_pass += 1
+        if (u, p) in _DEFAULT_CREDS:
+            default_c += 1
+
+        combo = f"{u}:{p}"
+        combos[combo] = combos.get(combo, 0) + 1
+
+        if svc:
+            if svc not in services_with_creds:
+                services_with_creds[svc] = {"total":0,"unique_users":set()}
+            services_with_creds[svc]["total"] += 1
+            services_with_creds[svc]["unique_users"].add(u)
+
+    total_cred_events = sum(usernames.values())
+
+    svc_list = []
+    for svc, d in sorted(services_with_creds.items(), key=lambda x: -x[1]["total"]):
+        svc_list.append({"service": svc, "total": d["total"], "unique_users": len(d["unique_users"])})
+
+    return jsonify({
+        "total_credential_events": total_cred_events,
+        "default_credential_use":  default_c,
+        "empty_password_attempts": empty_pass,
+        "long_password_attempts":  long_pass,
+        "unique_usernames":        len(usernames),
+        "unique_passwords":        len(passwords),
+        "unique_combos":           len(combos),
+        "top_usernames":  sorted(usernames.items(), key=lambda x: -x[1])[:20],
+        "top_passwords":  sorted(passwords.items(), key=lambda x: -x[1])[:20],
+        "top_combos":     [{"combo":k,"count":v} for k,v in sorted(combos.items(), key=lambda x: -x[1])[:20]],
+        "by_service":     svc_list,
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SINGLE IP PROFILE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/ip-profile")
+@cached(5)
+def api_ip_profile():
+    """Full profile for a specific IP: all events, timeline, tools, CVEs."""
+    ip    = request.args.get("ip","").strip()
+    hours = request.args.get("hours", 168, type=int)
+    if not ip:
+        return jsonify({"error": "ip parameter required"}), 400
+
+    rows = db.get_recent_attacks(hours, limit=5000)
+    rows = [r for r in rows if r.get("source_ip","") == ip]
+
+    if not rows:
+        return jsonify({"ip": ip, "found": False, "total": 0})
+
+    services_hit = {}
+    attack_types = {}
+    cves_used    = {}
+    scanners     = {}
+    usernames    = {}
+    passwords    = {}
+    timeline     = {}
+
+    for r in rows:
+        svc = (r.get("service","") or "").upper()
+        at  = r.get("attack_type","") or ""
+        cve = r.get("cve_id","") or ""
+        sc  = r.get("scanner_tool","") or ""
+        u   = r.get("username","") or ""
+        p   = r.get("password","") or ""
+        ts  = (r.get("timestamp","") or "")[:13]
+
+        services_hit[svc]  = services_hit.get(svc,0) + 1
+        attack_types[at]   = attack_types.get(at,0) + 1
+        if cve: cves_used[cve] = cves_used.get(cve,0) + 1
+        if sc:  scanners[sc]   = scanners.get(sc,0) + 1
+        if u:   usernames[u]   = usernames.get(u,0) + 1
+        if p:   passwords[p]   = passwords.get(p,0) + 1
+        timeline[ts] = timeline.get(ts,0) + 1
+
+    first  = min(r.get("timestamp","") for r in rows)
+    last   = max(r.get("timestamp","") for r in rows)
+    sample = rows[0]
+
+    return jsonify({
+        "ip":         ip,
+        "found":      True,
+        "total":      len(rows),
+        "first_seen": first,
+        "last_seen":  last,
+        "country":    sample.get("country",""),
+        "city":       sample.get("city",""),
+        "asn":        sample.get("asn",""),
+        "org":        sample.get("org",""),
+        "is_tor":     bool(sample.get("is_tor",0)),
+        "is_vpn":     bool(sample.get("is_vpn",0)),
+        "is_proxy":   bool(sample.get("is_proxy",0)),
+        "vpn_provider": sample.get("vpn_provider",""),
+        "services_hit":  sorted(services_hit.items(), key=lambda x: -x[1]),
+        "attack_types":  sorted(attack_types.items(),key=lambda x: -x[1]),
+        "cves_used":     sorted(cves_used.items(),   key=lambda x: -x[1]),
+        "scanner_tools": sorted(scanners.items(),    key=lambda x: -x[1]),
+        "usernames_tried": sorted(usernames.items(), key=lambda x: -x[1])[:10],
+        "passwords_tried": sorted(passwords.items(), key=lambda x: -x[1])[:10],
+        "timeline": [{"bucket":k,"count":v} for k,v in sorted(timeline.items())],
+        "recent_events": [_build_session_row(r) for r in rows[:20]],
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GRANULAR ATTACK TIMELINE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/attack-timeline")
+@cached(10)
+def api_attack_timeline():
+    """Hourly/daily/weekly timeline with per-service and per-threat breakdown."""
+    granularity = request.args.get("granularity", "hour")  # hour | day | week
+    hours       = request.args.get("hours", 168, type=int)
+    service     = request.args.get("service","")
+    rows        = db.get_recent_attacks(hours, limit=50000, service=service or None)
+
+    # bucket_len: hour=13 chars ("2026-03-25T14"), day=10, week=7
+    blen = {"hour": 13, "day": 10, "week": 7}.get(granularity, 13)
+
+    buckets = {}  # bucket -> {total, by_service, by_threat, cves, botnets}
+    for r in rows:
+        ts  = (r.get("timestamp","") or "")[:blen]
+        svc = (r.get("service","") or "unknown").upper()
+        thr = r.get("threat_level","low") or "low"
+
+        if ts not in buckets:
+            buckets[ts] = {"total":0,"by_service":{},"by_threat":{"critical":0,"high":0,"medium":0,"low":0},"cves":0,"botnets":0}
+        b = buckets[ts]
+        b["total"] += 1
+        b["by_service"][svc] = b["by_service"].get(svc, 0) + 1
+        b["by_threat"][thr]  = b["by_threat"].get(thr, 0) + 1
+        if r.get("cve_id"):     b["cves"]    += 1
+        if r.get("is_botnet"):  b["botnets"] += 1
+
+    result = [{"bucket": k, **v} for k, v in sorted(buckets.items())]
+    total  = sum(b["total"] for b in buckets.values())
+
+    # Peak bucket
+    peak = max(result, key=lambda x: x["total"]) if result else {}
+
+    return jsonify({
+        "granularity": granularity,
+        "hours":       hours,
+        "total":       total,
+        "buckets":     result,
+        "peak_bucket": peak.get("bucket",""),
+        "peak_count":  peak.get("total",0),
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  COMPREHENSIVE THREAT SUMMARY
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/threat-summary")
+@cached(15)
+def api_threat_summary():
+    """
+    Comprehensive narrative threat summary with key findings, statistics,
+    attack pattern analysis, and auto-generated insights.
+    """
+    hours    = request.args.get("hours", 24, type=int)
+    stats    = db.get_stats(hours)
+    cves     = db.get_cve_data(hours)
+    creds    = db.get_top_credentials(hours)
+    countries= db.get_top_countries(hours)
+    services = db.get_service_breakdown(hours)
+    sessions = db.get_recent_attacks(hours, limit=20000)
+
+    total     = stats.get("total_attacks", 0)
+    unique_ips= stats.get("unique_ips", 0)
+
+    # Anonymization
+    tor_c   = sum(1 for r in sessions if r.get("is_tor"))
+    vpn_c   = sum(1 for r in sessions if r.get("is_vpn"))
+    proxy_c = sum(1 for r in sessions if r.get("is_proxy"))
+    anon    = tor_c + vpn_c + proxy_c
+    anon_pct= round(anon / max(total,1) * 100, 1)
+
+    # Attack types
+    atypes = {}
+    for r in sessions:
+        at = r.get("attack_type","unknown") or "unknown"
+        atypes[at] = atypes.get(at,0) + 1
+    top3_atypes = sorted(atypes.items(), key=lambda x: -x[1])[:3]
+
+    # Threat level distribution
+    threats = {"critical":0,"high":0,"medium":0,"low":0}
+    for r in sessions:
+        tl = r.get("threat_level","low") or "low"
+        threats[tl] = threats.get(tl, 0) + 1
+
+    # Most hit service
+    svc_counts = {(s.get("service","") or "").upper(): s.get("cnt",0) for s in services}
+    top_svc = max(svc_counts.items(), key=lambda x: x[1]) if svc_counts else ("N/A", 0)
+
+    # Default creds
+    default_c = sum(1 for r in sessions
+                    if r.get("username") in ("admin","root","")
+                    and r.get("password") in ("admin","12345","password","root",""))
+    def_pct   = round(default_c / max(total,1) * 100, 1)
+
+    # CVE severity breakdown
+    crit_cves = [c for c in cves if c.get("severity") == "critical"]
+    high_cves = [c for c in cves if c.get("severity") == "high"]
+
+    # Unique attacker orgs / ASNs
+    orgs = {}
+    for r in sessions:
+        org = r.get("org","") or ""
+        if org: orgs[org] = orgs.get(org,0) + 1
+    top_orgs = sorted(orgs.items(), key=lambda x: -x[1])[:5]
+
+    # VPN providers
+    vpn_provs = {}
+    for r in sessions:
+        if r.get("is_vpn") and r.get("vpn_provider"):
+            p = r["vpn_provider"]
+            vpn_provs[p] = vpn_provs.get(p,0) + 1
+    top_vpn = sorted(vpn_provs.items(), key=lambda x: -x[1])[:5]
+
+    # Botnet families
+    botnet_fams = {}
+    for r in sessions:
+        bf = r.get("botnet_family","") or ""
+        if bf: botnet_fams[bf] = botnet_fams.get(bf,0) + 1
+    top_botnets = sorted(botnet_fams.items(), key=lambda x: -x[1])[:5]
+
+    # Build narrative insights
+    insights = []
+    if total == 0:
+        insights.append("No attack events recorded in this period.")
+    else:
+        insights.append(f"This honeypot received {total:,} attack events from {unique_ips:,} unique IPs across {stats.get('country_count',0)} countries in the last {hours} hours.")
+
+        if top3_atypes:
+            desc = ", ".join(f"{at} ({cnt:,})" for at, cnt in top3_atypes)
+            insights.append(f"The most common attack types were: {desc}.")
+
+        if def_pct > 0:
+            insights.append(f"{def_pct}% of credential attempts used default/factory credentials (admin/admin, root/12345, etc.) — a hallmark of IoT botnet credential spraying.")
+
+        if crit_cves:
+            cve_names = ", ".join(c["cve_id"] for c in crit_cves[:3])
+            insights.append(f"{len(crit_cves)} critical CVE(s) were actively exploited: {cve_names}. These target known Hikvision/RTSP/ONVIF vulnerabilities.")
+
+        if anon_pct > 0:
+            detail = []
+            if tor_c: detail.append(f"{tor_c} via Tor")
+            if vpn_c: detail.append(f"{vpn_c} via VPN")
+            if proxy_c: detail.append(f"{proxy_c} via proxy")
+            insights.append(f"{anon_pct}% of traffic ({', '.join(detail)}) used anonymisation infrastructure, suggesting deliberate operational security by some threat actors.")
+
+        if top_svc[1] > 0:
+            insights.append(f"The most targeted service was {top_svc[0]} with {top_svc[1]:,} events.")
+
+        if stats.get("malware_downloads",0) > 0:
+            insights.append(f"{stats['malware_downloads']} malware payload download attempts were captured, confirming active IoT botnet recruitment activity.")
+
+        if stats.get("honeytokens_triggered",0) > 0:
+            insights.append(f"{stats['honeytokens_triggered']} honeytoken triggers recorded — attackers accessed deliberately planted fake credentials/files.")
+
+        if countries:
+            top3_c = ", ".join(f"{c['country']} ({c['cnt']:,})" for c in countries[:3])
+            insights.append(f"Top attacking countries: {top3_c}.")
+
+        if top_orgs:
+            org_str = ", ".join(f"{o} ({n})" for o, n in top_orgs[:3])
+            insights.append(f"Top attacking organisations/ASNs: {org_str}.")
+
+        if top_botnets:
+            bot_str = ", ".join(f"{b} ({n})" for b, n in top_botnets[:3])
+            insights.append(f"Botnet families detected: {bot_str}.")
+
+    return jsonify({
+        "generated_at":    datetime.datetime.utcnow().isoformat(),
+        "period_hours":    hours,
+        "insights":        insights,
+        "key_metrics": {
+            "total_attacks":        total,
+            "unique_ips":           unique_ips,
+            "countries":            stats.get("country_count",0),
+            "critical_cves":        len(crit_cves),
+            "high_cves":            len(high_cves),
+            "total_cves":           len(cves),
+            "default_cred_pct":     def_pct,
+            "anon_pct":             anon_pct,
+            "tor_events":           tor_c,
+            "vpn_events":           vpn_c,
+            "proxy_events":         proxy_c,
+            "botnet_events":        stats.get("botnet_count",0),
+            "malware_downloads":    stats.get("malware_downloads",0),
+            "honeytokens":          stats.get("honeytokens_triggered",0),
+        },
+        "threat_level_dist": threats,
+        "top_attack_types":  top3_atypes,
+        "top_service":       {"service": top_svc[0], "count": top_svc[1]},
+        "top_countries":     [{"country":c["country"],"count":c["cnt"]} for c in countries[:10]],
+        "critical_cves":     [{"cve_id":c["cve_id"],"name":c.get("cve_name",""),"count":c["cnt"]} for c in crit_cves[:10]],
+        "top_credentials":   [{"username":c["username"],"password":c.get("password",""),"count":c["cnt"]} for c in creds[:10]],
+        "top_vpn_providers": [{"provider":p,"count":n} for p,n in top_vpn],
+        "top_orgs":          [{"org":o,"count":n} for o,n in top_orgs],
+        "top_botnets":       [{"family":b,"count":n} for b,n in top_botnets],
+        "recommendations":   _generate_recommendations(
+            stats, cves, default_c,
+            sum(1 for r in sessions if (r.get("service","") or "").lower() == "rtsp")
+        ),
+    })
+
+
 @app.after_request
 def after_request_headers(resp):
     resp.headers["Access-Control-Allow-Origin"]  = "*"
@@ -781,17 +1503,26 @@ if __name__ == "__main__":
     db.init()
 
     print(f"""
-╔══════════════════════════════════════════════════════╗
+╔══════════════════════════════════════════════════════════╗
 ║  honeyPot Dashboard  —  http://{args.host}:{args.port}
-╠══════════════════════════════════════════════════════╣
-║  /api/health          /api/stats                     ║
-║  /api/geo-data        /api/sessions                  ║
-║  /api/chart-data      /api/top-ips                   ║
-║  /api/countries       /api/cve-exploits              ║
-║  /api/top-credentials /api/malware-urls              ║
-║  /api/honeytokens     /api/alerts                    ║
-║  /api/service-stats   /api/full-report               ║
-║  /api/live-log        /api/anonymization-stats       ║
+╠══════════════════════════════════════════════════════════╣
+║  CORE                                                    ║
+║  /api/health          /api/stats                         ║
+║  /api/geo-data        /api/sessions      (full filters)  ║
+║  /api/chart-data      /api/top-ips                       ║
+║  /api/countries       /api/cve-exploits                  ║
+║  /api/top-credentials /api/malware-urls                  ║
+║  /api/honeytokens     /api/alerts                        ║
+║  /api/service-stats   /api/live-log                      ║
+║  ANALYTICS                                               ║
+║  /api/threat-summary  /api/attack-types                  ║
+║  /api/service-drill   /api/credential-analysis           ║
+║  /api/ip-profile      /api/attack-timeline               ║
+║  /api/anonymization-stats  /api/iot-stats                ║
+║  /api/full-report     /api/vpn-endpoint-changes          ║
+║  EXPORT                                                  ║
+║  /api/export/csv      /api/export/json                   ║
+║  /api/export/report-txt                                  ║
 ║  /api/vpn-endpoint-changes /api/iot-stats            ║
 ╚══════════════════════════════════════════════════════╝
 """)
