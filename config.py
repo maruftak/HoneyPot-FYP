@@ -57,6 +57,7 @@ SERVICE_PORTS = {
     "ssh":       2222,  # Changed from 22 to 2222
     "ftp":       21,
     "tftp":      69,    # UDP — Mirai payload delivery / firmware overwrite
+    "ssdp":      1900,  # UDP — UPnP discovery, amplification DDoS, IGD exploits
     "http":      80,
     "https":     443,
     "http_alt":  8080,

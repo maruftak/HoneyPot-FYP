@@ -545,6 +545,7 @@ def get_stats(hours=24):
         "vnc_attacks":           svc.get("vnc",       0),
         "modbus_attacks":        svc.get("modbus",    0),
         "tftp_attacks":          svc.get("tftp",      0),
+        "ssdp_attacks":          svc.get("ssdp",      0),
         "isapi_hits":            isapi_hits,
         "decoy_interactions":    decoy_interactions,
         "services":              svc,

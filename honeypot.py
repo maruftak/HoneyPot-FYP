@@ -24,6 +24,7 @@ import mqtt_service
 import coap_service
 import hik_sdk_service
 import tftp_service
+import ssdp_service
 import http_service          # ← new modular HTTP handler
 
 # ─── State ────────────────────────────────────────────────────────────────────
@@ -971,6 +972,34 @@ def handle_tftp(srv_sock, addr, data=b""):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  SSDP/UPnP (port 1900 UDP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_ssdp(srv_sock, addr, data=b""):
+    ip, _ = addr
+    if _is_rate_limited(ip):
+        return
+    _inc("sessions")
+    try:
+        ssdp_service.handle_ssdp(
+            srv_sock, addr,
+            data          = data,
+            log_attack    = db.log_attack,
+            geoip_func    = _geoip,
+            intel_fields_func = _intel_fields,
+            new_ip_alert  = _new_ip_alert,
+            check_cve     = _check_cve,
+            inc_counter   = _inc,
+            alert_funcs   = {
+                "cve_exploit": alerts.cve_exploit,
+            },
+            local_ip      = config.DEVICE_IP or "192.168.1.108",
+        )
+    except Exception as e:
+        print(f"[!] SSDP handler error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  SERVICE LAUNCHERS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -998,6 +1027,9 @@ def _start_udp(handler, port, name):
         try:
             srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # SO_REUSEPORT lets us share the port with other processes (e.g. Spotify on 1900)
+            if hasattr(socket, "SO_REUSEPORT"):
+                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             srv.bind((config.HONEYPOT_HOST, port))
             print(f"  [+] {name:<22} :{port} (UDP)")
             while True:
@@ -1034,6 +1066,7 @@ _SERVICES = [
     (handle_coap,                       config.SERVICE_PORTS["coap"],      "CoAP",          "udp"),
     (handle_hik_sdk,                    config.SERVICE_PORTS["hik_sdk"],   "Hikvision-SDK", "tcp"),
     (handle_tftp,                       config.SERVICE_PORTS["tftp"],      "TFTP",          "udp"),
+    (handle_ssdp,                       config.SERVICE_PORTS["ssdp"],      "SSDP/UPnP",     "udp"),
 ]
 
 
@@ -1071,6 +1104,10 @@ def main():
 
     print(f"\n[✓] {active} services active | DB: {config.DB_PATH}")
     print(f"[✓] Dashboard: python3 dashboard.py\n")
+
+    # Start SSDP multicast NOTIFY sender — advertises device on the LAN
+    ssdp_location = f"http://{config.DEVICE_IP or '192.168.1.108'}:80/upnp/basicDevice.xml"
+    ssdp_service.start_notify_sender(ssdp_location)
 
     if config.TELEGRAM_ENABLED:
         alerts.startup(active, f"{config.DEVICE_VENDOR} {config.DEVICE_MODEL}", config.DEVICE_FIRMWARE)

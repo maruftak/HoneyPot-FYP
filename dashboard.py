@@ -292,7 +292,7 @@ def api_service_stats():
     KNOWN = {
         "telnet":23,"ssh":2222,"ftp":21,"tftp":69,"http":80,"https":443,
         "http_alt":8080,"rtsp":554,"onvif":8000,"mqtt":1883,
-        "vnc":5900,"modbus":502,"coap":5683,"hik_sdk":8200,
+        "vnc":5900,"modbus":502,"coap":5683,"hik_sdk":8200,"ssdp":1900,
     }
     seen, result = set(), []
     for r in rows:
