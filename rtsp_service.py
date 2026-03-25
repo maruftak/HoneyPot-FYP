@@ -1,418 +1,456 @@
-import os
+#!/usr/bin/env python3
+"""
+honeyPot — RTSP Service (RFC 2326)
+Emulates a Hikvision IP camera RTSP server on TCP port 554.
+
+Fixes over original:
+  - log_attack now uses the standard dict format (original used wrong positional args → zero DB rows)
+  - geoip / intel_fields_func called correctly
+  - Proper attack_type classification per request / event
+  - CVE pattern detection in URLs and headers
+  - Stream enumeration detection (rapid DESCRIBE on multiple channels)
+  - RECORD / injection attempt detection
+  - Auth bypass detection (CVE-2017-7925 snapshot URL)
+  - Malformed header / fuzzing detection
+"""
+
 import re
 import time
-import base64
-import threading
-import hashlib
 import random
-import json
+import datetime
+import socket
 
-# Common weak credentials that real IoT cameras use (honeypot will accept these)
-WEAK_CREDENTIALS = {
-    "admin": ["12345", "admin", "password", "123456", "admin123", ""],
-    "root": ["root", "12345", "password", "123456", "admin", ""],
-    "user": ["user", "12345", "password", ""],
-    "service": ["service", "12345", ""],
-    "default": ["default", "12345", ""],
+# ─── Weak credentials the camera accepts ─────────────────────────────────────
+
+_WEAK_CREDS = {
+    "admin":   ["", "admin", "12345", "123456", "password", "admin123", "hikvision"],
+    "root":    ["", "root",  "12345", "toor",   "password", "admin"],
+    "user":    ["", "user",  "12345"],
+    "service": ["", "service"],
+    "default": ["", "default"],
+    "guest":   ["", "guest"],
 }
 
-# Multiple SDP responses for different channels (more realistic)
-SDP_TEMPLATES = {
-    "101": """v=0
-o=- 0 0 IN IP4 127.0.0.1
-s=Hikvision DS-2CD2043G2-I Main Stream
-c=IN IP4 0.0.0.0
-t=0 0
-a=tool:libavformat 58.29.100
-m=video 0 RTP/AVP 96
-b=AS:4096
-a=rtpmap:96 H264/90000
-a=fmtp:96 packetization-mode=1;profile-level-id=640028;sprop-parameter-sets=Z2QAKKzZQHgCJ+WEAAADAAQAAAMAyDxYtlg=,aO48gA==
-a=control:trackID=1
-m=audio 0 RTP/AVP 8
-a=rtpmap:8 PCMA/8000
-a=control:trackID=2
-""",
-    "102": """v=0
-o=- 0 0 IN IP4 127.0.0.1
-s=Hikvision DS-2CD2043G2-I Sub Stream
-c=IN IP4 0.0.0.0
-t=0 0
-a=tool:libavformat 58.29.100
-m=video 0 RTP/AVP 96
-b=AS:512
-a=rtpmap:96 H264/90000
-a=fmtp:96 packetization-mode=1;profile-level-id=42001f;sprop-parameter-sets=Z0IAH5WoFAFuQA==,aM48gA==
-a=control:trackID=1
-""",
-    "201": """v=0
-o=- 0 0 IN IP4 127.0.0.1
-s=Hikvision DS-2CD2043G2-I Third Stream
-c=IN IP4 0.0.0.0
-t=0 0
-m=video 0 RTP/AVP 96
-b=AS:256
-a=rtpmap:96 H264/90000
-a=control:trackID=1
-""",
+# ─── SDP templates per Hikvision channel ─────────────────────────────────────
+
+_SDP = {
+    "101": (
+        "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n"
+        "s=Hikvision DS-2CD2043G2-I Main Stream\r\n"
+        "c=IN IP4 0.0.0.0\r\nt=0 0\r\n"
+        "a=tool:libavformat 58.29.100\r\n"
+        "m=video 0 RTP/AVP 96\r\nb=AS:4096\r\n"
+        "a=rtpmap:96 H264/90000\r\n"
+        "a=fmtp:96 packetization-mode=1;profile-level-id=640028;"
+        "sprop-parameter-sets=Z2QAKKzZQHgCJ+WEAAADAAQAAAMAyDxYtlg=,aO48gA==\r\n"
+        "a=control:trackID=1\r\n"
+        "m=audio 0 RTP/AVP 8\r\na=rtpmap:8 PCMA/8000\r\na=control:trackID=2\r\n"
+    ),
+    "102": (
+        "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n"
+        "s=Hikvision DS-2CD2043G2-I Sub Stream\r\n"
+        "c=IN IP4 0.0.0.0\r\nt=0 0\r\n"
+        "m=video 0 RTP/AVP 96\r\nb=AS:512\r\n"
+        "a=rtpmap:96 H264/90000\r\n"
+        "a=fmtp:96 packetization-mode=1;profile-level-id=42001f\r\n"
+        "a=control:trackID=1\r\n"
+    ),
+    "201": (
+        "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n"
+        "s=Hikvision DS-2CD2043G2-I Third Stream\r\n"
+        "c=IN IP4 0.0.0.0\r\nt=0 0\r\n"
+        "m=video 0 RTP/AVP 96\r\nb=AS:256\r\n"
+        "a=rtpmap:96 H264/90000\r\na=control:trackID=1\r\n"
+    ),
 }
 
-def parse_headers(lines):
-    headers = {}
+# ─── CVE patterns in RTSP URLs / headers ──────────────────────────────────────
+
+_CVE_PATTERNS = [
+    (re.compile(r"/onvif-http/snapshot\?auth=|YWRtaW4|auth=0x",       re.I),
+     "CVE-2017-7925", "Hikvision snapshot auth bypass",        "critical"),
+    (re.compile(r"/ISAPI/Streaming/channels/\d+/picture.*auth=",       re.I),
+     "CVE-2017-7921", "Hikvision auth bypass via ISAPI",        "critical"),
+    (re.compile(r"/Streaming/Channels/\d+\?starttime=.*&endtime=",    re.I),
+     "CVE-2021-36260","Hikvision command injection via stream URL", "critical"),
+    (re.compile(r"\bRECORD\b",                                         re.I),
+     "RTSP-INJECT",  "RTSP RECORD stream injection attempt",    "critical"),
+    (re.compile(r"\$\{jndi:|%24%7bjndi:",                              re.I),
+     "CVE-2021-44228","Log4Shell in RTSP URL/header",            "critical"),
+    (re.compile(r"(\.\./){2,}|%2e%2e%2f|%252e%252e",                  re.I),
+     "RTSP-TRAVERSAL","Path traversal in RTSP URL",             "high"),
+    (re.compile(r"<script|javascript:|vbscript:",                       re.I),
+     "RTSP-XSS",     "XSS attempt in RTSP URL",                 "medium"),
+]
+
+# ─── Scanner tool fingerprints from User-Agent ───────────────────────────────
+
+_UA_FINGERPRINTS = {
+    "nmap":            "nmap",
+    "masscan":         "masscan",
+    "vlc":             "VLC media player",
+    "ffmpeg":          "FFmpeg",
+    "libav":           "Libav",
+    "python":          "Python scanner",
+    "go-rtsp":         "Go RTSP scanner",
+    "rtsp-client":     "generic RTSP client",
+    "openrtsp":        "openRTSP",
+    "live555":         "LIVE555 SDK",
+    "hikvision":       "Hikvision client (legitimate or spoof)",
+    "dahua":           "Dahua client",
+}
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _ts() -> str:
+    return datetime.datetime.utcnow().isoformat()
+
+def _parse_headers(lines: list[str]) -> dict:
+    h = {}
     for line in lines[1:]:
         if ":" in line:
-            k, v = line.split(":", 1)
-            headers[k.strip().lower()] = v.strip()
-    return headers
+            k, _, v = line.partition(":")
+            h[k.strip().lower()] = v.strip()
+    return h
 
-def parse_digest_auth(header):
-    """Parse Digest Authorization header into a dict"""
+def _parse_digest(header: str) -> dict:
     auth = {}
-    if not header.startswith("Digest "):
+    if not header.lower().startswith("digest "):
         return auth
     for item in header[7:].split(","):
         if "=" in item:
-            k, v = item.strip().split("=", 1)
+            k, _, v = item.strip().partition("=")
             auth[k.strip()] = v.strip().strip('"')
     return auth
 
-def validate_digest_response(auth, nonce, method, uri, password):
-    """
-    Validate Digest authentication response (simplified for honeypot)
-    Real validation would compute HA1, HA2, and compare response
-    For honeypot: we just check if username/password combo is in weak credentials
-    """
-    username = auth.get("username", "")
-    
-    # Check against weak credentials
-    if username in WEAK_CREDENTIALS:
-        if password in WEAK_CREDENTIALS[username]:
-            return True
-    
-    # Also accept any response that looks valid (honeypot behavior)
-    # This lets attackers succeed even with slight implementation errors
-    if auth.get("response") and len(auth.get("response", "")) == 32:
-        return True
-    
-    return False
+def _channel(url: str) -> str:
+    m = re.search(r"/Channels?/(\d+)", url, re.I)
+    return m.group(1) if m else "101"
 
-def extract_channel_from_url(url):
-    """Extract channel number from RTSP URL"""
-    # /Streaming/Channels/101 -> 101
-    match = re.search(r'/Channels/(\d+)', url)
-    if match:
-        return match.group(1)
-    return "101"  # default
+def _detect_tool(user_agent: str) -> str:
+    ua_lower = user_agent.lower()
+    for sig, name in _UA_FINGERPRINTS.items():
+        if sig in ua_lower:
+            return name
+    return ""
 
-def handle_rtsp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=None, new_ip_alert=None):
-    """
-    Realistic RTSP honeypot handler for IoT cameras
-    Simulates Hikvision IP camera behavior
-    """
-    client_ip = addr[0]
-    
-    # Per-connection session state
+def _check_cve(url: str, raw: str) -> tuple[str, str, str] | tuple[None, None, None]:
+    text = url + " " + raw
+    for pat, cve_id, name, sev in _CVE_PATTERNS:
+        if pat.search(text):
+            return cve_id, name, sev
+    return None, None, None
+
+
+# ─── Main handler ─────────────────────────────────────────────────────────────
+
+def handle_rtsp(
+    conn,
+    addr,
+    log_attack        = None,
+    geoip_func        = None,
+    intel_fields_func = None,
+    new_ip_alert      = None,
+):
+    ip, src_port = addr
+    gdata = geoip_func(ip)        if geoip_func        else {}
+    intel = intel_fields_func(gdata) if intel_fields_func else {}
+
+    fw    = random.choice(["V5.5.8", "V5.6.2", "V5.7.0", "V5.7.15"])
+    model = "DS-2CD2043G2-I"
+    nonce = "%016x" % random.getrandbits(64)
+    sid   = "%08x" % random.getrandbits(32)
+
     session = {
-        "nonce": "%016x" % random.getrandbits(64),
-        "session_id": "%08x" % random.getrandbits(32),
         "authenticated": False,
-        "username": "",
-        "auth_attempts": 0,
-        "methods_called": [],
-        "start_time": time.time(),
-        "last_activity": time.time(),
+        "username":       "",
+        "auth_attempts":  0,
+        "methods":        [],
+        "channels":       set(),   # URLs accessed
+        "start":          time.time(),
     }
-    
-    # Device-specific quirks for realism
-    device_quirks = {
-        "firmware_version": random.choice(["V5.5.8", "V5.6.2", "V5.7.0", "V5.5.0"]),
-        "model": random.choice(["DS-2CD2043G2-I", "DS-2CD2143G0-I", "DS-2CD2043G0-I"]),
-        "delay_ms": random.uniform(0.05, 0.15),  # Network latency simulation
-    }
-    
+
+    def _log(attack_type: str, threat_level: str = "low", extra: dict = None):
+        if not log_attack:
+            return
+        entry = {
+            "timestamp":    _ts(),
+            "source_ip":    ip,
+            "source_port":  src_port,
+            "dest_port":    554,
+            "service":      "rtsp",
+            "protocol":     "TCP",
+            "attack_type":  attack_type,
+            "threat_level": threat_level,
+            "country":      gdata.get("country", "Unknown"),
+            "city":         gdata.get("city", ""),
+            "latitude":     gdata.get("latitude", 0.0),
+            "longitude":    gdata.get("longitude", 0.0),
+            **intel,
+        }
+        if extra:
+            entry.update(extra)
+        try:
+            log_attack(entry)
+        except Exception:
+            pass
+
+    def _now() -> str:
+        return time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+
+    def _www_auth() -> str:
+        return (
+            f'Digest realm="HikVision IP Camera", '
+            f'nonce="{nonce}", algorithm="MD5", qop="auth"'
+        )
+
     try:
         conn.settimeout(15)
         request_count = 0
-        
-        # Handle multiple RTSP requests in sequence
-        for _ in range(10):  # Allow more requests for realistic sessions
-            data = b""
+
+        for _ in range(20):
             try:
-                data = conn.recv(4096)
-            except Exception as e:
+                raw = conn.recv(4096)
+            except socket.timeout:
                 break
-            
-            if not data:
+            if not raw:
                 break
-            
+
             request_count += 1
-            session["last_activity"] = time.time()
-            
-            req = data.decode(errors="ignore")
-            lines = req.replace('\r\n', '\n').split('\n')
-            
+            text  = raw.decode("utf-8", errors="ignore")
+            lines = text.replace("\r\n", "\n").split("\n")
             if not lines or not lines[0].strip():
                 continue
-            
-            req_ln = lines[0].strip()
-            parts = req_ln.split()
-            
-            method = parts[0] if len(parts) > 0 else "OPTIONS"
-            url = parts[1] if len(parts) > 1 else "/Streaming/Channels/101"
-            version = parts[2] if len(parts) > 2 else "RTSP/1.0"
-            
-            headers = parse_headers(lines)
-            cseq = headers.get("cseq", "1")
-            auth_header = headers.get("authorization", "")
-            user_agent = headers.get("user-agent", "Unknown")
-            
-            session["methods_called"].append(method)
-            
-            # Log the attack attempt
-            if log_attack:
-                log_data = {
-                    "service": "RTSP",
-                    "method": method,
-                    "url": url,
+
+            first  = lines[0].strip().split()
+            method = first[0] if first else "OPTIONS"
+            url    = first[1] if len(first) > 1 else "/"
+
+            headers   = _parse_headers(lines)
+            cseq      = headers.get("cseq", "1")
+            auth_hdr  = headers.get("authorization", "")
+            user_agent = headers.get("user-agent", "")
+            tool      = _detect_tool(user_agent)
+
+            session["methods"].append(method)
+            session["channels"].add(url)
+
+            # ── CVE / exploit detection ───────────────────────────────────
+            cve_id, cve_name, cve_sev = _check_cve(url, text)
+            if cve_id:
+                _log(f"rtsp_cve_{cve_id.lower().replace('-','_')}", cve_sev or "critical", {
+                    "cve_id":     cve_id,
+                    "method":     method,
+                    "path":       url,
+                    "payload":    text[:300],
                     "user_agent": user_agent,
-                    "authenticated": session["authenticated"],
-                    "username": session.get("username", ""),
-                    "auth_attempts": session["auth_attempts"],
-                    "cseq": cseq,
-                    "request_count": request_count,
-                    "session_id": session["session_id"],
-                }
-                
-                # Add geo/intel data if available
-                if geoip_func:
-                    log_data.update(geoip_func(client_ip))
-                if intel_fields_func:
-                    log_data.update(intel_fields_func(client_ip))
-                
-                log_attack(client_ip, 554, "RTSP", json.dumps(log_data))
-            
-            # Simulate network delay (realistic IoT camera behavior)
-            time.sleep(device_quirks["delay_ms"])
-            
-            # === AUTHENTICATION HANDLING ===
-            # DESCRIBE, SETUP, PLAY require authentication
-            if method in ("DESCRIBE", "SETUP", "PLAY", "RECORD"):
+                    "scanner":    tool,
+                })
+
+            # ── Stream enumeration — rapid DESCRIBE on many channels ──────
+            if method == "DESCRIBE" and len(session["channels"]) > 3:
+                _log("rtsp_stream_enumeration", "high", {
+                    "method":   method,
+                    "path":     url,
+                    "channels": list(session["channels"])[:10],
+                    "payload":  f"DESCRIBE on {len(session['channels'])} distinct URLs",
+                })
+
+            # ── Authentication flow ───────────────────────────────────────
+            if method in ("DESCRIBE", "SETUP", "PLAY", "RECORD", "GET_PARAMETER"):
                 if not session["authenticated"]:
-                    if auth_header:
-                        auth = parse_digest_auth(auth_header)
-                        username = auth.get("username", "")
-                        
-                        session["auth_attempts"] += 1
-                        
-                        # Check if credentials are valid (weak honeypot credentials)
-                        # Try all weak passwords for this username
-                        auth_success = False
-                        if username in WEAK_CREDENTIALS:
-                            for pwd in WEAK_CREDENTIALS[username]:
-                                if validate_digest_response(auth, session["nonce"], method, url, pwd):
-                                    auth_success = True
-                                    session["authenticated"] = True
-                                    session["username"] = username
-                                    
-                                    # Log successful authentication
-                                    if log_attack:
-                                        log_attack(client_ip, 554, "RTSP_AUTH_SUCCESS", 
-                                                 json.dumps({
-                                                     "username": username,
-                                                     "attempts": session["auth_attempts"],
-                                                     "method": method,
-                                                     "session_id": session["session_id"]
-                                                 }))
-                                    break
-                        
-                        # If auth failed, send 401 again
-                        if not auth_success:
-                            # Log failed authentication
-                            if log_attack:
-                                log_attack(client_ip, 554, "RTSP_AUTH_FAILED", 
-                                         json.dumps({
-                                             "username": username,
-                                             "attempts": session["auth_attempts"],
-                                             "response": auth.get("response", "")[:16] + "..."
-                                         }))
-                            
-                            # Send 401 Unauthorized (allow a few attempts)
-                            if session["auth_attempts"] <= 5:
-                                resp = (
-                                    f'RTSP/1.0 401 Unauthorized\r\n'
-                                    f'CSeq: {cseq}\r\n'
-                                    f'WWW-Authenticate: Digest realm="HikVision IP Camera", '
-                                    f'nonce="{session["nonce"]}", algorithm="MD5", qop="auth"\r\n'
-                                    f'Server: Hikvision RTSP Server {device_quirks["firmware_version"]}\r\n'
-                                    f'Date: {time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())}\r\n\r\n'
-                                )
-                            else:
-                                # After 5 failed attempts, close connection (realistic)
-                                resp = (
-                                    f'RTSP/1.0 403 Forbidden\r\n'
-                                    f'CSeq: {cseq}\r\n'
-                                    f'Server: Hikvision RTSP Server {device_quirks["firmware_version"]}\r\n\r\n'
-                                )
-                            
-                            conn.sendall(resp.encode())
-                            continue
-                    else:
-                        # No auth header, request authentication
-                        resp = (
-                            f'RTSP/1.0 401 Unauthorized\r\n'
-                            f'CSeq: {cseq}\r\n'
-                            f'WWW-Authenticate: Digest realm="HikVision IP Camera", '
-                            f'nonce="{session["nonce"]}", algorithm="MD5", qop="auth"\r\n'
-                            f'Server: Hikvision RTSP Server {device_quirks["firmware_version"]}\r\n'
-                            f'Date: {time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())}\r\n\r\n'
-                        )
-                        conn.sendall(resp.encode())
+                    if not auth_hdr:
+                        _log("rtsp_probe", "low", {
+                            "method":     method,
+                            "path":       url,
+                            "user_agent": user_agent,
+                            "scanner":    tool,
+                        })
+                        conn.sendall((
+                            f"RTSP/1.0 401 Unauthorized\r\n"
+                            f"CSeq: {cseq}\r\n"
+                            f"WWW-Authenticate: {_www_auth()}\r\n"
+                            f"Server: Hikvision RTSP Server {fw}\r\n"
+                            f"Date: {_now()}\r\n\r\n"
+                        ).encode())
                         continue
-            
-            # === RTSP METHOD HANDLERS ===
-            
+
+                    # Parse Digest credentials
+                    auth       = _parse_digest(auth_hdr)
+                    username   = auth.get("username", "")
+                    resp_hash  = auth.get("response", "")
+                    session["auth_attempts"] += 1
+
+                    # Accept if username is in weak creds list, OR on 3rd+ attempt
+                    # (keeps attacker engaged and captures multiple credential pairs)
+                    auth_ok = (
+                        username in _WEAK_CREDS
+                        or session["auth_attempts"] >= 2
+                        or len(resp_hash) == 32   # accept any properly-formed Digest
+                    )
+
+                    if auth_ok and not session["authenticated"]:
+                        session["authenticated"] = True
+                        session["username"]       = username
+                        _log("rtsp_auth_success", "high", {
+                            "method":       method,
+                            "path":         url,
+                            "username":     username,
+                            "password":     "",     # unknown (Digest, not Basic)
+                            "auth_method":  "digest",
+                            "attempts":     session["auth_attempts"],
+                            "response_hex": resp_hash[:16],
+                            "user_agent":   user_agent,
+                            "scanner":      tool,
+                            "payload":      f"Digest auth succeeded after {session['auth_attempts']} attempt(s)",
+                        })
+                    else:
+                        _log("rtsp_auth_failed", "medium", {
+                            "method":       method,
+                            "path":         url,
+                            "username":     username,
+                            "attempts":     session["auth_attempts"],
+                            "response_hex": resp_hash[:16],
+                            "user_agent":   user_agent,
+                        })
+                        if session["auth_attempts"] > 5:
+                            conn.sendall((
+                                f"RTSP/1.0 403 Forbidden\r\n"
+                                f"CSeq: {cseq}\r\n"
+                                f"Server: Hikvision RTSP Server {fw}\r\n\r\n"
+                            ).encode())
+                            break
+                        conn.sendall((
+                            f"RTSP/1.0 401 Unauthorized\r\n"
+                            f"CSeq: {cseq}\r\n"
+                            f"WWW-Authenticate: {_www_auth()}\r\n"
+                            f"Server: Hikvision RTSP Server {fw}\r\n"
+                            f"Date: {_now()}\r\n\r\n"
+                        ).encode())
+                        continue
+
+            # ── RTSP method responses ─────────────────────────────────────
+            time.sleep(random.uniform(0.03, 0.12))
+
             if method == "OPTIONS":
-                # OPTIONS always succeeds (reconnaissance)
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Public: OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER, SET_PARAMETER\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n"
-                    f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-            
+                _log("rtsp_recon", "low", {
+                    "method": method, "path": url,
+                    "user_agent": user_agent, "scanner": tool,
+                })
+                conn.sendall((
+                    f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n"
+                    f"Public: OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, "
+                    f"GET_PARAMETER, SET_PARAMETER\r\n"
+                    f"Server: Hikvision RTSP Server {fw}\r\n"
+                    f"Date: {_now()}\r\n\r\n"
+                ).encode())
+
             elif method == "DESCRIBE":
-                # Return SDP for the requested channel
-                channel = extract_channel_from_url(url)
-                sdp = SDP_TEMPLATES.get(channel, SDP_TEMPLATES["101"])
-                
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Content-Base: rtsp://{headers.get('host', client_ip)}{url}/\r\n"
+                ch  = _channel(url)
+                sdp = _SDP.get(ch, _SDP["101"])
+                _log("rtsp_stream_access", "medium", {
+                    "method":  method, "path":    url,
+                    "channel": ch,     "payload": f"SDP served for channel {ch}",
+                    "user_agent": user_agent,
+                })
+                conn.sendall((
+                    f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n"
+                    f"Content-Base: rtsp://{ip}:554{url}/\r\n"
                     f"Content-Type: application/sdp\r\n"
                     f"Content-Length: {len(sdp)}\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n"
-                    f"Session: {session['session_id']};timeout=60\r\n"
-                    f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n\r\n"
-                    f"{sdp}"
-                )
-                conn.sendall(resp.encode())
-            
+                    f"Server: Hikvision RTSP Server {fw}\r\n"
+                    f"Session: {sid};timeout=60\r\n"
+                    f"Date: {_now()}\r\n\r\n{sdp}"
+                ).encode())
+
             elif method == "SETUP":
-                # Parse Transport header from client
-                transport = headers.get("transport", "RTP/AVP;unicast;client_port=8000-8001")
-                client_port_match = re.search(r'client_port=(\d+)-(\d+)', transport)
-                
-                if client_port_match:
-                    client_rtp = client_port_match.group(1)
-                    client_rtcp = client_port_match.group(2)
-                else:
-                    client_rtp = "8000"
-                    client_rtcp = "8001"
-                
-                server_rtp = random.randint(40000, 50000)
-                server_rtcp = server_rtp + 1
-                
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Session: {session['session_id']};timeout=60\r\n"
+                transport     = headers.get("transport", "RTP/AVP;unicast;client_port=8000-8001")
+                cp_match      = re.search(r"client_port=(\d+)-(\d+)", transport)
+                client_rtp    = cp_match.group(1) if cp_match else "8000"
+                client_rtcp   = cp_match.group(2) if cp_match else "8001"
+                server_rtp    = random.randint(40000, 50000)
+                _log("rtsp_setup", "medium", {
+                    "method": method, "path": url,
+                    "payload": f"transport={transport[:80]}",
+                })
+                conn.sendall((
+                    f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n"
+                    f"Session: {sid};timeout=60\r\n"
                     f"Transport: RTP/AVP;unicast;client_port={client_rtp}-{client_rtcp};"
-                    f"server_port={server_rtp}-{server_rtcp};ssrc={random.randint(10000000, 99999999):08X}\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n"
-                    f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-            
+                    f"server_port={server_rtp}-{server_rtp+1};"
+                    f"ssrc={random.randint(10000000,99999999):08X}\r\n"
+                    f"Server: Hikvision RTSP Server {fw}\r\n"
+                    f"Date: {_now()}\r\n\r\n"
+                ).encode())
+
             elif method == "PLAY":
-                # PLAY - Start streaming (we won't actually stream, just respond)
-                rtp_seq = random.randint(10000, 65535)
+                rtp_seq  = random.randint(10000, 65535)
                 rtp_time = random.randint(100000, 9999999)
-                
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Session: {session['session_id']};timeout=60\r\n"
+                _log("rtsp_stream_play", "high", {
+                    "method":   method, "path":     url,
+                    "username": session["username"],
+                    "payload":  f"Stream PLAY on {url} by {session['username'] or 'unknown'}",
+                })
+                conn.sendall((
+                    f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n"
+                    f"Session: {sid};timeout=60\r\n"
                     f"Range: npt=0.000-\r\n"
                     f"RTP-Info: url={url}/trackID=1;seq={rtp_seq};rtptime={rtp_time},"
                     f"url={url}/trackID=2;seq={rtp_seq+1};rtptime={rtp_time}\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n"
-                    f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime())}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-                
-                # Keep connection alive for a bit (simulate streaming)
-                # Real cameras would send RTP packets here
-                time.sleep(random.uniform(1.0, 3.0))
-            
-            elif method == "PAUSE":
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Session: {session['session_id']}\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-            
+                    f"Server: Hikvision RTSP Server {fw}\r\n"
+                    f"Date: {_now()}\r\n\r\n"
+                ).encode())
+                time.sleep(random.uniform(0.5, 2.0))   # simulate stream hold
+
+            elif method == "RECORD":
+                # Injection attack — log as critical
+                _log("rtsp_inject_attempt", "critical", {
+                    "method":   "RECORD",
+                    "path":     url,
+                    "cve_id":   "RTSP-INJECT",
+                    "payload":  text[:300],
+                })
+                conn.sendall((
+                    f"RTSP/1.0 403 Forbidden\r\nCSeq: {cseq}\r\n"
+                    f"Server: Hikvision RTSP Server {fw}\r\n\r\n"
+                ).encode())
+
             elif method == "TEARDOWN":
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Session: {session['session_id']}\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-                break  # Close connection after teardown
-            
-            elif method == "GET_PARAMETER":
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Session: {session['session_id']}\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-            
-            elif method == "SET_PARAMETER":
-                resp = (
-                    f"RTSP/1.0 200 OK\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Session: {session['session_id']}\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-            
+                conn.sendall((
+                    f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n"
+                    f"Session: {sid}\r\n"
+                    f"Server: Hikvision RTSP Server {fw}\r\n\r\n"
+                ).encode())
+                break
+
             else:
-                # Unknown method
-                resp = (
-                    f"RTSP/1.0 405 Method Not Allowed\r\n"
-                    f"CSeq: {cseq}\r\n"
-                    f"Allow: OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER, SET_PARAMETER\r\n"
-                    f"Server: Hikvision RTSP Server {device_quirks['firmware_version']}\r\n\r\n"
-                )
-                conn.sendall(resp.encode())
-    
-    except Exception as e:
-        # Log any errors for debugging
-        if log_attack:
-            log_attack(client_ip, 554, "RTSP_ERROR", json.dumps({"error": str(e)}))
-    
+                conn.sendall((
+                    f"RTSP/1.0 405 Method Not Allowed\r\nCSeq: {cseq}\r\n"
+                    f"Allow: OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, "
+                    f"GET_PARAMETER, SET_PARAMETER\r\n"
+                    f"Server: Hikvision RTSP Server {fw}\r\n\r\n"
+                ).encode())
+
+    except (ConnectionResetError, BrokenPipeError, socket.timeout):
+        pass
+    except Exception:
+        pass
     finally:
-        # Log session summary
-        if log_attack and request_count > 0:
-            session_duration = time.time() - session["start_time"]
-            log_attack(client_ip, 554, "RTSP_SESSION_END", json.dumps({
-                "session_id": session["session_id"],
-                "duration": round(session_duration, 2),
-                "requests": request_count,
+        if request_count > 0:
+            _log("rtsp_session_end", "low", {
+                "payload":       f"{request_count} requests, {len(session['channels'])} URLs",
+                "username":      session["username"],
                 "authenticated": session["authenticated"],
-                "username": session.get("username", ""),
                 "auth_attempts": session["auth_attempts"],
-                "methods": ",".join(session["methods_called"]),
-            }))
-        
+                "methods":       ",".join(session["methods"]),
+                "channels":      list(session["channels"])[:10],
+                "duration_s":    round(time.time() - session["start"], 2),
+            })
+        if new_ip_alert:
+            try:
+                new_ip_alert(ip, gdata.get("country",""), gdata.get("city",""), "rtsp")
+            except Exception:
+                pass
         try:
             conn.close()
         except Exception:

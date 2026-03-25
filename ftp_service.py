@@ -539,12 +539,15 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                         "username": session["username"],
                     }))
                 
-                # Log file access
+                # Log file access (with traversal detection)
+                has_traversal = ".." in filename or "%2e%2e" in filename.lower()
                 if log_attack:
-                    log_attack(ip, 21, "FTP_DOWNLOAD", json.dumps({
+                    log_attack(ip, 21, "FTP_TRAVERSAL" if has_traversal else "FTP_DOWNLOAD", json.dumps({
                         "file": filename,
                         "full_path": full_path,
                         "username": session["username"],
+                        "threat_level": "critical" if has_traversal else "medium",
+                        "has_traversal": has_traversal,
                     }))
                 
                 # Simulate file transfer (but don't actually send data)
@@ -555,17 +558,37 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
             # ─── STOR (Upload File) ───────────────────────────────────────
             elif cmd == "STOR" and session["authenticated"]:
                 filename = arg
-                
+
                 session["files_accessed"].append(f"UPLOAD:{filename}")
-                
-                # Log upload attempt
+
+                # Detect malicious upload by filename
+                _MAL_EXTS = (".sh", ".elf", ".bin", ".arm", ".mips", ".x86",
+                             ".arm7", ".arm5", ".mipsel", ".mpsl", ".m68k", ".ppc")
+                _MAL_NAMES = ("mirai", "gafgyt", "tsunami", "sora", "muhstik",
+                              "mozi", "exploit", "rootkit", "backdoor", "shell",
+                              "update.sh", "install.sh", "payload", "dropper",
+                              "bot", "cnc", "loader")
+                fn_lower = filename.lower()
+                is_malware = (
+                    any(fn_lower.endswith(e) for e in _MAL_EXTS) or
+                    any(n in fn_lower for n in _MAL_NAMES)
+                )
+                has_traversal = ".." in filename
+
+                log_type = "FTP_MALWARE_UPLOAD" if is_malware else (
+                    "FTP_TRAVERSAL_UPLOAD" if has_traversal else "FTP_UPLOAD_ATTEMPT"
+                )
+                threat = "critical" if (is_malware or has_traversal) else "high"
+
                 if log_attack:
-                    log_attack(ip, 21, "FTP_UPLOAD_ATTEMPT", json.dumps({
+                    log_attack(ip, 21, log_type, json.dumps({
                         "file": filename,
                         "username": session["username"],
-                        "threat_level": "high",
+                        "threat_level": threat,
+                        "is_malware": is_malware,
+                        "has_traversal": has_traversal,
                     }))
-                
+
                 # Accept but don't actually store
                 conn.sendall(b"150 Ok to send data.\r\n")
                 time.sleep(random.uniform(0.5, 1.5))

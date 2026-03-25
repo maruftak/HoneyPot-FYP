@@ -602,12 +602,25 @@ def ssh_log_attack(ip, port, event_type, details):
             "timestamp":   _ts(), "source_ip": ip,
             "dest_port":   port,  "service": "ssh", "protocol": "TCP",
             "attack_type": event_type,
+            "threat_level": "medium",
             "country":     gdata["country"], "city": gdata["city"],
             "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
             **_intel_fields(gdata),
         }
+        if isinstance(details, str):
+            try: details = json.loads(details)
+            except Exception: details = {"raw": details}
         if isinstance(details, dict):
             log_entry.update(details)
+        # Classify threat level from event type
+        if event_type in ("SSH_MALWARE", "SSH_HONEYTOKEN"):
+            log_entry["threat_level"] = "critical"
+        elif event_type in ("SSH_AUTH_SUCCESS", "SSH_COMMAND"):
+            log_entry["threat_level"] = "high"
+        elif event_type in ("SSH_AUTH_ATTEMPT", "SSH_BANNER_EXCHANGE"):
+            log_entry["threat_level"] = "medium"
+        elif event_type in ("SSH_CONNECT", "SSH_SESSION_END"):
+            log_entry["threat_level"] = "low"
         db.log_attack(log_entry)
     except Exception as e:
         print(f"[!] SSH log error: {e}")
@@ -742,9 +755,14 @@ def handle_http(conn, addr, https=False):
 #  RTSP (port 554)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def rtsp_log_attack(ip, port, event_type, details):
+def rtsp_log_attack(entry_or_ip, port=None, event_type=None, details=None):
     try:
-        details_dict = json.loads(details) if isinstance(details, str) else details
+        if isinstance(entry_or_ip, dict):
+            db.log_attack(entry_or_ip)
+            return
+        # legacy positional call (kept for safety)
+        ip = entry_or_ip
+        details_dict = json.loads(details) if isinstance(details, str) else (details or {})
         gdata = _geoip(ip)
         log_entry = {
             "timestamp":    _ts(), "source_ip": ip,
@@ -761,9 +779,10 @@ def rtsp_log_attack(ip, port, event_type, details):
     except Exception as e:
         print(f"[!] RTSP log error: {e}")
 
-def rtsp_intel_fields(ip):
+def rtsp_intel_fields(ip_or_gdata):
     try:
-        return _intel_fields(_geoip(ip))
+        gdata = ip_or_gdata if isinstance(ip_or_gdata, dict) else _geoip(ip_or_gdata)
+        return _intel_fields(gdata)
     except Exception:
         return {"asn":None,"org":None,"is_vpn":False,"is_tor":False,"is_proxy":False,
                 "vpn_provider":None,"anonymized":False,"anonymization_method":None}
@@ -789,9 +808,14 @@ def handle_rtsp(conn, addr):
 #  ONVIF (port 8000)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def onvif_log_attack(ip, port, event_type, details):
+def onvif_log_attack(entry_or_ip, port=None, event_type=None, details=None):
     try:
-        details_dict = json.loads(details) if isinstance(details, str) else details
+        if isinstance(entry_or_ip, dict):
+            db.log_attack(entry_or_ip)
+            return
+        # legacy positional call
+        ip = entry_or_ip
+        details_dict = json.loads(details) if isinstance(details, str) else (details or {})
         gdata = _geoip(ip)
         log_entry = {
             "timestamp":    _ts(), "source_ip": ip, "dest_port": port,
@@ -847,8 +871,13 @@ def handle_mqtt(conn, addr):
 #  VNC (port 5900)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def vnc_log_attack(ip, port, event_type, details):
+def vnc_log_attack(entry_or_ip, port=None, event_type=None, details=None):
     try:
+        if isinstance(entry_or_ip, dict):
+            db.log_attack(entry_or_ip)
+            return
+        # legacy positional call (kept for safety)
+        ip = entry_or_ip
         gdata = _geoip(ip)
         log_entry = {
             "timestamp":   _ts(), "source_ip": ip, "dest_port": port,
@@ -885,36 +914,82 @@ def handle_vnc(conn, addr):
 #  Modbus / ICS (port 502)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_MODBUS_FC = {
+    0x01: ("read_coils",             "medium"),
+    0x02: ("read_discrete_inputs",   "medium"),
+    0x03: ("read_holding_registers", "medium"),
+    0x04: ("read_input_registers",   "medium"),
+    0x05: ("write_single_coil",      "high"),
+    0x06: ("write_single_register",  "high"),
+    0x0F: ("write_multiple_coils",   "critical"),
+    0x10: ("write_multiple_registers","critical"),
+    0x11: ("report_server_id",       "medium"),
+    0x2B: ("read_device_id",         "medium"),
+}
+
+def _modbus_response(tid: bytes, fc: int, req_data: bytes) -> bytes:
+    """Build a realistic Modbus TCP response for common function codes."""
+    unit = req_data[6:7] if len(req_data) > 6 else b"\x01"
+    if fc == 0x01:   # Read Coils — return 2 bytes of coil status
+        body = bytes([fc, 2, 0xAA, 0x55])
+    elif fc == 0x02: # Read Discrete Inputs
+        body = bytes([fc, 2, 0b10101010, 0b01010101])
+    elif fc == 0x03: # Read Holding Registers — 4 regs of camera-ish values
+        regs = [0x0001, 0x270F, 0x03E8, 0x0064]  # mode, temp*10, pressure, pct
+        payload = b"".join(r.to_bytes(2, "big") for r in regs)
+        body = bytes([fc, len(payload)]) + payload
+    elif fc == 0x04: # Read Input Registers
+        regs = [0x0064, 0x0001, 0x01F4]
+        payload = b"".join(r.to_bytes(2, "big") for r in regs)
+        body = bytes([fc, len(payload)]) + payload
+    elif fc in (0x05, 0x06, 0x0F, 0x10):  # Write — echo back address+value
+        body = bytes([fc]) + (req_data[8:12] if len(req_data) >= 12 else b"\x00\x00\x00\x00")
+    elif fc == 0x11: # Report Server ID
+        server_id = b"Hikvision DS-2CD2043G2-I\xFF"
+        body = bytes([fc, len(server_id)]) + server_id
+    elif fc == 0x2B: # Read Device ID
+        obj = b"\x00\x0eHikvision"
+        body = bytes([fc, 0x0E, 0x01, 0x83, 0x00, 0x00, 0x01, len(obj)]) + obj
+    else:           # Unknown — return exception
+        body = bytes([fc | 0x80, 0x01])
+    mbap = tid + b"\x00\x00" + len(body + unit).to_bytes(2, "big") + unit
+    return mbap + body
+
 def handle_modbus(conn, addr):
     ip, port = addr
     if _is_rate_limited(ip): conn.close(); return
     gdata = _geoip(ip)
     _inc("sessions")
 
+    fc_seen = set()
     try:
         conn.settimeout(10)
-        for _ in range(10):
+        for _ in range(20):
             try: data = conn.recv(512)
             except socket.timeout: break
-            if not data or len(data) < 6: break
+            if not data or len(data) < 8: break
 
-            transaction_id = data[0:2]
-            function_code  = data[7] if len(data) > 7 else 0
+            tid = data[0:2]
+            fc  = data[7] if len(data) > 7 else 0
+            fc_seen.add(fc)
+
+            op_name, threat = _MODBUS_FC.get(fc, ("ics_unknown_fc", "critical"))
+            if len(fc_seen) > 5:
+                op_name, threat = "ics_function_scan", "critical"
 
             db.log_attack({
                 "timestamp":     _ts(), "source_ip": ip, "dest_port": 502,
                 "service":       "modbus", "protocol": "TCP",
                 "payload":       data[:100].hex(),
-                "function_code": function_code,
-                "attack_type":   "ics_probe", "threat_level": "critical",
+                "function_code": fc,
+                "attack_type":   op_name, "threat_level": threat,
                 "country":       gdata["country"], "city": gdata["city"],
                 "latitude":      gdata["latitude"], "longitude": gdata["longitude"],
                 **_intel_fields(gdata),
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "modbus")
 
-            resp = transaction_id + b"\x00\x00\x00\x03\x01" + bytes([function_code | 0x80, 0x01])
-            conn.sendall(resp)
+            conn.sendall(_modbus_response(tid, fc, data))
 
     except Exception:
         pass
