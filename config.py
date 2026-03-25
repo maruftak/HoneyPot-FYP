@@ -71,6 +71,7 @@ SERVICE_PORTS = {
     "rdp":       3389,
     "modbus":    502,
     "coap":      5683,  # ← Added CoAP protocol port
+    "hik_sdk":   8200,  # ← Add Hikvision SDK port
 }
 
 # ─── Threat Intelligence ──────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ import ftp_service
 import vnc_service
 import mqtt_service
 import coap_service
+import hik_sdk_service
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips   = set()
@@ -125,6 +126,7 @@ def _load_tor_exit_nodes():
                 }
                 if ips:
                     _tor_exit_nodes = ips
+                    # FIX: was {:,{}} which is invalid syntax — use {:,} instead
                     print(f"  [+] Tor exit nodes: {len(ips):,} loaded")
                     break
             except Exception as e:
@@ -623,6 +625,42 @@ def handle_ssh(conn, addr):
         print(f"[!] SSH handler error: {e}")
         try: conn.close()
         except: pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HIKVISION SDK (port 8200)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_hik_sdk(conn, addr):
+    """
+    Thin wrapper around hik_sdk_service.handle_hik_sdk.
+    Injects all helper functions from honeypot.py — same pattern as handle_ssh.
+    """
+    try:
+        _random_delay(80, 200)
+        _inc("sessions")
+        hik_sdk_service.handle_hik_sdk(
+            conn, addr,
+            log_attack            = db.log_attack,
+            geoip_func            = _geoip,
+            intel_fields_func     = _intel_fields,
+            new_ip_alert          = _new_ip_alert,
+            check_botnet          = _check_botnet,
+            check_honeytoken_cred = _check_honeytoken_cred,
+            check_cve             = _check_cve,
+            inc_counter           = _inc,
+            alert_funcs           = {
+                "cve_exploit": alerts.cve_exploit,
+                "botnet_cred": alerts.botnet_cred,
+                "honeytoken":  alerts.honeytoken,
+            },
+        )
+    except Exception as e:
+        print(f"[!] Hik-SDK handler error: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1399,7 +1437,7 @@ def handle_docker(conn, addr):
             conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                          + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
         else:
-            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length:  2\r\n\r\n{}")
     except Exception:
         pass
     finally:
@@ -1665,24 +1703,25 @@ def _start_udp(handler, port, name):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SERVICES = [
-    (handle_telnet,                     config.SERVICE_PORTS["telnet"],    "Telnet",      "tcp"),
-    (handle_ssh,                        config.SERVICE_PORTS["ssh"],       "SSH",         "tcp"),
-    (handle_ftp,                        config.SERVICE_PORTS["ftp"],       "FTP",         "tcp"),
-    (handle_smtp,                       config.SERVICE_PORTS["smtp"],      "SMTP",        "tcp"),
-    (handle_http,                       config.SERVICE_PORTS["http"],      "HTTP",        "tcp"),
-    (lambda c,a: handle_http(c,a,True), config.SERVICE_PORTS["https"],     "HTTPS",       "tcp"),
-    (handle_http,                       config.SERVICE_PORTS["http_alt"],  "HTTP-Alt",    "tcp"),
-    (handle_rtsp,                       config.SERVICE_PORTS["rtsp"],      "RTSP",        "tcp"),
-    (handle_onvif,                      config.SERVICE_PORTS["onvif"],     "ONVIF",       "tcp"),
-    (handle_mqtt,                       config.SERVICE_PORTS["mqtt"],      "MQTT",        "tcp"),
-    (handle_redis,                      config.SERVICE_PORTS["redis"],     "Redis",       "tcp"),
-    (handle_mysql,                      config.SERVICE_PORTS["mysql"],     "MySQL",       "tcp"),
-    (handle_docker,                     config.SERVICE_PORTS["docker"],    "Docker API",  "tcp"),
-    (handle_memcached,                  config.SERVICE_PORTS["memcached"], "Memcached",   "tcp"),
-    (handle_vnc,                        config.SERVICE_PORTS["vnc"],       "VNC",         "tcp"),
-    (handle_rdp,                        config.SERVICE_PORTS["rdp"],       "RDP",         "tcp"),
-    (handle_modbus,                     config.SERVICE_PORTS["modbus"],    "Modbus/ICS",  "tcp"),
-    (handle_coap,                       config.SERVICE_PORTS["coap"],      "CoAP",        "udp"),
+    (handle_telnet,                     config.SERVICE_PORTS["telnet"],    "Telnet",        "tcp"),
+    (handle_ssh,                        config.SERVICE_PORTS["ssh"],       "SSH",           "tcp"),
+    (handle_ftp,                        config.SERVICE_PORTS["ftp"],       "FTP",           "tcp"),
+    (handle_smtp,                       config.SERVICE_PORTS["smtp"],      "SMTP",          "tcp"),
+    (handle_http,                       config.SERVICE_PORTS["http"],      "HTTP",          "tcp"),
+    (lambda c,a: handle_http(c,a,True), config.SERVICE_PORTS["https"],     "HTTPS",         "tcp"),
+    (handle_http,                       config.SERVICE_PORTS["http_alt"],  "HTTP-Alt",      "tcp"),
+    (handle_rtsp,                       config.SERVICE_PORTS["rtsp"],      "RTSP",          "tcp"),
+    (handle_onvif,                      config.SERVICE_PORTS["onvif"],     "ONVIF",         "tcp"),
+    (handle_mqtt,                       config.SERVICE_PORTS["mqtt"],      "MQTT",          "tcp"),
+    (handle_redis,                      config.SERVICE_PORTS["redis"],     "Redis",         "tcp"),
+    (handle_mysql,                      config.SERVICE_PORTS["mysql"],     "MySQL",         "tcp"),
+    (handle_docker,                     config.SERVICE_PORTS["docker"],    "Docker API",    "tcp"),
+    (handle_memcached,                  config.SERVICE_PORTS["memcached"], "Memcached",     "tcp"),
+    (handle_vnc,                        config.SERVICE_PORTS["vnc"],       "VNC",           "tcp"),
+    (handle_rdp,                        config.SERVICE_PORTS["rdp"],       "RDP",           "tcp"),
+    (handle_modbus,                     config.SERVICE_PORTS["modbus"],    "Modbus/ICS",    "tcp"),
+    (handle_coap,                       config.SERVICE_PORTS["coap"],      "CoAP",          "udp"),
+    (handle_hik_sdk,                    config.SERVICE_PORTS["hik_sdk"],   "Hikvision-SDK", "tcp"),
 ]
 
 
