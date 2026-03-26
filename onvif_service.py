@@ -360,7 +360,8 @@ def handle_onvif(
                     chunks.append(part)
                     # Stop when we have a full HTTP+SOAP body
                     combined = b"".join(chunks)
-                    if b"</SOAP-ENV:Envelope>" in combined or b"</soap:Envelope>" in combined:
+                    if (b"</SOAP-ENV:Envelope>" in combined or b"</soap:Envelope>" in combined
+                            or b"</s:Envelope>" in combined or b"</env:Envelope>" in combined):
                         break
                     if len(combined) > 65536:
                         break

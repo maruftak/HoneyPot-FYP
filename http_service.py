@@ -44,8 +44,8 @@ _SERVER_HEADERS = [
     "App-webs/",
     "GoAhead-Webs",
     "Boa/0.94.14rc21",
-    "nginx/1.18.0",
-    "Apache/2.4.41 (Ubuntu)",
+    "Boa/0.93.15",
+    "GoAhead-Webs/2.5.0",
 ]
 
 

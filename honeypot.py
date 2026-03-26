@@ -543,13 +543,22 @@ def handle_telnet(conn, addr):
                 break
             if not uraw:
                 break
-            username = uraw.strip().decode(errors="ignore")
-            conn.sendall(b"Password: ")
-            try:
-                praw = conn.recv(256)
-            except socket.timeout:
-                break
-            password = praw.strip().decode(errors="ignore") if praw else ""
+            # Bots often send "user\npass\n" in one burst — split it
+            decoded = uraw.decode(errors="ignore").replace("\r", "\n")
+            lines   = [l.strip() for l in decoded.split("\n") if l.strip()]
+            username = lines[0] if lines else ""
+            if len(lines) >= 2:
+                # Password was bundled in same recv — no need to wait
+                password = lines[1]
+                conn.sendall(b"Password: ")
+                _random_delay(50, 150)
+            else:
+                conn.sendall(b"Password: ")
+                try:
+                    praw = conn.recv(256)
+                except socket.timeout:
+                    break
+                password = praw.strip().decode(errors="ignore") if praw else ""
 
             is_bot         = _check_botnet(username, password)
             is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
