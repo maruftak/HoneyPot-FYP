@@ -639,12 +639,13 @@ def _save_replay(session: dict):
 
 class _HoneypotServer(paramiko.ServerInterface):
 
-    def __init__(self, ip: str, log_attack, session: dict):
-        self.ip         = ip
-        self.log_attack = log_attack
-        self.session    = session
-        self.shell_ev   = threading.Event()
-        self.exec_cmd   = None
+    def __init__(self, ip: str, log_attack, session: dict, track_cred_attempt=None):
+        self.ip                  = ip
+        self.log_attack          = log_attack
+        self.session             = session
+        self.shell_ev            = threading.Event()
+        self.exec_cmd            = None
+        self.track_cred_attempt  = track_cred_attempt
 
     def check_channel_request(self, kind, chanid):
         return (paramiko.OPEN_SUCCEEDED if kind == "session"
@@ -665,6 +666,9 @@ class _HoneypotServer(paramiko.ServerInterface):
                 "attempt":    self.session["auth_attempts"],
                 "valid_cred": is_valid,
             }))
+
+        if self.track_cred_attempt:
+            self.track_cred_attempt(self.ip, "ssh")
 
         # Realistic delay — slows brute-force
         time.sleep(random.uniform(0.6, 1.8))
@@ -856,7 +860,8 @@ def _run_exec(channel, command: str, session: dict, ip: str,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def handle_ssh(conn, addr, log_attack=None, geoip_func=None,
-               intel_fields_func=None, new_ip_alert=None):
+               intel_fields_func=None, new_ip_alert=None,
+               track_cred_attempt=None):
     """
     Drop-in replacement for the previous handle_ssh().
     Uses Paramiko for real SSH crypto — any client connects successfully.
@@ -905,7 +910,7 @@ def handle_ssh(conn, addr, log_attack=None, geoip_func=None,
         transport.local_version = random.choice(_BANNERS)
         transport.add_server_key(_get_host_key())
 
-        server = _HoneypotServer(ip, log_attack, session)
+        server = _HoneypotServer(ip, log_attack, session, track_cred_attempt)
 
         try:
             transport.start_server(server=server)

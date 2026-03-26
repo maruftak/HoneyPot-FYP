@@ -28,9 +28,10 @@ import ssdp_service
 import http_service          # ← new modular HTTP handler
 
 # ─── State ────────────────────────────────────────────────────────────────────
-_seen_ips   = set()
-_rate_track = defaultdict(list)   # ip -> [timestamps]
-_banned     = {}                   # ip -> unban epoch
+_seen_ips    = set()
+_rate_track  = defaultdict(list)   # ip -> [timestamps]
+_banned      = {}                   # ip -> unban epoch
+_cred_track  = defaultdict(list)   # ip -> [timestamps] for brute force detection
 _session_n  = 0
 _session_lk = threading.Lock()
 _stats_lk   = threading.Lock()
@@ -88,6 +89,32 @@ def _is_rate_limited(ip):
         return True
     _rate_track[ip].append(now)
     return False
+
+
+# ─── Brute-force burst detection ──────────────────────────────────────────────
+_BRUTE_WINDOW  = 60    # seconds
+_BRUTE_THRESH  = 10    # attempts within window before alert fires
+_brute_alerted = {}    # ip -> last alert epoch (so we don't spam)
+_brute_lk      = threading.Lock()
+
+def _track_cred_attempt(ip: str, service: str):
+    """Call on every login attempt. Fires Telegram alert on burst."""
+    now = time.time()
+    with _brute_lk:
+        _cred_track[ip] = [t for t in _cred_track[ip] if now - t < _BRUTE_WINDOW]
+        _cred_track[ip].append(now)
+        count = len(_cred_track[ip])
+        last_alert = _brute_alerted.get(ip, 0)
+        if count >= _BRUTE_THRESH and now - last_alert > 300:  # re-alert every 5 min max
+            _brute_alerted[ip] = now
+            gdata = _geoip(ip)
+            try:
+                alerts.brute_force_burst(
+                    ip, gdata.get("country", "Unknown"),
+                    service, count, _BRUTE_WINDOW,
+                )
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -512,6 +539,7 @@ def handle_telnet(conn, addr):
             login_attempts.append({"username": username, "password": password,
                                     "is_botnet": is_bot, "attempt": attempt + 1})
             _inc("logins")
+            _track_cred_attempt(ip, "telnet")
 
             threat = "critical" if is_ht_c else ("high" if is_bot else "medium")
             db.log_attack({
@@ -657,6 +685,7 @@ def handle_ssh(conn, addr):
             geoip_func=_geoip,
             intel_fields_func=_intel_fields,
             new_ip_alert=_new_ip_alert,
+            track_cred_attempt=_track_cred_attempt,
         )
     except Exception as e:
         print(f"[!] SSH handler error: {e}")
@@ -729,6 +758,7 @@ def handle_ftp(conn, addr):
             check_honeytoken_file=_check_honeytoken_file,
             check_botnet=_check_botnet,
             check_honeytoken_cred=_check_honeytoken_cred,
+            track_cred_attempt=_track_cred_attempt,
         )
     except Exception as e:
         print(f"[!] FTP handler error: {e}")

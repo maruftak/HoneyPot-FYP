@@ -244,9 +244,9 @@ def _validate_credentials(username, password):
 # Main FTP Handler (ULTIMATE VERSION)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=None, 
-               new_ip_alert=None, check_honeytoken_file=None, check_botnet=None, 
-               check_honeytoken_cred=None):
+def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=None,
+               new_ip_alert=None, check_honeytoken_file=None, check_botnet=None,
+               check_honeytoken_cred=None, track_cred_attempt=None):
     """
     ULTIMATE FTP honeypot handler for IoT cameras
     Simulates Hikvision camera FTP service
@@ -355,6 +355,8 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                 is_valid = _validate_credentials(username, password)
                 is_bot = check_botnet(username, password) if check_botnet else False
                 is_ht_c, ht_cv = check_honeytoken_cred(username, password) if check_honeytoken_cred else (False, None)
+                if track_cred_attempt:
+                    track_cred_attempt(ip, "ftp")
                 
                 # Check replay session
                 if replay_session and username == replay_session["username"]:

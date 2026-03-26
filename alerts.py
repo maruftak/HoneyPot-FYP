@@ -183,6 +183,18 @@ def redis_rce(ip, country, command):
     ])
     _send(msg)
 
+def brute_force_burst(ip, country, service, count, window_secs):
+    key = _cooldown_key("BRUTE", ip)
+    if _is_cooled_down(key):
+        return
+    msg = _fmt("🔨", "Brute Force Burst Detected", [
+        ("IP",       ip),
+        ("Country",  country),
+        ("Service",  service.upper()),
+        ("Attempts", f"{count} in {window_secs}s"),
+    ])
+    _send(msg)
+
 def tor_attacker(ip, country, service, exit_ip=None):
     key = _cooldown_key("TOR", ip)
     if _is_cooled_down(key):
