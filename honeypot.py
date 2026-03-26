@@ -555,6 +555,13 @@ def handle_telnet(conn, addr):
         # Send IAC negotiation then banner — puts client into char mode with server echo
         conn.sendall(_TELNET_INIT + random.choice(_TELNET_BANNERS).encode())
 
+        def _sanitize_cred(s):
+            """Strip IAC/control bytes, keep printable ASCII + tab."""
+            return "".join(c for c in s if ord(c) >= 32 or c == "\t").strip()
+
+        def _has_printable(raw: bytes) -> bool:
+            return any(32 <= b < 127 for b in raw)
+
         for attempt in range(12):
             _random_delay(80, 200)
             conn.settimeout(25)
@@ -564,26 +571,29 @@ def handle_telnet(conn, addr):
                 break
             if not uraw:
                 break
-            # Strip IAC (>=240) and non-printable control bytes (<32 except tab)
-            # Mirai/bots send \x01 (SOH) as username and \x03\x03 prefix on passwords
+
+            # Telnet clients send IAC negotiation bytes immediately on connect —
+            # skip these until we get data that contains real printable content.
+            if not _has_printable(uraw):
+                continue
+
+            # Strip IAC bytes (>=240) then decode
             raw_clean = bytes(b for b in uraw if b < 240)
-            decoded = raw_clean.decode(errors="ignore").replace("\r", "\n")
+            decoded   = raw_clean.decode(errors="ignore").replace("\r", "\n")
             # Bots often send "user\npass\n" in one burst — split it
-            lines   = [l.strip() for l in decoded.split("\n") if l.strip()]
-            # Sanitize: remove control chars (keep printable ASCII + tab)
-            def _sanitize_cred(s):
-                return "".join(c for c in s if ord(c) >= 32 or c == "\t").strip()
+            lines    = [l.strip() for l in decoded.split("\n") if l.strip()]
             username = _sanitize_cred(lines[0]) if lines else ""
+
             if len(lines) >= 2:
-                # Password was bundled in same recv — no need to wait
+                # Password bundled in same recv
                 password = _sanitize_cred(lines[1])
-                # Echo off → show prompt → restore echo after
-                conn.sendall(_ECHO_OFF + b"Password: ")
+                # Echo username back + newline, then password prompt (hidden)
+                conn.sendall(username.encode() + b"\r\n" + _ECHO_OFF + b"Password: ")
                 _random_delay(50, 150)
                 conn.sendall(b"\r\n" + _ECHO_ON)
             else:
-                # Turn echo off before password prompt, restore after recv
-                conn.sendall(_ECHO_OFF + b"Password: ")
+                # Echo username + newline, ask for password with echo off
+                conn.sendall(username.encode() + b"\r\n" + _ECHO_OFF + b"Password: ")
                 try:
                     praw = conn.recv(256)
                 except socket.timeout:
@@ -643,7 +653,12 @@ def handle_telnet(conn, addr):
                 break
             if not raw:
                 break
-            cmd = raw.strip().decode(errors="ignore")
+            # Strip IAC bytes and control chars — telnet clients send negotiation
+            # bytes during the shell session (window resize, etc.) that must not
+            # be passed to the fake shell as commands.
+            raw_clean = bytes(b for b in raw if b < 240)
+            cmd = raw_clean.decode(errors="ignore").strip()
+            cmd = "".join(c for c in cmd if ord(c) >= 32 or c == "\t")
             if not cmd:
                 continue
             if cmd.lower() in ("exit", "quit", "logout"):
