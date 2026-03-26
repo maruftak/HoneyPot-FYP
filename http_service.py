@@ -146,15 +146,106 @@ _FAKE_PROC_VERSION = (
     b"#1 SMP Thu Nov  1 08:32:15 UTC 2023\n"
 )
 
+_FAKE_ISAPI_CONFIG = b"""<?xml version="1.0" encoding="UTF-8"?>
+<Configuration version="2.0">
+  <System>
+    <deviceName>IPCamera</deviceName>
+    <model>DS-2CD2043G2-I</model>
+    <firmwareVersion>V5.7.15 build 230313</firmwareVersion>
+    <serialNumber>DS-2CD2043G2-I20230313CCCH012345678</serialNumber>
+  </System>
+  <Network>
+    <ipAddress>192.168.1.108</ipAddress>
+    <subnetMask>255.255.255.0</subnetMask>
+    <defaultGateway>192.168.1.1</defaultGateway>
+    <primaryDNS>8.8.8.8</primaryDNS>
+    <httpPort>80</httpPort>
+    <httpsPort>443</httpsPort>
+    <rtspPort>554</rtspPort>
+  </Network>
+  <Security>
+    <UserList>
+      <User id="1">
+        <userName>admin</userName>
+        <password>Admin@2024!</password>
+        <userLevel>Administrator</userLevel>
+      </User>
+      <User id="2">
+        <userName>operator</userName>
+        <password>Camera123</password>
+        <userLevel>Operator</userLevel>
+      </User>
+    </UserList>
+  </Security>
+  <RTSP>
+    <streamURL>rtsp://192.168.1.108:554/Streaming/Channels/101</streamURL>
+    <authMode>digest</authMode>
+  </RTSP>
+</Configuration>"""
+
+# Minimal JPEG — 1×1 pixel grey JFIF image (valid, opens in any viewer)
+_FAKE_SNAPSHOT_JPG = (
+    b'\xff\xd8\xff\xe0'         # SOI + APP0 marker
+    + b'\x00\x10'               # APP0 length
+    + b'JFIF\x00'               # identifier
+    + b'\x01\x01'               # version 1.1
+    + b'\x00'                   # aspect ratio units (0=no units)
+    + b'\x00\x01\x00\x01'       # X/Y density = 1
+    + b'\x00\x00'               # thumbnail size = 0
+    + b'\xff\xdb\x00C\x00'      # DQT marker
+    + b'\x08' * 64              # quantization table (flat, quality ~50)
+    + b'\xff\xc0\x00\x0b'       # SOF0 marker
+    + b'\x08'                   # precision 8-bit
+    + b'\x00\x01\x00\x01'       # height=1, width=1
+    + b'\x01'                   # 1 component (greyscale)
+    + b'\x01\x11\x00'           # component spec
+    + b'\xff\xc4\x00\x1f\x00'   # DHT marker
+    + b'\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00'
+    + b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b'
+    + b'\xff\xda\x00\x08\x01\x01\x00\x00?\x00'  # SOS
+    + b'\xf8'                   # compressed image data (grey pixel)
+    + b'\xff\xd9'               # EOI
+)
+
+_FAKE_DEVICE_INFO = b"""<?xml version="1.0" encoding="UTF-8"?>
+<DeviceInfo version="2.0">
+  <deviceName>IPCamera</deviceName>
+  <deviceID>44194e2a-5b9c-4c9a-9c4b-12ef8e4d5f6a</deviceID>
+  <model>DS-2CD2043G2-I</model>
+  <serialNumber>DS-2CD2043G2-I20230313CCCH012345678</serialNumber>
+  <macAddress>44:19:B6:7A:2C:D9</macAddress>
+  <firmwareVersion>V5.7.15 build 230313</firmwareVersion>
+  <deviceType>IPCamera</deviceType>
+  <adminPassword>Admin@2024!</adminPassword>
+</DeviceInfo>"""
+
+_FAKE_ONVIF = b"""<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
+  <s:Body>
+    <tds:GetDeviceInformationResponse>
+      <tds:Manufacturer>Hikvision</tds:Manufacturer>
+      <tds:Model>DS-2CD2043G2-I</tds:Model>
+      <tds:FirmwareVersion>V5.7.15 build 230313</tds:FirmwareVersion>
+      <tds:SerialNumber>DS-2CD2043G2-I20230313CCCH012345678</tds:SerialNumber>
+    </tds:GetDeviceInformationResponse>
+  </s:Body>
+</s:Envelope>"""
+
 _DECOY_FILES = {
-    "/firmware.bin":    ("application/octet-stream", "firmware.bin",    _FAKE_FIRMWARE_BIN),
-    "/upgrade.bin":     ("application/octet-stream", "upgrade.bin",     _FAKE_FIRMWARE_BIN),
-    "/config.tar.gz":   ("application/gzip",         "config.tar.gz",   _FAKE_CONFIG_GZ),
-    "/backup.tar.gz":   ("application/gzip",         "backup.tar.gz",   _FAKE_CONFIG_GZ),
-    "/etc/passwd":      ("text/plain",               "passwd",          _FAKE_PASSWD),
-    "/system.cfg":      ("text/plain",               "system.cfg",      _FAKE_SYSTEM_CFG),
-    "/nvram.cfg":       ("text/plain",               "nvram.cfg",       _FAKE_NVRAM_CFG),
-    "/proc/version":    ("text/plain",               "version",         _FAKE_PROC_VERSION),
+    "/firmware.bin":                 ("application/octet-stream", "firmware.bin",          _FAKE_FIRMWARE_BIN),
+    "/upgrade.bin":                  ("application/octet-stream", "upgrade.bin",            _FAKE_FIRMWARE_BIN),
+    "/config.tar.gz":                ("application/gzip",         "config.tar.gz",          _FAKE_CONFIG_GZ),
+    "/backup.tar.gz":                ("application/gzip",         "backup.tar.gz",          _FAKE_CONFIG_GZ),
+    "/etc/passwd":                   ("text/plain",               "passwd",                 _FAKE_PASSWD),
+    "/system.cfg":                   ("text/plain",               "system.cfg",             _FAKE_SYSTEM_CFG),
+    "/nvram.cfg":                    ("text/plain",               "nvram.cfg",              _FAKE_NVRAM_CFG),
+    "/proc/version":                 ("text/plain",               "version",                _FAKE_PROC_VERSION),
+    # IoT/camera-specific — linked from dashboard as trap
+    "/ISAPI/System/configurationData": ("application/xml",        "configurationData.xml",  _FAKE_ISAPI_CONFIG),
+    "/cgi-bin/snapshot.cgi":         ("image/jpeg",               "snapshot.jpg",           _FAKE_SNAPSHOT_JPG),
+    "/cgi-bin/config_export.cgi":    ("application/gzip",         "config_export.tar.gz",   _FAKE_CONFIG_GZ),
+    "/cgi-bin/deviceInfo.cgi":       ("application/xml",          "deviceInfo.xml",         _FAKE_DEVICE_INFO),
+    "/onvif/device_service":         ("application/soap+xml",     "device_service.xml",     _FAKE_ONVIF),
 }
 
 
@@ -1345,6 +1436,11 @@ body{{display:flex;flex-direction:column;height:100vh;overflow:hidden}}
     <div class="sidebar-item">1×1</div>
     <div class="sidebar-item">2×2</div>
     <div class="sidebar-item">3×3</div>
+    <div class="sidebar-section">Tools</div>
+    <a href="/cgi-bin/snapshot.cgi" class="sidebar-item" style="display:block;text-decoration:none;color:inherit">&#128247; Snapshot</a>
+    <a href="/ISAPI/System/configurationData" class="sidebar-item" style="display:block;text-decoration:none;color:inherit">&#128190; Export Config</a>
+    <a href="/cgi-bin/config_export.cgi" class="sidebar-item" style="display:block;text-decoration:none;color:inherit">&#128230; Backup Settings</a>
+    <a href="/cgi-bin/deviceInfo.cgi" class="sidebar-item" style="display:block;text-decoration:none;color:inherit">&#8505; Device Info</a>
   </div>
   <div class="content">
     <div class="video-panel">
@@ -1411,6 +1507,8 @@ body{{display:flex;flex-direction:column;height:100vh;overflow:hidden}}
 }})();
 </script>
 {_hik_footer()}
+<!-- preload live snapshot for status bar -->
+<img src="/cgi-bin/snapshot.cgi" width="1" height="1" style="position:absolute;opacity:0;pointer-events:none" alt="">
 </body></html>"""
 
 

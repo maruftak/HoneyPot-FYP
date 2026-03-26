@@ -252,6 +252,12 @@ HONEYTOKEN_FILES = [
     "/system.cfg",
     "/nvram.cfg",
     "/proc/version",
+    # IoT/camera-specific honeytokens — embedded as trap links in the dashboard
+    "/ISAPI/System/configurationData",
+    "/cgi-bin/snapshot.cgi",
+    "/cgi-bin/config_export.cgi",
+    "/cgi-bin/deviceInfo.cgi",
+    "/onvif/device_service",
 ]
 
 # Honeytoken credentials — using these fires a CRITICAL alert
