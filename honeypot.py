@@ -266,17 +266,39 @@ def _geoip(ip: str) -> dict:
         except Exception:
             pass
 
+        # Use proxy/hosting flags returned directly from ip-api.com enrichment
+        geo_proxy   = g.get("is_proxy", False)
+        geo_hosting = g.get("is_hosting", False)
+
         if g["is_tor"] or _is_tor_exit(ip):
             g["is_tor"]        = True
             g["tor_exit_node"] = True
             g["tor_exit_ip"]   = ip
 
+        # VPN provider matching against org/isp/asn strings (named providers)
         vpn_provider = _identify_vpn_provider(
             g.get("org", "") or "",
             g.get("asn_org", "") or "",
             g.get("isp", "") or "",
         )
-        g["vpn_provider"]     = vpn_provider
+        if vpn_provider:
+            g["is_vpn"]       = True
+            g["vpn_provider"] = vpn_provider
+
+        # ip-api.com proxy=true means the IP is a VPN exit / proxy node
+        # Use the org name as the provider so the dashboard shows who it is
+        if geo_proxy and not g["is_tor"]:
+            g["is_vpn"]       = True
+            org_label = g.get("org") or g.get("asn_org") or g.get("isp") or "Unknown VPN"
+            if not g["vpn_provider"]:
+                g["vpn_provider"] = org_label
+            g["vpn_exit_country"] = g.get("country")
+
+        # hosting=true but proxy=false = pure datacenter server (not a VPN user)
+        if geo_hosting and not geo_proxy and not g["is_vpn"]:
+            g["is_proxy"]   = True
+            g["proxy_type"] = "datacenter"
+
         g["vpn_exit_country"] = g.get("country") if g["is_vpn"] else None
 
     methods = []

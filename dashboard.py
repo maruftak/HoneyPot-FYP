@@ -390,10 +390,13 @@ def api_anonymization_stats():
         elif r.get("is_vpn"):
             provider = r.get("vpn_provider") or "Unknown VPN"
             exit_c   = r.get("vpn_exit_country") or r.get("country","")
+            city     = r.get("city","") or ""
             if provider not in vpn_providers:
-                vpn_providers[provider] = {"count":0,"ips":set(),"exit_countries":{},"last":ts}
+                vpn_providers[provider] = {"count":0,"ips":{},"exit_countries":{},"last":ts}
             vpn_providers[provider]["count"]  += 1
-            vpn_providers[provider]["ips"].add(ip)
+            if ip not in vpn_providers[provider]["ips"]:
+                vpn_providers[provider]["ips"][ip] = {"count":0,"country":exit_c,"city":city}
+            vpn_providers[provider]["ips"][ip]["count"] += 1
             vpn_providers[provider]["last"]    = ts
             vpn_providers[provider]["exit_countries"][exit_c] = \
                 vpn_providers[provider]["exit_countries"].get(exit_c, 0) + 1
@@ -409,10 +412,16 @@ def api_anonymization_stats():
     # Serialise (sets → sorted lists)
     vpn_list = []
     for provider, data in sorted(vpn_providers.items(), key=lambda x: -x[1]["count"]):
+        ip_details = sorted(
+            [{"ip": ip, "country": d["country"], "city": d["city"], "hits": d["count"]}
+             for ip, d in data["ips"].items()],
+            key=lambda x: -x["hits"]
+        )
         vpn_list.append({
             "provider":       provider,
             "count":          data["count"],
             "unique_ips":     len(data["ips"]),
+            "ip_details":     ip_details,
             "exit_countries": sorted(data["exit_countries"].items(), key=lambda x: -x[1]),
             "last":           data["last"],
         })

@@ -321,6 +321,8 @@ tr:hover td{background:rgba(255,255,255,0.02)}
       <span>Attack Sessions &nbsp;<span class="badge b-blue" id="session-count">0</span></span>
       <div class="section-actions">
         <button class="btn-sm" onclick="exportSessionsCSV()">↓ CSV</button>
+        <button class="btn-sm" onclick="exportSessionsJSON()">↓ JSON</button>
+        <button class="btn-sm" onclick="downloadTxtReport()">↓ Report</button>
         <button class="btn-sm" onclick="loadSessions()">↺ Refresh</button>
       </div>
     </div>
@@ -337,6 +339,18 @@ tr:hover td{background:rgba(255,255,255,0.02)}
       </select>
       <select id="sessBot" onchange="filterSessions()">
         <option value="">All Types</option><option value="botnet">Botnet</option><option value="scanner">Scanner</option>
+      </select>
+    </div>
+    <div class="filter-bar" style="margin-top:6px;flex-wrap:wrap">
+      <input type="text" id="sessCountry" placeholder="Country (e.g. China, US)…" oninput="filterSessions()" style="width:150px">
+      <input type="text" id="sessAttackType" placeholder="Attack type (e.g. SSH_BRUTE)…" oninput="filterSessions()" style="width:190px">
+      <input type="text" id="sessCve" placeholder="CVE-ID…" oninput="filterSessions()" style="width:130px">
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap;align-self:center">From</span>
+      <input type="datetime-local" id="sessFrom" onchange="filterSessions()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 6px;border-radius:4px">
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap;align-self:center">To</span>
+      <input type="datetime-local" id="sessTo" onchange="filterSessions()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 6px;border-radius:4px">
+      <select id="sessHours" onchange="loadSessions()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
+        <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option><option value="168" selected>7d</option><option value="720">30d</option><option value="0">All time</option>
       </select>
     </div>
     <div class="tbl-wrap">
@@ -460,26 +474,23 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="card"><div class="card-title">Anonymization Mix</div><div class="chart-wrap" style="height:220px"><canvas id="anonMixChart"></canvas></div></div>
   </div>
 
-  <!-- Tor exit nodes -->
+  <!-- Recent anonymous connections -->
   <div class="card">
-    <div class="card-title">🧅 Active Tor Exit Nodes</div>
+    <div class="card-title">Recent Anonymous Connections
+      <div class="section-actions">
+        <select id="anonTypeFilter" onchange="filterAnonSessions()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
+          <option value="">All Types</option>
+          <option value="vpn">VPN</option>
+          <option value="proxy">Proxy / Datacenter</option>
+          <option value="tor">Tor</option>
+        </select>
+      </div>
+    </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Exit Node IP</th><th>Attacker IP</th><th>Country</th><th>Connections</th><th>Last Seen</th></tr></thead>
-        <tbody id="torNodeBody"><tr><td colspan="5" class="loading"><span class="spin">◌</span></td></tr></tbody>
+        <thead><tr><th>Time</th><th>IP</th><th>Country · City</th><th>Provider / Org</th><th>Type</th><th>Service</th><th>Attack Type</th><th>Threat</th></tr></thead>
+        <tbody id="anonSessionBody"><tr><td colspan="8" class="loading"><span class="spin">◌</span></td></tr></tbody>
       </table>
-    </div>
-  </div>
-
-  <!-- VPN endpoint changes -->
-  <div class="card">
-    <div class="card-title">
-      🔄 VPN / Tor Endpoint Changes
-      <span style="font-family:var(--mono);font-size:9px;color:var(--orange);background:var(--orange2);padding:3px 8px;border-radius:4px;border:1px solid rgba(255,140,0,0.2)">ENDPOINT HOPPING</span>
-    </div>
-    <p style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:12px">Attackers detected switching VPN exit country or provider between sessions — indicates operational security awareness.</p>
-    <div id="endpointChangeList" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto">
-      <div class="loading"><span class="spin">◌</span> Loading…</div>
     </div>
   </div>
 
@@ -554,6 +565,25 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     </div>
     <div class="card"><div class="card-title">Attack Stage Distribution</div><div class="chart-wrap" style="height:240px"><canvas id="stageChart"></canvas></div></div>
   </div>
+
+  <!-- Scanner & Tool Detection -->
+  <div class="grid-60-40">
+    <div class="card">
+      <div class="card-title">Scanner & Tool Detection
+        <span style="font-family:var(--mono);font-size:9px;color:var(--blue);background:rgba(10,132,255,0.1);padding:3px 8px;border-radius:4px;border:1px solid rgba(10,132,255,0.2)">AUTO-DETECTED</span>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Tool / Scanner</th><th>Sessions</th><th>Unique IPs</th><th>% of Attacks</th><th>Last Seen</th></tr></thead>
+          <tbody id="scannerToolBody"><tr><td colspan="5" class="loading"><span class="spin">◌</span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Tool Distribution</div>
+      <div class="chart-wrap" style="height:260px"><canvas id="toolChart"></canvas></div>
+    </div>
+  </div>
 </div>
 
 <!-- ══ PANEL: SERVICES ══ -->
@@ -577,15 +607,59 @@ tr:hover td{background:rgba(255,255,255,0.02)}
   <div class="card">
     <div class="card-title">Threat Intelligence Report
       <div class="section-actions">
-        <select id="reportHours" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
+        <select id="reportHours" onchange="loadThreatSummary();loadAttackTimeline()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
           <option value="1">Last 1h</option><option value="6">Last 6h</option>
           <option value="24" selected>Last 24h</option><option value="168">Last 7d</option><option value="720">Last 30d</option>
         </select>
-        <button class="btn-sm" onclick="generateReport()">Generate</button>
+        <button class="btn-sm" onclick="generateReport()">Generate Report</button>
         <button class="btn-sm" onclick="printReport()">🖨 Print</button>
+        <button class="btn-sm" onclick="downloadCsvExport()">↓ Export CSV</button>
+        <button class="btn-sm" onclick="downloadJsonExport()">↓ Export JSON</button>
+        <button class="btn-sm" onclick="downloadTxtReport()">↓ Download .txt</button>
       </div>
     </div>
     <div id="reportOutput"></div>
+  </div>
+
+  <!-- Threat Narrative Summary -->
+  <div class="card">
+    <div class="card-title">Threat Intelligence Narrative
+      <button class="btn-sm" onclick="loadThreatSummary()">↺ Refresh</button>
+    </div>
+    <div id="threatSummaryOutput"><div class="loading"><span class="spin">◌</span> Analyzing threats…</div></div>
+  </div>
+
+  <!-- Attack Type Breakdown -->
+  <div class="card">
+    <div class="card-title">Attack Type Breakdown
+      <button class="btn-sm" onclick="loadAttackTypes()">↺ Refresh</button>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Attack Type</th><th>Count</th><th>Trend</th><th>Unique IPs</th><th>Top Service</th><th>Last Seen</th></tr></thead>
+        <tbody id="attackTypesBody"><tr><td colspan="6" class="loading"><span class="spin">◌</span></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Credential Pattern Analysis -->
+  <div class="card">
+    <div class="card-title">Credential Pattern Analysis
+      <button class="btn-sm" onclick="loadCredentialAnalysis()">↺ Refresh</button>
+    </div>
+    <div id="credAnalysisOutput"><div class="loading"><span class="spin">◌</span> Loading…</div></div>
+  </div>
+
+  <!-- Granular Attack Timeline -->
+  <div class="card">
+    <div class="card-title">Attack Timeline (Granular)
+      <select id="timelineGranularity" onchange="loadAttackTimeline()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
+        <option value="hour">Hourly</option>
+        <option value="day" selected>Daily</option>
+        <option value="week">Weekly</option>
+      </select>
+    </div>
+    <div class="chart-wrap" style="height:220px"><canvas id="reportTimelineChart"></canvas></div>
   </div>
 </div>
 
@@ -648,6 +722,7 @@ function showPanel(name,el){
   if(name==='iot')loadIotPanel();
   if(name==='attacker')loadAttackerIntel();
   if(name==='services')loadServices();
+  if(name==='report'){loadThreatSummary();loadAttackTypes();loadCredentialAnalysis();loadAttackTimeline();}
 }
 
 // ── API ────────────────────────────────────────────────────────────────────
@@ -840,7 +915,10 @@ function clearLog(){document.getElementById('logStream').innerHTML='';S.logSeen.
 // ── Sessions ───────────────────────────────────────────────────────────────
 async function loadSessions(){
   document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" class="loading"><span class="spin">◌</span> Loading…</td></tr>';
-  const data=await api('/api/sessions?limit=300&hours=168');
+  const hours=document.getElementById('sessHours')?.value||168;
+  const limit=hours==0?2000:500;
+  const url=hours==0?`/api/sessions?limit=${limit}`:`/api/sessions?limit=${limit}&hours=${hours}`;
+  const data=await api(url);
   if(!data){document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px">No data</td></tr>';return;}
   S.sessions_all=data.sessions||[];S.sessions=[...S.sessions_all];
   const svcs=[...new Set(S.sessions_all.map(s=>s.service).filter(Boolean))].sort();
@@ -857,8 +935,13 @@ function filterSessions(){
   const thr=document.getElementById('sessThreat').value||'';
   const anon=document.getElementById('sessAnon').value||'';
   const bot=document.getElementById('sessBot').value||'';
+  const country=(document.getElementById('sessCountry')?.value||'').toLowerCase();
+  const attackType=(document.getElementById('sessAttackType')?.value||'').toLowerCase();
+  const cveFilter=(document.getElementById('sessCve')?.value||'').toLowerCase();
+  const fromTs=document.getElementById('sessFrom')?.value||'';
+  const toTs=document.getElementById('sessTo')?.value||'';
   S.sessions=S.sessions_all.filter(s=>{
-    if(q&&![s.ip,s.country,s.service,s.username,s.password,s.cve,s.path].join(' ').toLowerCase().includes(q))return false;
+    if(q&&![s.ip,s.country,s.service,s.username,s.password,s.cve,s.path,s.event_type,s.attack_type].join(' ').toLowerCase().includes(q))return false;
     if(svc&&(s.service||'').toLowerCase()!==svc)return false;
     if(thr&&s.threat!==thr)return false;
     if(anon==='tor'&&!s.is_tor)return false;
@@ -867,6 +950,11 @@ function filterSessions(){
     if(anon==='clean'&&(s.is_tor||s.is_vpn||s.is_proxy))return false;
     if(bot==='botnet'&&!s.is_botnet)return false;
     if(bot==='scanner'&&!s.scanner_tool)return false;
+    if(country&&!(s.country||'').toLowerCase().includes(country))return false;
+    if(attackType&&!((s.attack_type||s.event_type||s.service||'').toLowerCase()).includes(attackType))return false;
+    if(cveFilter&&!(s.cve||'').toLowerCase().includes(cveFilter))return false;
+    if(fromTs&&s.ts&&s.ts.replace('T',' ')<fromTs.replace('T',' '))return false;
+    if(toTs&&s.ts&&s.ts.replace('T',' ')>toTs.replace('T',' '))return false;
     return true;
   });
   renderSessions(S.sessions);
@@ -890,6 +978,23 @@ function renderSessions(rows){
       <td style="font-size:10px">${s.is_botnet?'<span style="color:var(--orange)">🤖</span>':''}${s.scanner_tool?`<span class="badge b-blue" style="font-size:8px">${s.scanner_tool}</span>`:''}</td>
     </tr>`;
   }).join('');
+}
+
+function exportSessionsJSON(){
+  if(!S.sessions.length)return;
+  const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(new Blob([JSON.stringify(S.sessions,null,2)],{type:'application/json'})),download:`honeypot_sessions_${Date.now()}.json`});a.click();
+}
+function downloadCsvExport(){
+  const hours=document.getElementById('reportHours')?.value||24;
+  window.open(`/api/export/csv?hours=${hours}`,'_blank');
+}
+function downloadJsonExport(){
+  const hours=document.getElementById('reportHours')?.value||24;
+  window.open(`/api/export/json?hours=${hours}`,'_blank');
+}
+function downloadTxtReport(){
+  const hours=document.getElementById('reportHours')?.value||24;
+  window.open(`/api/export/report-txt?hours=${hours}`,'_blank');
 }
 
 function exportSessionsCSV(){
@@ -1002,47 +1107,36 @@ async function loadAnonPanel(){
   // VPN provider list
   const providers=anonData.vpn_providers||[];
   const maxP=providers[0]?.count||1;
-  document.getElementById('vpnProviderList').innerHTML=providers.length?providers.map(p=>`
-    <div class="endpoint-card">
+  document.getElementById('vpnProviderList').innerHTML=providers.length?providers.map(p=>{
+    const isDC=p.provider.includes('AWS')||p.provider.includes('Digital')||p.provider.includes('Vultr')||p.provider.includes('Hetzner')||p.provider.includes('Azure')||p.provider.includes('Google')||p.provider.includes('Datacamp')||p.provider.includes('Linode')||p.provider.includes('OVH')||p.provider.includes('Latitude')||p.provider.includes('Netutils');
+    const icon=isDC?'🏢':'🔒';
+    const ipRows=(p.ip_details||[]).map(d=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--border)">
+        <span style="font-family:var(--mono);font-size:11px;color:var(--blue);min-width:130px">${d.ip}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);flex:1">${d.country||'?'}${d.city?' · '+d.city:''}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--orange)">${d.hits} hit${d.hits!==1?'s':''}</span>
+      </div>`).join('');
+    return`<div class="endpoint-card">
       <div class="endpoint-header">
-        <span style="font-size:18px">${p.provider.includes('AWS')||p.provider.includes('Digital')||p.provider.includes('Vultr')||p.provider.includes('Hetzner')?'🏢':'🔒'}</span>
+        <span style="font-size:18px">${icon}</span>
         <span class="endpoint-provider">${p.provider}</span>
-        <span class="endpoint-count">${fmt(p.count)} hits · ${p.unique_ips} IPs</span>
+        <span class="endpoint-count">${fmt(p.count)} hits · ${p.unique_ips} IP${p.unique_ips!==1?'s':''}</span>
       </div>
       <div style="height:3px;background:var(--border);border-radius:2px;margin-bottom:8px">
         <div style="width:${(p.count/maxP*100).toFixed(1)}%;height:100%;background:var(--blue);border-radius:2px"></div>
       </div>
-      <div class="endpoint-exits">
+      <div class="endpoint-exits" style="margin-bottom:${ipRows?'8px':'0'}">
         ${(p.exit_countries||[]).slice(0,6).map(([c,n])=>`<span class="exit-tag">${c} (${n})</span>`).join('')}
       </div>
-    </div>`).join(''):
+      ${ipRows?`<div style="margin-top:6px">${ipRows}</div>`:''}
+    </div>`;
+  }).join(''):
     '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px;text-align:center">No VPN provider data yet</div>';
 
-  // Tor exit node table
-  const torNodes=anonData.tor_nodes||[];
-  document.getElementById('torNodeBody').innerHTML=torNodes.length?torNodes.map(n=>`<tr>
-    <td class="mono" style="color:var(--purple)">${n.tor_exit_ip||n.exit_ip||'—'}</td>
-    <td class="mono" style="color:var(--blue)">${n.ip||'—'}</td>
-    <td>${n.country||'—'}</td>
-    <td class="mono" style="color:var(--orange);font-weight:700">${fmt(n.count)}</td>
-    <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(n.last)}</td>
-  </tr>`).join(''):
-    '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px;font-family:var(--mono)">No Tor exit node activity detected</td></tr>';
-
-  // Endpoint changes
-  const changes=changeData?.endpoint_changes||[];
-  document.getElementById('endpointChangeList').innerHTML=changes.length?changes.map(ch=>`
-    <div class="change-row">
-      <span class="mono" style="color:var(--blue)">${ch.ip}</span>
-      <span class="change-arrow">→</span>
-      <span class="badge b-blue">${ch.from_provider}</span>
-      <span style="color:var(--muted);font-size:10px">(${ch.from_exit})</span>
-      <span class="change-arrow">→→</span>
-      <span class="badge ${ch.is_tor?'b-purple':'b-blue'}">${ch.to_provider}</span>
-      <span style="color:var(--muted);font-size:10px">(${ch.to_exit})</span>
-      <span style="float:right;color:var(--muted);font-size:10px">${fmtTime(ch.changed_at)}</span>
-    </div>`).join(''):
-    '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px;text-align:center">No endpoint changes detected yet</div>';
+  // Recent anonymous connections table
+  S._anonSessions = await api(`/api/sessions?limit=500&hours=${hours}`);
+  S._anonSessions = (S._anonSessions?.sessions||[]).filter(s=>s.is_tor||s.is_vpn||s.is_proxy);
+  renderAnonSessions(S._anonSessions);
 
   // Anonymization timeline
   const tl=anonData.timeline||[];
@@ -1054,6 +1148,42 @@ async function loadAnonPanel(){
       {label:'Proxy',data:tl.map(t=>t.proxy),borderColor:'#ff8c00',backgroundColor:'rgba(255,140,0,.1)',tension:.3,fill:true,pointRadius:0,borderWidth:1.5},
     ]},{plugins:{legend:{display:true,labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9}}}}});
   }
+}
+
+function filterAnonSessions(){
+  const type=document.getElementById('anonTypeFilter')?.value||'';
+  const filtered=(S._anonSessions||[]).filter(s=>{
+    if(type==='vpn') return s.is_vpn;
+    if(type==='proxy') return s.is_proxy&&!s.is_vpn;
+    if(type==='tor') return s.is_tor;
+    return true;
+  });
+  renderAnonSessions(filtered);
+}
+function renderAnonSessions(rows){
+  const el=document.getElementById('anonSessionBody');if(!el)return;
+  if(!rows||!rows.length){
+    el.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;font-family:var(--mono)">No anonymous connections yet — connect with a VPN or Tor to see data here</td></tr>';
+    return;
+  }
+  el.innerHTML=rows.slice(0,100).map(s=>{
+    const typeTag=s.is_tor
+      ?'<span class="badge b-purple">🧅 Tor</span>'
+      :s.is_vpn
+        ?`<span class="badge b-blue">🔒 VPN</span>`
+        :'<span class="badge b-med">🌐 Proxy</span>';
+    const provider=s.vpn_provider||s.org||'—';
+    return`<tr>
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
+      <td class="mono" style="color:var(--blue)">${s.ip}</td>
+      <td style="font-size:11px">${s.country||'—'}${s.city?'<br><span style="color:var(--muted);font-size:9px">'+s.city+'</span>':''}</td>
+      <td class="mono" style="font-size:10px;color:var(--orange)">${provider}</td>
+      <td>${typeTag}</td>
+      <td>${svcBadge(s.service)}</td>
+      <td class="mono" style="font-size:10px;color:var(--muted)">${s.attack_type||s.event_type||s.path||'—'}</td>
+      <td>${badge(s.threat)}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ── IoT Panel ──────────────────────────────────────────────────────────────
@@ -1142,6 +1272,41 @@ async function loadAttackerIntel(){
   const stageCounts={'Initial Scan':0,'Auth Probe':0,'CVE Exploit':0,'Botnet Cred':0,'Deep Access':0};
   sess.forEach(s=>{const p=(s.path||'').toLowerCase();if(s.cve)stageCounts['CVE Exploit']++;else if(s.is_botnet)stageCounts['Botnet Cred']++;else if(p.includes('/isapi/')||p.includes('/streaming'))stageCounts['Deep Access']++;else if(s.username)stageCounts['Auth Probe']++;else stageCounts['Initial Scan']++;});
   mkChart('stageChart','doughnut',{labels:Object.keys(stageCounts),datasets:[{data:Object.values(stageCounts),backgroundColor:['#0a84ffaa','#ffd60aaa','#ff8c00aa','#ff3054aa','#bf5af2aa'],borderColor:['#0a84ff','#ff8c00','#ff3054','#bf5af2','#00ff88'],borderWidth:1}]},{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9},boxWidth:10}}}});
+
+  // Scanner tool breakdown
+  const toolMap={};
+  sess.forEach(s=>{
+    const t=s.scanner_tool||'';
+    if(!t)return;
+    if(!toolMap[t])toolMap[t]={count:0,ips:new Set(),last:''};
+    toolMap[t].count++;
+    toolMap[t].ips.add(s.ip);
+    if(!toolMap[t].last||s.ts>toolMap[t].last)toolMap[t].last=s.ts;
+  });
+  // Also count from top_ips
+  ips.forEach(ip=>{
+    const t=ip.scanner_tool||'';
+    if(!t)return;
+    if(!toolMap[t])toolMap[t]={count:0,ips:new Set(),last:''};
+    toolMap[t].ips.add(ip.source_ip||ip.ip);
+  });
+  const toolRows=Object.entries(toolMap).sort((a,b)=>b[1].count-a[1].count);
+  const totalSess=sess.length||1;
+  const toolColors=['#0a84ff','#ff3054','#ff8c00','#ffd60a','#bf5af2','#00ff88','#ff6b35','#2496ed','#660066','#9b59b6'];
+  document.getElementById('scannerToolBody').innerHTML=toolRows.length?toolRows.map(([tool,d],i)=>`<tr>
+    <td><span class="badge b-blue" style="font-size:10px">${tool}</span></td>
+    <td class="mono" style="font-weight:700;color:var(--orange)">${fmt(d.count)}</td>
+    <td class="mono" style="color:var(--muted)">${d.ips.size}</td>
+    <td><div style="display:flex;align-items:center;gap:6px"><div style="flex:1;height:4px;background:var(--border);border-radius:2px"><div style="width:${(d.count/totalSess*100).toFixed(1)}%;height:100%;background:${toolColors[i%toolColors.length]};border-radius:2px"></div></div><span class="mono" style="font-size:10px;color:var(--muted)">${(d.count/totalSess*100).toFixed(1)}%</span></div></td>
+    <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(d.last)}</td>
+  </tr>`).join(''):
+    '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px;font-family:var(--mono)">No scanner tools detected yet — scanners typically identified via HTTP User-Agent and SSH banners</td></tr>';
+  if(toolRows.length){
+    mkChart('toolChart','doughnut',{
+      labels:toolRows.slice(0,8).map(([t])=>t),
+      datasets:[{data:toolRows.slice(0,8).map(([,d])=>d.count),backgroundColor:toolColors.slice(0,8).map(c=>c+'aa'),borderColor:toolColors.slice(0,8),borderWidth:1}]
+    },{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9},boxWidth:10}}}});
+  }
 }
 
 // ── Services ───────────────────────────────────────────────────────────────
@@ -1237,6 +1402,82 @@ async function generateReport(){
 }
 
 function printReport(){window.print();}
+
+// ── Threat Summary ─────────────────────────────────────────────────────────
+async function loadThreatSummary(){
+  const hours=document.getElementById('reportHours')?.value||24;
+  const el=document.getElementById('threatSummaryOutput');
+  if(!el)return;
+  el.innerHTML='<div class="loading"><span class="spin">◌</span> Analyzing…</div>';
+  const data=await api(`/api/threat-summary?hours=${hours}`);
+  if(!data){el.innerHTML='<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px">No data available yet — collect more attack traffic.</div>';return;}
+  const insights=data.insights||[];
+  const metrics=data.key_metrics||{};
+  const metricsHtml=Object.entries(metrics).slice(0,8).map(([k,v])=>`
+    <div style="background:var(--raised);border:1px solid var(--border2);border-radius:6px;padding:10px;text-align:center">
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;margin-bottom:4px">${k.replace(/_/g,' ')}</div>
+      <div style="font-family:var(--mono);font-size:20px;color:var(--orange);font-weight:700">${v}</div>
+    </div>`).join('');
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-bottom:16px">${metricsHtml}</div>
+    <div>${insights.length?insights.map(line=>`<div style="font-family:var(--mono);font-size:11px;color:var(--text);margin-bottom:8px;padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:4px;border-left:3px solid var(--blue)">▶ ${line}</div>`).join(''):'<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:12px">No threat insights yet — more attack data needed.</div>'}</div>`;
+}
+
+// ── Attack Types ────────────────────────────────────────────────────────────
+async function loadAttackTypes(){
+  const data=await api('/api/attack-types?hours=168');
+  if(!data)return;
+  const rows=data.attack_types||[];
+  const trendIcon=t=>t>0?'<span style="color:var(--green)">↑</span>':t<0?'<span style="color:var(--red)">↓</span>':'<span style="color:var(--muted)">→</span>';
+  document.getElementById('attackTypesBody').innerHTML=rows.length?rows.map(r=>`<tr>
+    <td class="mono" style="color:var(--orange)">${r.attack_type||r.event_type||'—'}</td>
+    <td class="mono" style="font-weight:700">${fmt(r.count)}</td>
+    <td>${trendIcon(r.trend_pct)} <span class="mono" style="font-size:10px;color:var(--muted)">${Math.abs(r.trend_pct||0).toFixed(0)}%</span></td>
+    <td class="mono" style="color:var(--muted)">${r.unique_ips||0}</td>
+    <td>${svcBadge(r.top_service||'')}</td>
+    <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(r.last_seen)}</td>
+  </tr>`).join(''):
+    '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px;font-family:var(--mono)">No attack type data yet</td></tr>';
+}
+
+// ── Credential Analysis ────────────────────────────────────────────────────
+async function loadCredentialAnalysis(){
+  const data=await api('/api/credential-analysis?hours=168');
+  const el=document.getElementById('credAnalysisOutput');
+  if(!data){el.innerHTML='<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px">No credential data</div>';return;}
+  const topUsers=data.top_usernames||[];
+  const topPass=data.top_passwords||[];
+  const patterns=data.patterns||{};
+  const row=(label,items,color)=>`
+    <div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">${label}</div>
+      ${items.slice(0,8).map((u,i)=>`<div style="display:flex;justify-content:space-between;margin-bottom:4px;font-family:var(--mono);font-size:11px">
+        <span><span style="color:var(--muted)">${i+1}.</span> <span style="color:${color}">${u.username||u.password||'(empty)'}</span></span>
+        <span style="color:var(--muted)">${u.count}x</span></div>`).join('')||'<div style="color:var(--muted);font-size:11px">None yet</div>'}
+    </div>`;
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+      ${row('Top Usernames',topUsers,'var(--orange)')}
+      ${row('Top Passwords',topPass.map(p=>({...p,username:p.password})),'var(--red)')}
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Patterns</div>
+        ${Object.entries(patterns).map(([k,v])=>`<div style="display:flex;justify-content:space-between;margin-bottom:4px;font-family:var(--mono);font-size:11px"><span style="color:var(--muted)">${k.replace(/_/g,' ')}</span><span style="color:var(--orange);font-weight:700">${v}</span></div>`).join('')||'<div style="color:var(--muted);font-size:11px">No patterns yet</div>'}
+      </div>
+    </div>`;
+}
+
+// ── Attack Timeline (granular) ──────────────────────────────────────────────
+async function loadAttackTimeline(){
+  const gran=document.getElementById('timelineGranularity')?.value||'day';
+  const data=await api(`/api/attack-timeline?granularity=${gran}`);
+  if(!data?.buckets)return;
+  const b=data.buckets;
+  mkChart('reportTimelineChart','line',{labels:b.map(x=>x.bucket),datasets:[
+    {label:'Attacks',data:b.map(x=>x.count),borderColor:'#0a84ff',backgroundColor:'rgba(10,132,255,.1)',tension:.3,fill:true,pointRadius:2,borderWidth:2},
+    {label:'CVEs',data:b.map(x=>x.cve_count||0),borderColor:'#ff3054',backgroundColor:'rgba(255,48,84,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
+    {label:'Botnets',data:b.map(x=>x.botnet_count||0),borderColor:'#ff8c00',backgroundColor:'rgba(255,140,0,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
+  ]},{plugins:{legend:{display:true,labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9}}}}});
+}
 
 // ── Main ───────────────────────────────────────────────────────────────────
 function refresh(){
