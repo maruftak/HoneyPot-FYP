@@ -792,7 +792,7 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                 # Log unknown command
                 if log_attack:
                     log_attack(ip, 21, "FTP_UNKNOWN_COMMAND", json.dumps({
-                        "command": f"{cmd} {arg}".strip(),
+                        "payload":  f"{cmd} {arg}".strip(),
                         "username": session["username"],
                     }))
     

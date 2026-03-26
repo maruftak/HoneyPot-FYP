@@ -564,15 +564,19 @@ def handle_telnet(conn, addr):
                 break
             if not uraw:
                 break
-            # Strip any leading IAC negotiation bytes clients send back
+            # Strip IAC (>=240) and non-printable control bytes (<32 except tab)
+            # Mirai/bots send \x01 (SOH) as username and \x03\x03 prefix on passwords
             raw_clean = bytes(b for b in uraw if b < 240)
-            # Bots often send "user\npass\n" in one burst — split it
             decoded = raw_clean.decode(errors="ignore").replace("\r", "\n")
+            # Bots often send "user\npass\n" in one burst — split it
             lines   = [l.strip() for l in decoded.split("\n") if l.strip()]
-            username = lines[0] if lines else ""
+            # Sanitize: remove control chars (keep printable ASCII + tab)
+            def _sanitize_cred(s):
+                return "".join(c for c in s if ord(c) >= 32 or c == "\t").strip()
+            username = _sanitize_cred(lines[0]) if lines else ""
             if len(lines) >= 2:
                 # Password was bundled in same recv — no need to wait
-                password = lines[1]
+                password = _sanitize_cred(lines[1])
                 # Echo off → show prompt → restore echo after
                 conn.sendall(_ECHO_OFF + b"Password: ")
                 _random_delay(50, 150)
@@ -586,7 +590,8 @@ def handle_telnet(conn, addr):
                     conn.sendall(b"\r\n" + _ECHO_ON)
                     break
                 conn.sendall(b"\r\n" + _ECHO_ON)
-                password = praw.strip().decode(errors="ignore") if praw else ""
+                raw_pass = praw.strip().decode(errors="ignore") if praw else ""
+                password = _sanitize_cred(raw_pass)
 
             is_bot         = _check_botnet(username, password)
             is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
