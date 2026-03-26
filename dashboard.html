@@ -231,6 +231,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="metric-card mc-green"><div class="mc-icon">🍯</div><div class="mc-label">Honeytokens</div><div class="mc-val" id="m-honey">—</div><div class="mc-sub">traps triggered</div><div class="mc-bar"><div class="mc-bar-fill" id="m-honey-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-purple"><div class="mc-icon">🧅</div><div class="mc-label">Tor Attackers</div><div class="mc-val" id="m-tor">—</div><div class="mc-sub">exit node connections</div><div class="mc-bar"><div class="mc-bar-fill" id="m-tor-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-blue"><div class="mc-icon">🔒</div><div class="mc-label">VPN Attackers</div><div class="mc-val" id="m-vpn">—</div><div class="mc-sub">known VPN providers</div><div class="mc-bar"><div class="mc-bar-fill" id="m-vpn-bar" style="width:0%"></div></div></div>
+    <div class="metric-card mc-red"><div class="mc-icon">🔨</div><div class="mc-label">Brute Force Bursts</div><div class="mc-val" id="m-brute">—</div><div class="mc-sub">10+ attempts / 60s</div><div class="mc-bar"><div class="mc-bar-fill" id="m-brute-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-orange"><div class="mc-icon">📹</div><div class="mc-label">RTSP Attempts</div><div class="mc-val" id="m-rtsp">—</div><div class="mc-sub">stream access tries</div><div class="mc-bar"><div class="mc-bar-fill" id="m-rtsp-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-blue"><div class="mc-icon">📡</div><div class="mc-label">ONVIF Probes</div><div class="mc-val" id="m-onvif">—</div><div class="mc-sub">camera mgmt port 8000</div><div class="mc-bar"><div class="mc-bar-fill" id="m-onvif-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-red"><div class="mc-icon">🔌</div><div class="mc-label">ISAPI Hits</div><div class="mc-val" id="m-isapi">—</div><div class="mc-sub">/ISAPI/ endpoint probes</div><div class="mc-bar"><div class="mc-bar-fill" id="m-isapi-bar" style="width:0%"></div></div></div>
@@ -439,8 +440,8 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Time</th><th>Filename</th><th>SHA256</th><th>Type</th><th>Size</th><th>Source IP</th><th>Service</th><th>Duplicate</th></tr></thead>
-        <tbody id="captureBody"><tr><td colspan="8" class="loading"><span class="spin">◌</span></td></tr></tbody>
+        <thead><tr><th>Time</th><th>Filename</th><th>SHA256</th><th>Type</th><th>Size</th><th>Source IP</th><th>Service</th><th>VT Detections</th><th>Dup</th></tr></thead>
+        <tbody id="captureBody"><tr><td colspan="9" class="loading"><span class="spin">◌</span></td></tr></tbody>
       </table>
     </div>
   </div>
@@ -778,6 +779,7 @@ async function loadOverview(){
   animCount('m-cve',s.cve_exploits); animCount('m-botnet',s.botnet_count);
   animCount('m-malware',s.malware_downloads); animCount('m-honey',s.honeytokens_triggered);
   animCount('m-tor',tor); animCount('m-vpn',vpn);
+  animCount('m-brute',s.brute_force_bursts||0);
   animCount('m-rtsp',iotStats?.rtsp_attempts||s.rtsp_attacks||0);
   animCount('m-onvif',iotStats?.onvif_probes||s.onvif_attacks||0);
   animCount('m-isapi',iotStats?.hikvision_hits||s.isapi_hits||0);
@@ -786,7 +788,7 @@ async function loadOverview(){
   const max=s.total_attacks||1;
   [['m-total',s.total_attacks],['m-ips',s.unique_ips*10],['m-cve',s.cve_exploits*50],
    ['m-botnet',s.botnet_count*30],['m-malware',s.malware_downloads*100],['m-honey',s.honeytokens_triggered*200],
-   ['m-tor',tor*20],['m-vpn',vpn*10],['m-rtsp',(iotStats?.rtsp_attempts||0)*3],
+   ['m-tor',tor*20],['m-vpn',vpn*10],['m-brute',(s.brute_force_bursts||0)*50],['m-rtsp',(iotStats?.rtsp_attempts||0)*3],
    ['m-onvif',(iotStats?.onvif_probes||0)*4],['m-isapi',(iotStats?.hikvision_hits||0)*2],['m-modbus',(iotStats?.modbus_hits||0)*5]
   ].forEach(([id,val])=>{const el=document.getElementById(id+'-bar');if(el)el.style.width=Math.min((val||0)/max*100,100)+'%';});
 
@@ -1097,6 +1099,20 @@ async function loadCaptures(){
     const typeColor={elf:'var(--red)',script:'var(--orange)','shell-script':'var(--orange)',python:'var(--yellow)',pe:'var(--red)',unknown:'var(--muted)'};
     const tc=typeColor[r.mime_hint]||typeColor.unknown;
     const kb=r.size>1024?(r.size/1024).toFixed(1)+' KB':r.size+' B';
+    const vt=r.vt||{};
+    let vtCell;
+    if(!vt.found&&vt.found!==false){
+      vtCell='<span style="color:var(--muted);font-size:10px">pending…</span>';
+    } else if(!vt.found){
+      vtCell='<span style="color:var(--muted);font-size:10px">not found</span>';
+    } else {
+      const mal=vt.malicious||0;
+      const sus=vt.suspicious||0;
+      const tot=vt.total||0;
+      const col=mal>=10?'var(--red)':mal>=3?'var(--orange)':mal>0?'var(--yellow)':'var(--green)';
+      const label=vt.family?`<br><span style="font-size:9px;color:var(--muted)">${vt.family}</span>`:'';
+      vtCell=`<a href="${vt.permalink}" target="_blank" style="color:${col};font-family:var(--mono);font-size:11px;text-decoration:none">${mal}/${tot}${label}</a>`;
+    }
     return`<tr>
       <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(r.timestamp)}</td>
       <td class="mono" style="color:var(--orange)">${r.filename||'—'}</td>
@@ -1105,10 +1121,11 @@ async function loadCaptures(){
       <td class="mono" style="color:var(--muted)">${kb}</td>
       <td class="mono" style="color:var(--blue)">${r.source_ip||'—'}</td>
       <td>${svcBadge(r.service||'')}</td>
+      <td style="text-align:center">${vtCell}</td>
       <td style="font-size:10px">${r.is_duplicate?'<span style="color:var(--muted)">dup</span>':'<span style="color:var(--green)">new</span>'}</td>
     </tr>`;
   }).join(''):
-    '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;font-family:var(--mono)">No files captured yet — attackers uploading via FTP STOR, TFTP WRQ, or HTTP PUT will appear here</td></tr>';
+    '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:24px;font-family:var(--mono)">No files captured yet — attackers uploading via FTP STOR, TFTP WRQ, or HTTP PUT will appear here</td></tr>';
 }
 
 // ── Honeytokens ────────────────────────────────────────────────────────────

@@ -47,6 +47,7 @@ COUNTERS = {
     "tor":         0,
     "vpn":         0,
     "proxy":       0,
+    "brute_force": 0,
 }
 
 # ─── Randomisation helpers ────────────────────────────────────────────────────
@@ -107,7 +108,23 @@ def _track_cred_attempt(ip: str, service: str):
         last_alert = _brute_alerted.get(ip, 0)
         if count >= _BRUTE_THRESH and now - last_alert > 300:  # re-alert every 5 min max
             _brute_alerted[ip] = now
+            _inc("brute_force")
             gdata = _geoip(ip)
+            db.log_attack({
+                "timestamp":   _ts(),
+                "source_ip":   ip,
+                "dest_port":   {"ssh": 2222, "ftp": 21, "telnet": 23}.get(service, 0),
+                "service":     service,
+                "protocol":    "TCP",
+                "attack_type": "BRUTE_FORCE_BURST",
+                "threat_level": "high",
+                "country":     gdata.get("country", "Unknown"),
+                "city":        gdata.get("city", ""),
+                "latitude":    gdata.get("latitude", 0),
+                "longitude":   gdata.get("longitude", 0),
+                "payload":     f"{count} attempts in {_BRUTE_WINDOW}s",
+                **_intel_fields(gdata),
+            })
             try:
                 alerts.brute_force_burst(
                     ip, gdata.get("country", "Unknown"),

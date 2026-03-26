@@ -548,6 +548,7 @@ def get_stats(hours=24):
         "ssdp_attacks":          svc.get("ssdp",      0),
         "isapi_hits":            isapi_hits,
         "decoy_interactions":    decoy_interactions,
+        "brute_force_bursts":    scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND attack_type='BRUTE_FORCE_BURST'", (c,)),
         "services":              svc,
     }
 
