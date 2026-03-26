@@ -11,6 +11,7 @@ import json
 import re
 import random
 import socket
+import config
 
 # ─── Hikvision firmware colour palette ────────────────────────────────────────
 HIK_CSS = """
@@ -817,6 +818,7 @@ HTTP_ROUTES = {
     "/doc/page/login.asp": (200, "text/html", LOGIN_PAGE.encode()),
     "/web/login":          (200, "text/html", LOGIN_PAGE.encode()),
     "/admin":              (200, "text/html", ADMIN_PAGE.encode()),
+    "/doc/page/main.asp":  (200, "text/html", b""),   # placeholder — served dynamically below
 
     # forgot-password endpoints — bodies are throwaway; POST data is what matters
     "/forgot-password":       (200, "text/html", b"<html><body></body></html>"),
@@ -1042,7 +1044,267 @@ input[type=submit]{background:#4a90d9;color:#fff;border:none;padding:9px;font-si
     "/v1/about": (200, "application/json",
         b'{"name":"honeyPot","status":"running",'
         b'"device":"Hikvision DS-2CD2043G2-I","firmware":"V5.7.15 build 230313"}'),
+
+    # ── Additional ISAPI endpoints scanners probe ─────────────────────────────
+    "/ISAPI/System/time": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
+<Time version="2.0">
+  <timeMode>NTP</timeMode>
+  <localTime>2026-03-26T10:00:00+00:00</localTime>
+  <timeZone>CST-8:00:00</timeZone>
+</Time>"""),
+
+    "/ISAPI/Streaming/channels": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
+<StreamingChannelList version="2.0">
+  <StreamingChannel>
+    <id>101</id><channelName>Camera 01</channelName><enabled>true</enabled>
+    <Transport><rtspPortNo>554</rtspPortNo><Security><enabled>true</enabled></Security></Transport>
+    <Video><videoCodecType>H.264+</videoCodecType>
+      <videoResolutionWidth>2688</videoResolutionWidth>
+      <videoResolutionHeight>1520</videoResolutionHeight>
+      <videoQualityControlType>CBR</videoQualityControlType>
+      <constantBitRate>4096</constantBitRate><frameRate>25</frameRate>
+    </Video>
+  </StreamingChannel>
+  <StreamingChannel>
+    <id>102</id><channelName>Camera 01 Sub</channelName><enabled>true</enabled>
+    <Video><videoCodecType>H.264</videoCodecType>
+      <videoResolutionWidth>640</videoResolutionWidth>
+      <videoResolutionHeight>480</videoResolutionHeight>
+      <frameRate>15</frameRate>
+    </Video>
+  </StreamingChannel>
+</StreamingChannelList>"""),
+
+    "/ISAPI/PTZCtrl/channels/1/status": (200, "application/xml",
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<PTZStatus version="2.0">'
+        b'<absoluteHigh><elevation>0</elevation><azimuth>1800</azimuth><absoluteZoom>100</absoluteZoom></absoluteHigh>'
+        b'</PTZStatus>'),
+
+    "/ISAPI/System/Network/interfaces": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
+<NetworkInterfaceList version="2.0">
+  <NetworkInterface>
+    <id>1</id><IPAddress version="2.0">
+      <ipVersion>v4</ipVersion><addressingType>static</addressingType>
+      <ipAddress>192.168.1.108</ipAddress><subnetMask>255.255.255.0</subnetMask>
+      <DefaultGateway><ipAddress>192.168.1.1</ipAddress></DefaultGateway>
+      <PrimaryDNS><ipAddress>8.8.8.8</ipAddress></PrimaryDNS>
+    </IPAddress>
+  </NetworkInterface>
+</NetworkInterfaceList>"""),
+
+    "/ISAPI/System/IO/inputs": (200, "application/xml",
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<IOInputPortList version="2.0"><IOInputPort><id>1</id><triggering>low</triggering></IOInputPort></IOInputPortList>'),
+
+    "/ISAPI/Event/triggers": (200, "application/xml",
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<EventTriggerList version="2.0"><EventTrigger>'
+        b'<id>VMD-1</id><eventType>VMD</eventType><eventDescription>Motion Detection</eventDescription>'
+        b'</EventTrigger></EventTriggerList>'),
+
+    "/ISAPI/Smart/FieldDetection/1": (200, "application/xml",
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<FieldDetection version="2.0"><enabled>true</enabled><samplingInterval>2</samplingInterval>'
+        b'<sensitivityLevel>60</sensitivityLevel></FieldDetection>'),
 }
+
+# ─── Credentials that unlock the fake camera dashboard ───────────────────────
+# Mirrors the most common default/botnet creds that real cameras ship with
+_WEAK_CREDS = {
+    ("admin","admin"),("admin","12345"),("admin","123456"),("admin","password"),
+    ("admin","1234"),("admin",""),("admin","888888"),("admin","666666"),
+    ("admin","admin123"),("admin","hikvision"),("admin","supervisor"),
+    ("root","root"),("root","12345"),("root","admin"),("root",""),
+    ("user","user"),("guest","guest"),("operator","operator"),
+    ("admin","admin@2024"),("admin","54321"),("default","default"),
+    ("admin","Admin@2024!"),
+}
+
+
+def _camera_dashboard():
+    import datetime as _dt
+    now = _dt.datetime.utcnow()
+    uptime_h = random.randint(200, 4000)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hikvision &mdash; Live View</title>
+<style>
+{HIK_CSS}
+body{{display:flex;flex-direction:column;height:100vh;overflow:hidden}}
+.nav-bar{{
+  background:var(--hik-blue-dark);height:36px;
+  display:flex;align-items:center;padding:0 12px;gap:2px;flex-shrink:0;
+  border-bottom:1px solid #0a2040;
+}}
+.nav-bar a{{
+  color:#cde0f7;font-size:12px;padding:6px 14px;border-radius:2px;
+  text-decoration:none;cursor:pointer;
+}}
+.nav-bar a:hover,.nav-bar a.active{{background:rgba(255,255,255,.12);color:#fff}}
+.nav-bar .logout{{margin-left:auto;color:#f0a0a0}}
+.main{{display:flex;flex:1;overflow:hidden}}
+.sidebar{{
+  width:180px;background:var(--hik-panel);flex-shrink:0;
+  border-right:1px solid var(--hik-grey-mid);overflow-y:auto;
+  padding:8px 0;
+}}
+.sidebar-section{{
+  font-size:11px;font-weight:bold;color:var(--hik-text-lt);
+  padding:8px 14px 4px;letter-spacing:0.3px;text-transform:uppercase;
+}}
+.sidebar-item{{
+  font-size:12px;color:var(--hik-text);padding:6px 18px;cursor:pointer;
+  border-left:3px solid transparent;
+}}
+.sidebar-item:hover{{background:#e2e5e9}}
+.sidebar-item.active{{
+  border-left-color:var(--hik-blue);color:var(--hik-blue);
+  background:#dde8f5;font-weight:bold;
+}}
+.content{{flex:1;display:flex;flex-direction:column;overflow:hidden;background:#111}}
+.video-panel{{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#0a0a0a 0%,#1a1a1a 100%);
+  position:relative;
+}}
+.video-overlay{{
+  position:absolute;top:0;left:0;right:0;
+  display:flex;align-items:center;padding:6px 10px;gap:8px;
+  background:linear-gradient(180deg,rgba(0,0,0,.7) 0%,transparent 100%);
+}}
+.live-badge{{
+  background:#d9251d;color:#fff;font-size:10px;font-weight:bold;
+  padding:2px 7px;border-radius:2px;letter-spacing:0.5px;
+}}
+.ch-label{{color:#ccc;font-size:11px}}
+.rec-badge{{
+  background:#d9251d;width:8px;height:8px;border-radius:50%;
+  animation:blink 1s infinite;margin-right:3px;display:inline-block;
+}}
+@keyframes blink{{0%,100%{{opacity:1}}50%{{opacity:0.2}}}}
+.time-overlay{{
+  position:absolute;bottom:0;left:0;right:0;
+  display:flex;justify-content:space-between;padding:6px 10px;
+  background:linear-gradient(0deg,rgba(0,0,0,.7) 0%,transparent 100%);
+  font-size:10px;color:#aaa;
+}}
+.no-signal{{
+  text-align:center;color:#555;
+}}
+.no-signal .icon{{font-size:48px;margin-bottom:8px}}
+.no-signal p{{font-size:12px}}
+.status-bar{{
+  background:#222;color:#888;font-size:10px;padding:3px 12px;
+  display:flex;justify-content:space-between;flex-shrink:0;
+  border-top:1px solid #333;
+}}
+.info-panel{{
+  width:220px;background:#1a1a1a;flex-shrink:0;overflow-y:auto;
+  border-left:1px solid #333;padding:10px;
+}}
+.info-panel h4{{color:#888;font-size:10px;text-transform:uppercase;
+  letter-spacing:0.3px;margin-bottom:8px;padding-bottom:4px;
+  border-bottom:1px solid #333}}
+.info-row{{display:flex;justify-content:space-between;margin-bottom:5px}}
+.info-row .k{{color:#666;font-size:10px}}
+.info-row .v{{color:#aaa;font-size:10px;text-align:right;max-width:130px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.info-row .v.ok{{color:#4caf50}}
+.info-row .v.warn{{color:#ff9800}}
+</style>
+</head>
+<body>
+{_hik_header_bar()}
+<div class="nav-bar">
+  <a href="/doc/page/main.asp" class="active">Live View</a>
+  <a href="/doc/page/main.asp">Playback</a>
+  <a href="/doc/page/main.asp">Picture</a>
+  <a href="/doc/page/main.asp">Configuration</a>
+  <a href="/doc/page/main.asp">Log</a>
+  <a href="/doc/page/login.asp" class="logout">Logout</a>
+</div>
+<div class="main">
+  <div class="sidebar">
+    <div class="sidebar-section">Channels</div>
+    <div class="sidebar-item active">&#9654; Camera 01</div>
+    <div class="sidebar-item">Camera 02</div>
+    <div class="sidebar-item">Camera 03</div>
+    <div class="sidebar-item">Camera 04</div>
+    <div class="sidebar-section">Layout</div>
+    <div class="sidebar-item">1×1</div>
+    <div class="sidebar-item">2×2</div>
+    <div class="sidebar-item">3×3</div>
+  </div>
+  <div class="content">
+    <div class="video-panel">
+      <div class="video-overlay">
+        <span class="live-badge">LIVE</span>
+        <span class="ch-label">Camera 01 — {config.DEVICE_MODEL}</span>
+        <span style="margin-left:auto">
+          <span class="rec-badge"></span>
+          <span style="color:#f88;font-size:10px">REC</span>
+        </span>
+      </div>
+      <div class="no-signal">
+        <div class="icon">&#127909;</div>
+        <p>DS-2CD2043G2-I &nbsp;|&nbsp; 2688×1520 &nbsp;|&nbsp; H.264+</p>
+        <p style="margin-top:4px;font-size:11px;color:#444">
+          Stream: rtsp://192.168.1.108:554/Streaming/Channels/101</p>
+      </div>
+      <div class="time-overlay">
+        <span id="_ts">{now.strftime("%Y-%m-%d %H:%M:%S")}</span>
+        <span>UTC &nbsp;|&nbsp; 192.168.1.108 &nbsp;|&nbsp; {config.DEVICE_MAC}</span>
+      </div>
+    </div>
+    <div class="status-bar">
+      <span>Firmware: {config.DEVICE_FIRMWARE}</span>
+      <span>Uptime: {uptime_h}h {random.randint(0,59)}m</span>
+      <span>HDD: {random.randint(60,95)}% &nbsp;|&nbsp; Temp: {random.randint(38,52)}&deg;C</span>
+    </div>
+  </div>
+  <div class="info-panel">
+    <h4>Device Info</h4>
+    <div class="info-row"><span class="k">Model</span><span class="v">{config.DEVICE_MODEL}</span></div>
+    <div class="info-row"><span class="k">Serial</span><span class="v">DS-2CD2043G2-I20230313CCCH012345</span></div>
+    <div class="info-row"><span class="k">Firmware</span><span class="v">{config.DEVICE_FIRMWARE}</span></div>
+    <div class="info-row"><span class="k">MAC</span><span class="v">{config.DEVICE_MAC}</span></div>
+    <div class="info-row"><span class="k">IP</span><span class="v">192.168.1.108</span></div>
+    <h4 style="margin-top:12px">System Status</h4>
+    <div class="info-row"><span class="k">Video</span><span class="v ok">Normal</span></div>
+    <div class="info-row"><span class="k">Network</span><span class="v ok">Connected</span></div>
+    <div class="info-row"><span class="k">HDD</span><span class="v ok">Normal</span></div>
+    <div class="info-row"><span class="k">Recording</span><span class="v ok">On Schedule</span></div>
+    <div class="info-row"><span class="k">Motion</span><span class="v warn">Detected</span></div>
+    <h4 style="margin-top:12px">Network</h4>
+    <div class="info-row"><span class="k">IPv4</span><span class="v">192.168.1.108</span></div>
+    <div class="info-row"><span class="k">Mask</span><span class="v">255.255.255.0</span></div>
+    <div class="info-row"><span class="k">Gateway</span><span class="v">192.168.1.1</span></div>
+    <div class="info-row"><span class="k">DNS</span><span class="v">8.8.8.8</span></div>
+    <div class="info-row"><span class="k">HTTP Port</span><span class="v">80</span></div>
+    <div class="info-row"><span class="k">RTSP Port</span><span class="v">554</span></div>
+    <div class="info-row"><span class="k">HTTPS Port</span><span class="v">443</span></div>
+  </div>
+</div>
+<script>
+(function(){{
+  var el=document.getElementById('_ts');
+  setInterval(function(){{
+    var d=new Date();
+    el.textContent=d.getUTCFullYear()+'-'+
+      String(d.getUTCMonth()+1).padStart(2,'0')+'-'+
+      String(d.getUTCDate()).padStart(2,'0')+' '+
+      String(d.getUTCHours()).padStart(2,'0')+':'+
+      String(d.getUTCMinutes()).padStart(2,'0')+':'+
+      String(d.getUTCSeconds()).padStart(2,'0');
+  }},1000);
+}})();
+</script>
+{_hik_footer()}
+</body></html>"""
+
 
 # ─── POST paths that always deny and log credentials ─────────────────────────
 _LOGIN_PATHS = {
@@ -1116,8 +1378,13 @@ def handle_http(conn, addr, https=False, *,
 
     gdata = geoip_func(ip)
     inc_counter_func("sessions")
-    svc   = "https" if https else "http"
-    dport = 443 if https else (8080 if port == 8080 else 80)
+    # Use local socket port (server-side) to correctly identify http vs http_alt
+    try:
+        local_port = conn.getsockname()[1]
+    except Exception:
+        local_port = 443 if https else 80
+    svc   = "https" if https else ("http_alt" if local_port == 8080 else "http")
+    dport = local_port
 
     try:
         conn.settimeout(8)
@@ -1308,7 +1575,70 @@ def handle_http(conn, addr, https=False, *,
         })
         new_ip_alert_func(ip, gdata["country"], gdata["city"], svc)
 
+        # ── CVE exploitation responses ────────────────────────────────────────
+        # CVE-2021-36260: Hikvision command injection via /SDK/webLanguage
+        # Automated exploit tools POST XML like: <language>$(id)</language>
+        # A vulnerable device executes the command and returns output.
+        # Returning realistic output makes tools mark the device as "pwned"
+        # and proceed to drop payloads — which we then capture.
+        if method == "POST" and ("webLanguage" in path or "webLanguage" in raw_body):
+            injected = ""
+            m = re.search(r"<language>\$\(([^)]+)\)</language>", raw_body)
+            if not m:
+                m = re.search(r"<language>([^<]{1,200})</language>", raw_body)
+            if m:
+                injected = m.group(1).strip()
+            # Execute in fake shell and wrap in Hikvision XML response
+            from fake_commands import FakeShell as _FS36260
+            _sh = _FS36260(ip)
+            cmd_out = _sh.execute(injected) if injected else "uid=0(root) gid=0(root)\n"
+            if not cmd_out.strip():
+                cmd_out = "uid=0(root) gid=0(root)\n"
+            # Log the malware URL if wget/curl found in injected command
+            if log_malware_func and injected:
+                _url_m = re.search(r"https?://\S+", injected)
+                if _url_m:
+                    try: log_malware_func(ts_func(), ip, _url_m.group(0),
+                                          injected, "Unknown", "unknown", gdata["country"])
+                    except Exception: pass
+            xml_resp = (
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<language>' + cmd_out.strip() + '</language>\n'
+            ).encode()
+            conn.sendall(_http_resp(200, "application/xml", xml_resp))
+            return
+
+        # CVE-2017-7921: Hikvision auth bypass — return real-looking user list
+        # Tools that use this CVE parse the returned XML for admin credentials
+        if "userCheck" in path or ("ISAPI/Security/users" in path and "auth=" in query):
+            user_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<UserList version="2.0">
+  <User><id>1</id><userName>admin</userName><userLevel>Administrator</userLevel>
+    <password>Admin@2024!</password></User>
+  <User><id>2</id><userName>operator</userName><userLevel>Operator</userLevel>
+    <password>Oper@tor1</password></User>
+</UserList>"""
+            conn.sendall(_http_resp(200, "application/xml", user_xml))
+            return
+
+        # CVE-2021-35394: Realtek SDK / Goform command injection
+        # Tools POST commands in the "formSysCmd" or "cmdinput" fields
+        if method == "POST" and any(x in path for x in ["/boaform/", "/goform/"]):
+            fields = _parse_post_body(post_body) if post_body else {}
+            injected = fields.get("cmdinput") or fields.get("cmd") or fields.get("command") or ""
+            from fake_commands import FakeShell as _FS35394
+            _sh2 = _FS35394(ip)
+            out = _sh2.execute(injected) if injected else "uid=0(root) gid=0(root)\n"
+            conn.sendall(_http_resp(200, "text/html",
+                f"<html><body><pre>{out}</pre></body></html>".encode()))
+            return
+
         # ── Route → response ──────────────────────────────────────────────────
+        # Camera dashboard — rendered fresh each request so the timestamp is live
+        if path == "/doc/page/main.asp" and method == "GET":
+            conn.sendall(_http_resp(200, "text/html", _camera_dashboard().encode()))
+            return
+
         if path in HTTP_ROUTES:
             route     = HTTP_ROUTES[path]
             status    = route[0]
@@ -1316,10 +1646,19 @@ def handle_http(conn, addr, https=False, *,
             resp_body = route[2]
             extra_hdr = route[3] if len(route) > 3 else ""
 
-            # POST to any credential-capture path → always deny
+            # POST to credential-capture paths: accept weak creds, deny others
             if method == "POST" and path in _LOGIN_PATHS:
-                denied = _auth_denied_page(back_url="/doc/page/login.asp").encode()
-                conn.sendall(_http_resp(401, "text/html", denied))
+                fields = _parse_post_body(post_body) if post_body else {}
+                u, p   = _extract_creds(fields)
+                if (u.lower(), p) in _WEAK_CREDS or (u.lower(), p.lower()) in _WEAK_CREDS:
+                    # Accepted — redirect to fake camera dashboard with session cookie
+                    session_id = "".join(random.choices("ABCDEF0123456789", k=16))
+                    dash = _camera_dashboard().encode()
+                    conn.sendall(_http_resp(200, "text/html", dash,
+                        f"Set-Cookie: WebSession={session_id}; Path=/; HttpOnly\r\n"))
+                else:
+                    denied = _auth_denied_page(back_url="/doc/page/login.asp").encode()
+                    conn.sendall(_http_resp(401, "text/html", denied))
                 return
 
             conn.sendall(_http_resp(status, ct, resp_body, extra_hdr))

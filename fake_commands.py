@@ -12,6 +12,7 @@ import os
 # ─── Fake filesystem ────────────────────────────────────────────────────────────
 FAKE_FS = {
     "/": ["bin", "dev", "etc", "home", "lib", "mnt", "proc", "root", "sbin", "sys", "tmp", "usr", "var", "backup", "data"],
+    # /tmp pre-populated with traces of previous attackers — signals a real target
     "/bin": ["ash", "busybox", "cat", "chmod", "cp", "date", "df", "echo", "grep", "kill", "ls", "mkdir", "mount", "mv", "ping", "ps", "rm", "sh", "sleep", "tar", "touch", "wget"],
     "/etc": ["config", "crontab", "dvr.conf", "group", "hosts", "init.d", "inittab", "mtab", "passwd", "profile", "rc.d", "resolv.conf", "shadow", "ssh", "syslog.conf"],
     "/etc/ssh": ["sshd_config", "ssh_host_ecdsa_key", "ssh_host_rsa_key"],
@@ -23,7 +24,7 @@ FAKE_FS = {
     "/proc": ["cpuinfo", "meminfo", "mounts", "net", "sys", "version"],
     "/root": [".bash_history", ".bashrc", ".profile", ".ssh", "passwords.txt", ".env"],
     "/root/.ssh": ["authorized_keys", "id_rsa", "id_rsa.pub", "known_hosts"],
-    "/tmp": [],
+    "/tmp": [".sora", "mozi.m", "kworker", ".X11-unix"],
     "/var": ["log", "run", "tmp", "www"],
     "/var/log": ["auth.log", "messages", "syslog", "dvr.log"],
     "/var/www": ["cgi-bin", "html", ".env", "config.php"],
@@ -106,12 +107,15 @@ class FakeShell:
         if handler:
             return handler(args)
 
-        # Busybox prefix: "busybox ls" etc
+        # Busybox prefix: "busybox ls" / "busybox ECCHI" etc
         if cmd == "busybox" and args:
             sub = args[0].lower()
             sub_handler = getattr(self, f"_cmd_{sub}", None)
             if sub_handler:
                 return sub_handler(args[1:])
+            # Any unrecognised applet → "applet not found"  (Mirai ECCHI probe expects this)
+            return f"{args[0]}: applet not found\n"
+        if cmd == "busybox" and not args:
             return self._busybox_info()
 
         # wget / curl (check by prefix)
@@ -133,39 +137,6 @@ class FakeShell:
         return f"{cmd}: command not found\n"
 
     # ─── Commands ────────────────────────────────────────────────────────────────
-
-    def _cmd_ls(self, args):
-        path = args[-1] if args and not args[-1].startswith("-") else self.cwd
-        if path.startswith("-"):
-            path = self.cwd
-        # normalise
-        if not path.startswith("/"):
-            path = os.path.normpath(self.cwd + "/" + path)
-
-        contents = FAKE_FS.get(path)
-        if contents is None:
-            return f"ls: {path}: No such file or directory\n"
-
-        long_fmt = "-l" in args or "-la" in args or "-al" in args
-        show_hidden = "-a" in args or "-la" in args or "-al" in args
-
-        files = contents[:]
-        if show_hidden:
-            files = [".", ".."] + files
-
-        if long_fmt:
-            lines = ["total " + str(len(files) * 4)]
-            for f in files:
-                hidden = f.startswith(".")
-                is_dir = (path.rstrip("/") + "/" + f) in FAKE_FS or f in (".", "..")
-                perm = "drwxr-xr-x" if is_dir else "-rw-r--r--"
-                if hidden:
-                    perm = perm[:1] + "rw-------" if not is_dir else "drwx------"
-                size = random.randint(512, 8192)
-                lines.append(f"{perm}  1 root  root  {size:>8}  Feb 18 09:12  {f}")
-            return "\n".join(lines) + "\n"
-        else:
-            return "  ".join(files) + "\n"
 
     def _cmd_cd(self, args):
         if not args or args[0] in ("~", "/root"):
@@ -229,6 +200,8 @@ class FakeShell:
         return "dvr\n"
 
     def _cmd_ps(self, args):
+        # Show fake competing malware processes — signals a real compromised device
+        # Motivates attackers to kill competition and establish their own persistence
         return (
             "  PID USER       VSZ STAT COMMAND\n"
             "    1 root      1200 S    init\n"
@@ -238,7 +211,11 @@ class FakeShell:
             "   45 root      1192 S    /usr/sbin/telnetd -l /bin/ash\n"
             "   67 root      2048 S    /usr/sbin/httpd -f\n"
             "   89 root      1856 S    /usr/sbin/rtspd\n"
-            "  123 root      1108 R    ps\n"
+            "  312 root       892 S    /tmp/mozi.m\n"
+            "  313 root       788 S    /tmp/.sora\n"
+            "  314 root       512 S    /bin/sh -c /tmp/mozi.m\n"
+            "  512 root       348 S    kworker\n"
+            "  891 root      1108 R    ps\n"
         )
 
     def _cmd_ifconfig(self, args):
@@ -329,6 +306,13 @@ class FakeShell:
         )
 
     def _cmd_busybox(self, args):
+        if args:
+            sub = args[0].lower()
+            sub_handler = getattr(self, f"_cmd_{sub}", None)
+            if sub_handler:
+                return sub_handler(args[1:])
+            # Unrecognised applet — Mirai ECCHI probe expects this exact format
+            return f"{args[0]}: applet not found\n"
         return self._busybox_info()
 
     def _busybox_info(self):
@@ -342,14 +326,25 @@ class FakeShell:
         )
 
     def _cmd_wget(self, args, tool="wget"):
-        """Fake download — logs the URL, returns realistic output."""
+        """Fake download — logs the URL, persists file into /tmp so ls shows it."""
         url = next((a for a in args if "://" in a), None)
         if not url and args:
             url = args[-1]
         if not url:
             url = "http://unknown/bot"
 
-        filename = url.split("/")[-1] or "index.html"
+        # honour -O / --output-document flag
+        out_flag = next((args[i+1] for i, a in enumerate(args)
+                         if a in ("-O", "--output-document") and i+1 < len(args)), None)
+        filename = out_flag.split("/")[-1] if out_flag else (url.split("/")[-1] or "index.html")
+
+        # Persist the dropped file into /tmp so subsequent ls /tmp shows it
+        save_path = out_flag if out_flag else f"/tmp/{filename}"
+        parent = "/" + save_path.strip("/").rsplit("/", 1)[0] if "/" in save_path.strip("/") else "/tmp"
+        parent = "/" + parent.strip("/") if parent != "/" else "/"
+        if parent in FAKE_FS and filename not in FAKE_FS[parent]:
+            FAKE_FS[parent].append(filename)
+
         self._download_log.append(url)
 
         if tool == "curl":
@@ -405,6 +400,101 @@ class FakeShell:
 
     def _cmd_sleep(self, args):
         return ""
+
+    def _cmd_iptables(self, args):
+        if "-F" in args or "--flush" in args:
+            return ""   # silent success — attacker thinks they cleared firewall rules
+        if "-L" in args or "--list" in args:
+            return (
+                "Chain INPUT (policy ACCEPT)\n"
+                "target  prot opt source      destination\n"
+                "ACCEPT  tcp  --  anywhere    anywhere    tcp dpt:23\n"
+                "ACCEPT  tcp  --  anywhere    anywhere    tcp dpt:80\n"
+                "ACCEPT  tcp  --  anywhere    anywhere    tcp dpt:554\n\n"
+                "Chain FORWARD (policy DROP)\n\n"
+                "Chain OUTPUT (policy ACCEPT)\n"
+            )
+        return ""
+
+    def _cmd_crontab(self, args):
+        if "-l" in args:
+            return (
+                "# m h  dom mon dow   command\n"
+                "*/5 * * * * /tmp/mozi.m > /dev/null 2>&1\n"
+                "@reboot /tmp/.sora\n"
+            )
+        if "-e" in args:
+            return ""   # pretend editor opened and saved
+        return ""
+
+    def _cmd_dmesg(self, args):
+        return (
+            "[    0.000000] Booting Linux on physical CPU 0x0\n"
+            "[    0.000000] Linux version 3.10.14 (gcc version 4.9.4) #1 SMP PREEMPT\n"
+            "[    0.123456] NET: Registered protocol family 1\n"
+            "[    0.234567] hi_osal: module license 'Proprietary' taints kernel.\n"
+            "[    1.234567] eth0: Link is Up - 100Mbps/Full\n"
+            "[    1.345678] mmc0: new high speed SD card at slot 0\n"
+        )
+
+    def _cmd_mount(self, args):
+        return (
+            "rootfs on / type rootfs (rw)\n"
+            "/dev/root on / type squashfs (ro,relatime)\n"
+            "proc on /proc type proc (rw,relatime)\n"
+            "tmpfs on /tmp type tmpfs (rw,relatime)\n"
+            "/dev/mtdblock3 on /mnt/mtd type jffs2 (rw,relatime)\n"
+        )
+
+    def _cmd_dd(self, args):
+        return "0+0 records in\n0+0 records out\n"
+
+    def _cmd_which(self, args):
+        cmd = args[0] if args else ""
+        paths = {
+            "wget": "/bin/wget", "curl": "/bin/curl", "sh": "/bin/sh",
+            "bash": "/bin/bash", "python": "", "python3": "",
+            "nc": "/bin/nc", "netcat": "/bin/nc", "tftp": "/usr/bin/tftp",
+        }
+        result = paths.get(cmd, "")
+        return result + "\n" if result else f"which: no {cmd} in (/bin:/sbin:/usr/bin:/usr/sbin)\n"
+
+    def _cmd_ls(self, args):
+        path = args[-1] if args and not args[-1].startswith("-") else self.cwd
+        if path.startswith("-"):
+            path = self.cwd
+        if not path.startswith("/"):
+            path = os.path.normpath(self.cwd + "/" + path)
+
+        contents = FAKE_FS.get(path)
+        if contents is None:
+            return f"ls: {path}: No such file or directory\n"
+
+        long_fmt = "-l" in args or "-la" in args or "-al" in args or "-lh" in args
+        show_hidden = "-a" in args or "-la" in args or "-al" in args
+
+        files = contents[:]
+        if show_hidden:
+            files = [".", ".."] + files
+
+        if long_fmt:
+            lines = ["total " + str(len(files) * 4)]
+            for f in files:
+                hidden = f.startswith(".")
+                is_dir = (path.rstrip("/") + "/" + f) in FAKE_FS or f in (".", "..")
+                perm = "drwxr-xr-x" if is_dir else "-rw-r--r--"
+                if hidden and not is_dir:
+                    perm = "-rwxr-xr-x"   # hidden executables look like malware
+                # /tmp files are executable malware-sized binaries
+                if path == "/tmp" and f not in (".", ".."):
+                    perm = "-rwxrwxrwx"
+                    size = random.randint(28000, 120000)
+                else:
+                    size = random.randint(512, 8192)
+                lines.append(f"{perm}  1 root  root  {size:>8}  Feb 18 09:12  {f}")
+            return "\n".join(lines) + "\n"
+        else:
+            return "  ".join(files) + "\n"
 
     def _silent_success(self, cmd, args):
         return ""

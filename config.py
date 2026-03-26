@@ -60,21 +60,32 @@ DEVICE_IP       = "0.0.0.0"   # filled at startup
 # ─── Honeypot Services ────────────────────────────────────────────────────────
 # Set port to 0 to disable a service
 SERVICE_PORTS = {
-    "telnet":    23,
-    "ssh":       2222,  # Changed from 22 to 2222
-    "ftp":       21,
-    "tftp":      69,    # UDP — Mirai payload delivery / firmware overwrite
-    "ssdp":      1900,  # UDP — UPnP discovery, amplification DDoS, IGD exploits
-    "http":      80,
-    "https":     443,
-    "http_alt":  8080,
-    "rtsp":      554,
-    "onvif":     8000,
-    "mqtt":      1883,
-    "vnc":       5900,
-    "modbus":    502,
-    "coap":      5683,  # ← Added CoAP protocol port
-    "hik_sdk":   8200,  # ← Add Hikvision SDK port
+    # ── Core IoT attack surface ──────────────────────────────────────────────
+    "telnet":     23,    # Mirai primary vector
+    "telnet_alt": 2323,  # Mirai alternate Telnet — scanned equally to port 23
+    "ssh":        2222,  # iptables redirects :22 → :2222
+    "ftp":        21,
+    "tftp":       69,    # UDP — Mirai payload delivery / firmware overwrite
+    # ── IP Camera / DVR / NVR ───────────────────────────────────────────────
+    "http":       80,
+    "https":      443,
+    "http_alt":   8080,
+    "rtsp":       554,   # IP camera video streams
+    "onvif":      8000,  # ONVIF camera management
+    "hik_sdk":    8200,  # Hikvision iVMS / iVMS-4200 SDK
+    "dahua":      37777, # Dahua DVR/NVR proprietary protocol
+    "xmeye":      34567, # HiSilicon / XMEye / CamHi protocol (millions of cheap cameras)
+    # ── IoT messaging & discovery ────────────────────────────────────────────
+    "mqtt":       1883,  # IoT message broker
+    "coap":       5683,  # UDP — constrained IoT protocol
+    "ssdp":       1900,  # UDP — UPnP discovery
+    # ── IoT device management ────────────────────────────────────────────────
+    "tr069":      7547,  # TR-069 CWMP — ISP router/CPE management (Mirai Aidra target)
+    "adb":        5555,  # Android Debug Bridge — smart TVs, Android NVRs (Fbot target)
+    # ── Industrial / SCADA ──────────────────────────────────────────────────
+    "modbus":     502,
+    # ── Remote access ────────────────────────────────────────────────────────
+    "vnc":        5900,
 }
 
 # ─── Threat Intelligence ──────────────────────────────────────────────────────

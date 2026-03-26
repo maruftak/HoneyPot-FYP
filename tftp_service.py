@@ -621,6 +621,7 @@ def handle_tftp(
     new_ip_alert           = None,
     check_honeytoken_file  = None,
     inc_counter            = None,
+    log_honeytoken         = None,
 ):
     """
     Handle a single TFTP datagram arriving at port 69.
@@ -694,12 +695,19 @@ def handle_tftp(
         except Exception:
             pass
 
-    # ── Count honeytokens ──────────────────────────────────────────────────────
-    if is_honeytoken and inc_counter:
-        try:
-            inc_counter("honeytokens")
-        except Exception:
-            pass
+    # ── Count and record honeytokens ───────────────────────────────────────────
+    if is_honeytoken:
+        if inc_counter:
+            try: inc_counter("honeytokens")
+            except Exception: pass
+        if log_honeytoken:
+            try:
+                log_honeytoken(
+                    _ts(), ip, "FILE_ACCESS", filename, "tftp",
+                    gdata.get("country", "Unknown"), gdata.get("city", ""),
+                )
+            except Exception:
+                pass
 
     # ── Log the initial request immediately (before transfer starts) ───────────
     method_str = "RRQ" if opcode == OP_RRQ else "WRQ"

@@ -25,7 +25,11 @@ import coap_service
 import hik_sdk_service
 import tftp_service
 import ssdp_service
-import http_service          # ← new modular HTTP handler
+import http_service
+import dahua_service         # Dahua DVR proprietary protocol (port 37777)
+import xmeye_service         # HiSilicon/XMEye DVR protocol (port 34567)
+import tr069_service         # TR-069 CWMP ISP router management (port 7547)
+import adb_service           # Android Debug Bridge (port 5555)
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips    = set()
@@ -509,6 +513,22 @@ def _detect_botnet_family(cmd_str):
 #  TELNET (port 23)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Telnet IAC sequences for echo control
+_IAC       = bytes([255])
+_WILL      = bytes([251])
+_WONT      = bytes([252])
+_DO        = bytes([253])
+_DONT      = bytes([254])
+_ECHO      = bytes([1])
+_SGA       = bytes([3])   # Suppress Go Ahead — needed for character mode
+
+# Sent at connection: server will echo + suppress go-ahead (line mode → char mode)
+_TELNET_INIT  = _IAC + _WILL + _ECHO + _IAC + _WILL + _SGA + _IAC + _DO + _SGA
+# Before password prompt: stop echoing (client types blind)
+_ECHO_OFF     = _IAC + _WILL + _ECHO
+# After password received: resume echoing
+_ECHO_ON      = _IAC + _WONT + _ECHO
+
 _TELNET_BANNERS = [
     "\r\n\r\nHikvision DS-2CD2043G2-I\r\nFirmware: V5.7.15 build 230313\r\n\r\n(none) login: ",
     "\r\n\r\nBusyBox v1.31.1 (2021-10-19 08:36:54 UTC) built-in shell (ash)\r\n\r\nlogin: ",
@@ -532,7 +552,8 @@ def handle_telnet(conn, addr):
 
     try:
         _random_delay(100, 400)
-        conn.sendall(random.choice(_TELNET_BANNERS).encode())
+        # Send IAC negotiation then banner — puts client into char mode with server echo
+        conn.sendall(_TELNET_INIT + random.choice(_TELNET_BANNERS).encode())
 
         for attempt in range(12):
             _random_delay(80, 200)
@@ -543,21 +564,28 @@ def handle_telnet(conn, addr):
                 break
             if not uraw:
                 break
+            # Strip any leading IAC negotiation bytes clients send back
+            raw_clean = bytes(b for b in uraw if b < 240)
             # Bots often send "user\npass\n" in one burst — split it
-            decoded = uraw.decode(errors="ignore").replace("\r", "\n")
+            decoded = raw_clean.decode(errors="ignore").replace("\r", "\n")
             lines   = [l.strip() for l in decoded.split("\n") if l.strip()]
             username = lines[0] if lines else ""
             if len(lines) >= 2:
                 # Password was bundled in same recv — no need to wait
                 password = lines[1]
-                conn.sendall(b"Password: ")
+                # Echo off → show prompt → restore echo after
+                conn.sendall(_ECHO_OFF + b"Password: ")
                 _random_delay(50, 150)
+                conn.sendall(b"\r\n" + _ECHO_ON)
             else:
-                conn.sendall(b"Password: ")
+                # Turn echo off before password prompt, restore after recv
+                conn.sendall(_ECHO_OFF + b"Password: ")
                 try:
                     praw = conn.recv(256)
                 except socket.timeout:
+                    conn.sendall(b"\r\n" + _ECHO_ON)
                     break
+                conn.sendall(b"\r\n" + _ECHO_ON)
                 password = praw.strip().decode(errors="ignore") if praw else ""
 
             is_bot         = _check_botnet(username, password)
@@ -712,6 +740,8 @@ def handle_ssh(conn, addr):
             intel_fields_func=_intel_fields,
             new_ip_alert=_new_ip_alert,
             track_cred_attempt=_track_cred_attempt,
+            log_malware=db.log_malware,
+            log_honeytoken=db.log_honeytoken,
         )
     except Exception as e:
         print(f"[!] SSH handler error: {e}")
@@ -785,6 +815,7 @@ def handle_ftp(conn, addr):
             check_botnet=_check_botnet,
             check_honeytoken_cred=_check_honeytoken_cred,
             track_cred_attempt=_track_cred_attempt,
+            log_honeytoken=db.log_honeytoken,
         )
     except Exception as e:
         print(f"[!] FTP handler error: {e}")
@@ -1119,6 +1150,7 @@ def handle_tftp(srv_sock, addr, data=b""):
             new_ip_alert          = _new_ip_alert,
             check_honeytoken_file = _check_honeytoken_file,
             inc_counter           = _inc,
+            log_honeytoken        = db.log_honeytoken,
         )
     except Exception as e:
         print(f"[!] TFTP handler error: {e}")
@@ -1201,12 +1233,84 @@ def _start_udp(handler, port, name):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  NEW IoT SERVICE HANDLERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_dahua(conn, addr):
+    try:
+        dahua_service.handle_dahua(
+            conn, addr,
+            log_attack=db.log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=_intel_fields,
+            new_ip_alert=_new_ip_alert,
+            inc_counter=_inc,
+            log_honeytoken=db.log_honeytoken,
+        )
+    except Exception as e:
+        print(f"[!] Dahua handler error: {e}")
+        try: conn.close()
+        except: pass
+
+
+def handle_xmeye(conn, addr):
+    try:
+        xmeye_service.handle_xmeye(
+            conn, addr,
+            log_attack=db.log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=_intel_fields,
+            new_ip_alert=_new_ip_alert,
+            inc_counter=_inc,
+            log_honeytoken=db.log_honeytoken,
+        )
+    except Exception as e:
+        print(f"[!] XMEye handler error: {e}")
+        try: conn.close()
+        except: pass
+
+
+def handle_tr069(conn, addr):
+    try:
+        tr069_service.handle_tr069(
+            conn, addr,
+            log_attack=db.log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=_intel_fields,
+            new_ip_alert=_new_ip_alert,
+            inc_counter=_inc,
+        )
+    except Exception as e:
+        print(f"[!] TR-069 handler error: {e}")
+        try: conn.close()
+        except: pass
+
+
+def handle_adb(conn, addr):
+    try:
+        adb_service.handle_adb(
+            conn, addr,
+            log_attack=db.log_attack,
+            geoip_func=_geoip,
+            intel_fields_func=_intel_fields,
+            new_ip_alert=_new_ip_alert,
+            inc_counter=_inc,
+            log_honeytoken=db.log_honeytoken,
+        )
+    except Exception as e:
+        print(f"[!] ADB handler error: {e}")
+        try: conn.close()
+        except: pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  SERVICES MAP
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SERVICES = [
-    (handle_telnet,                     config.SERVICE_PORTS["telnet"],    "Telnet",        "tcp"),
-    (handle_ssh,                        config.SERVICE_PORTS["ssh"],       "SSH",           "tcp"),
+    (handle_telnet,                     config.SERVICE_PORTS["telnet"],      "Telnet",        "tcp"),
+    (handle_telnet,                     config.SERVICE_PORTS["telnet_alt"],  "Telnet-2323",   "tcp"),
+    (handle_ssh,                        config.SERVICE_PORTS["ssh"],         "SSH",           "tcp"),
     (handle_ftp,                        config.SERVICE_PORTS["ftp"],       "FTP",           "tcp"),
     (handle_http,                       config.SERVICE_PORTS["http"],      "HTTP",          "tcp"),
     (lambda c,a: handle_http(c,a,True), config.SERVICE_PORTS["https"],     "HTTPS",         "tcp"),
@@ -1218,6 +1322,10 @@ _SERVICES = [
     (handle_modbus,                     config.SERVICE_PORTS["modbus"],    "Modbus/ICS",    "tcp"),
     (handle_coap,                       config.SERVICE_PORTS["coap"],      "CoAP",          "udp"),
     (handle_hik_sdk,                    config.SERVICE_PORTS["hik_sdk"],   "Hikvision-SDK", "tcp"),
+    (handle_dahua,                      config.SERVICE_PORTS["dahua"],     "Dahua-DVR",     "tcp"),
+    (handle_xmeye,                      config.SERVICE_PORTS["xmeye"],     "XMEye-DVR",     "tcp"),
+    (handle_tr069,                      config.SERVICE_PORTS["tr069"],     "TR-069/CWMP",   "tcp"),
+    (handle_adb,                        config.SERVICE_PORTS["adb"],       "Android-ADB",   "tcp"),
     (handle_tftp,                       config.SERVICE_PORTS["tftp"],      "TFTP",          "udp"),
     (handle_ssdp,                       config.SERVICE_PORTS["ssdp"],      "SSDP/UPnP",     "udp"),
 ]

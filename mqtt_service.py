@@ -16,26 +16,11 @@ logger = logging.getLogger("honeypot.mqtt")
 _session_store: dict = {}
 _session_lock = threading.Lock()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Credentials that real bots try — we reject these to appear hardened.
-# ─────────────────────────────────────────────────────────────────────────────
-BLOCKED_CREDENTIALS = {
-    ("admin",  "admin"),
-    ("admin",  "password"),
-    ("admin",  "1234"),
-    ("admin",  "123456"),
-    ("admin",  ""),
-    ("test",   "test"),
-    ("guest",  "guest"),
-    ("user",   "user"),
-    ("mqtt",   "mqtt"),
-    ("root",   "root"),
-    ("root",   "toor"),
-    ("",       ""),
-}
+# Open broker — accept everything to attract bots and log all activity
+BLOCKED_CREDENTIALS: set = set()
 
-# 10 % of unknown credentials are also rejected (makes brute-forcers try more)
-AUTH_RANDOM_REJECT_RATE = 0.10
+# Never randomly reject — we want to capture all connections
+AUTH_RANDOM_REJECT_RATE = 0.00
 
 
 # ─────────────────────────────────────────────────────────────────────────────

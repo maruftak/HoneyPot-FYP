@@ -45,6 +45,8 @@ def _should_tarpit_ftp(ip):
 
 # ─── FTP Banners (IoT/Embedded Style) ─────────────────────────────────────
 _FTP_BANNERS = [
+    "220 (vsFTPd 2.3.4)\r\n",           # Famous backdoored version — heavily fingerprinted
+    "220 (vsFTPd 2.2.2)\r\n",           # Old vulnerable version
     "220 Hikvision DVR FTP Server V1.0\r\n",
     "220 (vsFTPd 3.0.5)\r\n",
     "220 FTP Server ready.\r\n",
@@ -246,7 +248,8 @@ def _validate_credentials(username, password):
 
 def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=None,
                new_ip_alert=None, check_honeytoken_file=None, check_botnet=None,
-               check_honeytoken_cred=None, track_cred_attempt=None):
+               check_honeytoken_cred=None, track_cred_attempt=None,
+               log_honeytoken=None):
     """
     ULTIMATE FTP honeypot handler for IoT cameras
     Simulates Hikvision camera FTP service
@@ -373,6 +376,17 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                         "success": is_valid,
                         "threat_level": "critical" if is_ht_c else ("high" if is_bot else "medium"),
                     }))
+                if is_ht_c and log_honeytoken:
+                    try:
+                        gdata_ht = geoip_func(ip) if geoip_func else {}
+                        log_honeytoken(
+                            time.strftime("%Y-%m-%dT%H:%M:%S"), ip,
+                            "CREDENTIAL", f"{username}/{password}", "ftp",
+                            gdata_ht.get("country", "Unknown"),
+                            gdata_ht.get("city", ""),
+                        )
+                    except Exception:
+                        pass
                 
                 # Accept after 2nd attempt or if valid
                 if (session["auth_attempts"] >= 2 and is_valid) or is_bot or is_ht_c:
@@ -483,18 +497,35 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
             # ─── LIST (Directory Listing) ─────────────────────────────────
             elif cmd == "LIST" and session["authenticated"]:
                 path = arg if arg else session["current_dir"]
-                
-                conn.sendall(b"150 Here comes the directory listing.\r\n")
-                
-                # Get file listing
                 listing = _get_file_listing(path)
-                for entry in listing:
-                    conn.sendall(entry.encode())
-                    if is_tarpitted:
-                        time.sleep(0.1)
-                
-                conn.sendall(b"226 Directory send OK.\r\n")
-                
+                listing_data = b"".join(e.encode() for e in listing)
+
+                pasv_sock = session.get("pasv_sock")
+                if pasv_sock:
+                    conn.sendall(b"150 Here comes the directory listing.\r\n")
+                    try:
+                        data_conn, _ = pasv_sock.accept()
+                        data_conn.settimeout(10)
+                        if is_tarpitted:
+                            for entry in listing:
+                                data_conn.sendall(entry.encode())
+                                time.sleep(0.1)
+                        else:
+                            data_conn.sendall(listing_data)
+                        data_conn.close()
+                    except Exception:
+                        pass
+                    finally:
+                        try: pasv_sock.close()
+                        except Exception: pass
+                        session["pasv_sock"] = None
+                    conn.sendall(b"226 Directory send OK.\r\n")
+                else:
+                    # No PASV — fallback to inline (some old clients)
+                    conn.sendall(b"150 Here comes the directory listing.\r\n")
+                    conn.sendall(listing_data)
+                    conn.sendall(b"226 Directory send OK.\r\n")
+
                 # Log listing
                 if log_attack:
                     log_attack(ip, 21, "FTP_LIST", json.dumps({
@@ -506,13 +537,29 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
             # ─── NLST (Name List) ─────────────────────────────────────────
             elif cmd == "NLST" and session["authenticated"]:
                 path = arg if arg else session["current_dir"]
-                
-                conn.sendall(b"150 Here comes the directory listing.\r\n")
-                
+                names = b""
                 if path in _IOT_FILE_SYSTEM:
-                    for filename in _IOT_FILE_SYSTEM[path].get("files", []):
-                        conn.sendall(f"{filename}\r\n".encode())
-                
+                    names = b"".join(
+                        f"{fn}\r\n".encode()
+                        for fn in _IOT_FILE_SYSTEM[path].get("files", [])
+                    )
+                pasv_sock = session.get("pasv_sock")
+                if pasv_sock:
+                    conn.sendall(b"150 Here comes the directory listing.\r\n")
+                    try:
+                        data_conn, _ = pasv_sock.accept()
+                        data_conn.settimeout(10)
+                        data_conn.sendall(names)
+                        data_conn.close()
+                    except Exception:
+                        pass
+                    finally:
+                        try: pasv_sock.close()
+                        except Exception: pass
+                        session["pasv_sock"] = None
+                else:
+                    conn.sendall(b"150 Here comes the directory listing.\r\n")
+                    conn.sendall(names)
                 conn.sendall(b"226 Transfer complete.\r\n")
             
             # ─── SIZE (File Size) ─────────────────────────────────────────
@@ -543,21 +590,26 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                 session["files_accessed"].append(filename)
                 
                 # Check for honeytoken
-                if full_path in _HONEYTOKEN_FILES:
+                is_ht_file = full_path in _HONEYTOKEN_FILES
+                ht_f, ht_fv = check_honeytoken_file(filename) if check_honeytoken_file else (False, None)
+                if is_ht_file or ht_f:
+                    token = full_path if is_ht_file else filename
                     if log_attack:
                         log_attack(ip, 21, "FTP_HONEYTOKEN", json.dumps({
-                            "file": full_path,
-                            "username": session["username"],
+                            "file": token, "username": session["username"],
                             "threat_level": "critical",
                         }))
-                
-                # Check via callback
-                ht_f, ht_fv = check_honeytoken_file(filename) if check_honeytoken_file else (False, None)
-                if ht_f and log_attack:
-                    log_attack(ip, 21, "FTP_HONEYTOKEN_CALLBACK", json.dumps({
-                        "file": filename,
-                        "username": session["username"],
-                    }))
+                    if log_honeytoken:
+                        try:
+                            gdata_ht = geoip_func(ip) if geoip_func else {}
+                            log_honeytoken(
+                                time.strftime("%Y-%m-%dT%H:%M:%S"), ip,
+                                "FILE_ACCESS", token, "ftp",
+                                gdata_ht.get("country", "Unknown"),
+                                gdata_ht.get("city", ""),
+                            )
+                        except Exception:
+                            pass
                 
                 # Log file access (with traversal detection)
                 has_traversal = ".." in filename or "%2e%2e" in filename.lower()
@@ -570,10 +622,31 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                         "has_traversal": has_traversal,
                     }))
                 
-                # Simulate file transfer (but don't actually send data)
-                conn.sendall(b"150 Opening BINARY mode data connection.\r\n")
-                time.sleep(random.uniform(0.5, 2.0))  # Simulate transfer
-                conn.sendall(b"550 Failed to open file.\r\n")  # Honeypot behavior
+                # Serve real content for honeytoken files; fake-fail everything else
+                file_data = None
+                if full_path in _HONEYTOKEN_FILES:
+                    content = _HONEYTOKEN_FILES[full_path]
+                    file_data = content.encode() if isinstance(content, str) else content
+
+                pasv_sock = session.get("pasv_sock")
+                if file_data and pasv_sock:
+                    conn.sendall(b"150 Opening BINARY mode data connection.\r\n")
+                    try:
+                        data_conn, _ = pasv_sock.accept()
+                        data_conn.settimeout(15)
+                        data_conn.sendall(file_data)
+                        data_conn.close()
+                        conn.sendall(b"226 Transfer complete.\r\n")
+                    except Exception:
+                        conn.sendall(b"426 Connection closed; transfer aborted.\r\n")
+                    finally:
+                        try: pasv_sock.close()
+                        except Exception: pass
+                        session["pasv_sock"] = None
+                else:
+                    conn.sendall(b"150 Opening BINARY mode data connection.\r\n")
+                    time.sleep(random.uniform(0.5, 2.0))
+                    conn.sendall(b"550 Failed to open file.\r\n")
             
             # ─── STOR (Upload File) ───────────────────────────────────────
             elif cmd == "STOR" and session["authenticated"]:

@@ -727,7 +727,8 @@ class _HoneypotServer(paramiko.ServerInterface):
 # INTERACTIVE SHELL
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool):
+def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool,
+               log_malware=None, log_honeytoken=None):
     prompt = random.choice(_PROMPTS)
     buf    = ""
 
@@ -773,19 +774,34 @@ def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool):
                         }))
 
                     for hf in _FS:
-                        if hf in cmd and log_attack:
-                            log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
-                                "file": hf, "command": cmd,
-                            }))
+                        if hf in cmd:
+                            if log_attack:
+                                log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
+                                    "file": hf, "command": cmd,
+                                }))
+                            if log_honeytoken:
+                                try:
+                                    log_honeytoken(_ts(), ip, "FILE_ACCESS", hf,
+                                                   "ssh", "Unknown", "")
+                                except Exception:
+                                    pass
 
                     mal = _detect_malware_url(cmd)
-                    if mal and log_attack:
-                        log_attack(ip, 22, "SSH_MALWARE", json.dumps({
-                            "url":    mal,
-                            "command":cmd,
-                            "arch":   _detect_arch(cmd),
-                            "family": _detect_botnet(" ".join(session["commands"])),
-                        }))
+                    if mal:
+                        if log_attack:
+                            log_attack(ip, 22, "SSH_MALWARE", json.dumps({
+                                "url":    mal,
+                                "command":cmd,
+                                "arch":   _detect_arch(cmd),
+                                "family": _detect_botnet(" ".join(session["commands"])),
+                            }))
+                        if log_malware:
+                            try:
+                                log_malware(_ts(), ip, mal, cmd,
+                                            _detect_botnet(" ".join(session["commands"])),
+                                            _detect_arch(cmd), "Unknown")
+                            except Exception:
+                                pass
 
                     if is_tarpitted:
                         time.sleep(TARPIT_DELAY)
@@ -821,7 +837,8 @@ def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _run_exec(channel, command: str, session: dict, ip: str,
-              log_attack, is_tarpitted: bool):
+              log_attack, is_tarpitted: bool,
+              log_malware=None, log_honeytoken=None):
     session["commands"].append(command)
 
     if log_attack:
@@ -832,19 +849,33 @@ def _run_exec(channel, command: str, session: dict, ip: str,
         }))
 
     for hf in _FS:
-        if hf in command and log_attack:
-            log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
-                "file": hf, "command": command,
-            }))
+        if hf in command:
+            if log_attack:
+                log_attack(ip, 22, "SSH_HONEYTOKEN", json.dumps({
+                    "file": hf, "command": command,
+                }))
+            if log_honeytoken:
+                try:
+                    log_honeytoken(_ts(), ip, "FILE_ACCESS", hf,
+                                   "ssh", "Unknown", "")
+                except Exception:
+                    pass
 
     mal = _detect_malware_url(command)
-    if mal and log_attack:
-        log_attack(ip, 22, "SSH_MALWARE", json.dumps({
-            "url":    mal,
-            "command":command,
-            "arch":   _detect_arch(command),
-            "family": _detect_botnet(command),
-        }))
+    if mal:
+        if log_attack:
+            log_attack(ip, 22, "SSH_MALWARE", json.dumps({
+                "url":    mal,
+                "command":command,
+                "arch":   _detect_arch(command),
+                "family": _detect_botnet(command),
+            }))
+        if log_malware:
+            try:
+                log_malware(_ts(), ip, mal, command,
+                            _detect_botnet(command), _detect_arch(command), "Unknown")
+            except Exception:
+                pass
 
     if is_tarpitted:
         time.sleep(TARPIT_DELAY)
@@ -861,7 +892,7 @@ def _run_exec(channel, command: str, session: dict, ip: str,
 
 def handle_ssh(conn, addr, log_attack=None, geoip_func=None,
                intel_fields_func=None, new_ip_alert=None,
-               track_cred_attempt=None):
+               track_cred_attempt=None, log_malware=None, log_honeytoken=None):
     """
     Drop-in replacement for the previous handle_ssh().
     Uses Paramiko for real SSH crypto — any client connects successfully.
@@ -940,13 +971,15 @@ def handle_ssh(conn, addr, log_attack=None, geoip_func=None,
             exec_cmd = server.exec_cmd
 
             if exec_cmd:
-                _run_exec(channel, exec_cmd, session, ip, log_attack, is_tarpit)
+                _run_exec(channel, exec_cmd, session, ip, log_attack, is_tarpit,
+                          log_malware=log_malware, log_honeytoken=log_honeytoken)
                 try: channel.close()
                 except Exception: pass
                 # Some bots send multiple exec commands — keep looping
                 continue
             else:
-                _run_shell(channel, session, ip, log_attack, is_tarpit)
+                _run_shell(channel, session, ip, log_attack, is_tarpit,
+                           log_malware=log_malware, log_honeytoken=log_honeytoken)
                 try: channel.close()
                 except Exception: pass
                 break
