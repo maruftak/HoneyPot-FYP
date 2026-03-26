@@ -183,6 +183,50 @@ def redis_rce(ip, country, command):
     ])
     _send(msg)
 
+def tor_attacker(ip, country, service, exit_ip=None):
+    key = _cooldown_key("TOR", ip)
+    if _is_cooled_down(key):
+        return
+    fields = [
+        ("IP",      ip),
+        ("Country", country),
+        ("Service", service.upper()),
+    ]
+    if exit_ip:
+        fields.append(("Exit Node", exit_ip))
+    msg = _fmt("🧅", "Tor Exit Node Detected", fields)
+    _send(msg)
+
+def vpn_attacker(ip, country, service, provider=None, exit_country=None):
+    key = _cooldown_key("VPN", ip)
+    if _is_cooled_down(key):
+        return
+    fields = [
+        ("IP",       ip),
+        ("Country",  country),
+        ("Service",  service.upper()),
+        ("Provider", provider or "Unknown VPN"),
+    ]
+    if exit_country:
+        fields.append(("Exit Country", exit_country))
+    msg = _fmt("🔒", "VPN/Proxy Attacker Detected", fields)
+    _send(msg)
+
+def malware_upload(ip, country, filename, sha256, size_bytes, service, mime="unknown"):
+    key = _cooldown_key("UPLOAD", ip)
+    if _is_cooled_down(key):
+        return
+    msg = _fmt("☣️", "Malware Upload Captured", [
+        ("IP",       ip),
+        ("Country",  country),
+        ("Service",  service.upper()),
+        ("File",     filename[:60]),
+        ("Type",     mime),
+        ("Size",     f"{size_bytes:,} bytes"),
+        ("SHA256",   sha256[:16] + "…"),
+    ])
+    _send(msg)
+
 def generic(icon_key, title, fields, ip="", cooldown_key=None):
     key = _cooldown_key(cooldown_key or title, ip or "global")
     if _is_cooled_down(key):
