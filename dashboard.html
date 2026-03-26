@@ -430,6 +430,20 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     </div>
     <div class="card"><div class="card-title">Botnet Family Classification</div><div class="chart-wrap" style="height:240px"><canvas id="malwareBotnetChart"></canvas></div></div>
   </div>
+
+  <!-- Captured upload files -->
+  <div class="card">
+    <div class="card-title">Captured Upload Files (FTP / TFTP / HTTP)
+      <span id="capture-count" class="badge b-crit" style="display:none"></span>
+      <button class="btn-sm" onclick="loadCaptures()">↺ Refresh</button>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Filename</th><th>SHA256</th><th>Type</th><th>Size</th><th>Source IP</th><th>Service</th><th>Duplicate</th></tr></thead>
+        <tbody id="captureBody"><tr><td colspan="8" class="loading"><span class="spin">◌</span></td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <!-- ══ PANEL: HONEYTOKENS ══ -->
@@ -1068,6 +1082,33 @@ function filterMalware(){
 function renderMalware(rows){
   document.getElementById('malwareBody').innerHTML=rows.length?rows.map((u,i)=>`<tr><td class="mono" style="color:var(--muted)">${i+1}</td><td class="mono truncate" style="color:var(--red);font-size:10px;max-width:300px">${u.url}</td><td><span class="badge b-crit">${u.family}</span></td><td class="mono" style="color:var(--muted)">${u.arch||'?'}</td><td class="mono" style="color:var(--orange);font-weight:700">${fmt(u.count)}</td><td class="mono" style="color:var(--muted)">${u.unique_ips}</td><td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(u.last)}</td></tr>`).join(''):
     '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No malware URLs captured yet</td></tr>';
+}
+
+// ── Captured Files ─────────────────────────────────────────────────────────
+async function loadCaptures(){
+  const data=await api('/api/captures');
+  const rows=data?.captures||[];
+  const badge=document.getElementById('capture-count');
+  if(rows.length){badge.textContent=rows.length+' files';badge.style.display='';}
+  else{badge.style.display='none';}
+  document.getElementById('captureBody').innerHTML=rows.length?rows.map(r=>{
+    const sha=r.sha256||'';
+    const shortSha=sha.slice(0,16)+'…';
+    const typeColor={elf:'var(--red)',script:'var(--orange)','shell-script':'var(--orange)',python:'var(--yellow)',pe:'var(--red)',unknown:'var(--muted)'};
+    const tc=typeColor[r.mime_hint]||typeColor.unknown;
+    const kb=r.size>1024?(r.size/1024).toFixed(1)+' KB':r.size+' B';
+    return`<tr>
+      <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(r.timestamp)}</td>
+      <td class="mono" style="color:var(--orange)">${r.filename||'—'}</td>
+      <td class="mono" style="font-size:10px;color:var(--blue)" title="${sha}">${shortSha}</td>
+      <td><span class="badge" style="color:${tc};background:${tc}22;border-color:${tc}44;font-size:9px">${r.mime_hint||'?'}</span></td>
+      <td class="mono" style="color:var(--muted)">${kb}</td>
+      <td class="mono" style="color:var(--blue)">${r.source_ip||'—'}</td>
+      <td>${svcBadge(r.service||'')}</td>
+      <td style="font-size:10px">${r.is_duplicate?'<span style="color:var(--muted)">dup</span>':'<span style="color:var(--green)">new</span>'}</td>
+    </tr>`;
+  }).join(''):
+    '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;font-family:var(--mono)">No files captured yet — attackers uploading via FTP STOR, TFTP WRQ, or HTTP PUT will appear here</td></tr>';
 }
 
 // ── Honeytokens ────────────────────────────────────────────────────────────

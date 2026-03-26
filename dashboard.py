@@ -894,6 +894,18 @@ def api_export_json():
     )
 
 
+@app.route("/api/captures")
+def api_captures():
+    """Return list of captured malware/upload files."""
+    try:
+        import malware_capture
+        entries = malware_capture.get_all()
+        # newest first
+        entries = sorted(entries, key=lambda x: x.get("timestamp",""), reverse=True)
+        return jsonify({"captures": entries, "total": len(entries)})
+    except Exception as e:
+        return jsonify({"captures": [], "total": 0, "error": str(e)})
+
 @app.route("/api/export/report-txt")
 def api_export_report_txt():
     """Download full threat report as a plain-text file."""

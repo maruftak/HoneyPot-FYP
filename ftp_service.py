@@ -446,15 +446,33 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
             
             # ─── PASV (Passive Mode) ──────────────────────────────────────
             elif cmd == "PASV" and session["authenticated"]:
-                # Generate random passive port
-                p1 = random.randint(128, 255)
-                p2 = random.randint(0, 255)
-                conn.sendall(f"227 Entering Passive Mode (192,168,1,108,{p1},{p2}).\r\n".encode())
-            
+                # Open a real passive socket so we can actually receive uploads
+                if session.get("pasv_sock"):
+                    try: session["pasv_sock"].close()
+                    except Exception: pass
+                pasv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                pasv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                pasv.bind(("0.0.0.0", 0))
+                pasv.listen(1)
+                pasv.settimeout(30)
+                _, pasv_port = pasv.getsockname()
+                session["pasv_sock"] = pasv
+                p1, p2 = pasv_port >> 8, pasv_port & 0xFF
+                conn.sendall(f"227 Entering Passive Mode (0,0,0,0,{p1},{p2}).\r\n".encode())
+
             # ─── EPSV (Extended Passive Mode) ────────────────────────────
             elif cmd == "EPSV" and session["authenticated"]:
-                passive_port = random.randint(40000, 50000)
-                conn.sendall(f"229 Entering Extended Passive Mode (|||{passive_port}|).\r\n".encode())
+                if session.get("pasv_sock"):
+                    try: session["pasv_sock"].close()
+                    except Exception: pass
+                pasv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                pasv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                pasv.bind(("0.0.0.0", 0))
+                pasv.listen(1)
+                pasv.settimeout(30)
+                _, pasv_port = pasv.getsockname()
+                session["pasv_sock"] = pasv
+                conn.sendall(f"229 Entering Extended Passive Mode (|||{pasv_port}|).\r\n".encode())
             
             # ─── PORT (Active Mode) ───────────────────────────────────────
             elif cmd == "PORT" and session["authenticated"]:
@@ -580,19 +598,63 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                 )
                 threat = "critical" if (is_malware or has_traversal) else "high"
 
+                # Actually receive the upload via passive data connection
+                upload_data = b""
+                sha256 = ""
+                file_size = 0
+                pasv_sock = session.get("pasv_sock")
+                if pasv_sock:
+                    conn.sendall(b"150 Ok to send data.\r\n")
+                    try:
+                        data_conn, _ = pasv_sock.accept()
+                        data_conn.settimeout(15)
+                        chunks = []
+                        while True:
+                            chunk = data_conn.recv(65536)
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            if sum(len(c) for c in chunks) > 10 * 1024 * 1024:
+                                break  # 10 MB cap
+                        data_conn.close()
+                        upload_data = b"".join(chunks)
+                        file_size = len(upload_data)
+                    except Exception:
+                        pass
+                    finally:
+                        try: pasv_sock.close()
+                        except Exception: pass
+                        session["pasv_sock"] = None
+                    conn.sendall(b"226 Transfer complete.\r\n")
+                else:
+                    conn.sendall(b"150 Ok to send data.\r\n")
+                    time.sleep(random.uniform(0.3, 0.8))
+                    conn.sendall(b"226 Transfer complete.\r\n")
+
+                # Save captured file
+                if upload_data:
+                    try:
+                        import malware_capture
+                        cap = malware_capture.save(
+                            upload_data, filename, ip, "FTP",
+                            {"username": session["username"]}
+                        )
+                        sha256 = cap.get("sha256", "")
+                        file_size = cap.get("size", file_size)
+                    except Exception:
+                        import hashlib
+                        sha256 = hashlib.sha256(upload_data).hexdigest()
+
                 if log_attack:
                     log_attack(ip, 21, log_type, json.dumps({
-                        "file": filename,
-                        "username": session["username"],
-                        "threat_level": threat,
-                        "is_malware": is_malware,
+                        "file":          filename,
+                        "username":      session["username"],
+                        "threat_level":  threat,
+                        "is_malware":    is_malware,
                         "has_traversal": has_traversal,
+                        "file_size":     file_size,
+                        "sha256":        sha256,
                     }))
-
-                # Accept but don't actually store
-                conn.sendall(b"150 Ok to send data.\r\n")
-                time.sleep(random.uniform(0.5, 1.5))
-                conn.sendall(b"226 Transfer complete.\r\n")
             
             # ─── DELE (Delete File) ───────────────────────────────────────
             elif cmd == "DELE" and session["authenticated"]:

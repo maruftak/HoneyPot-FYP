@@ -478,7 +478,7 @@ def _serve_wrq(
 
     received_blocks = 0
     total_bytes     = 0
-    payload_sample  = b""
+    payload_chunks  = []
 
     for _ in range(MAX_BLOCKS):
         try:
@@ -498,8 +498,7 @@ def _serve_wrq(
 
         received_blocks += 1
         total_bytes     += len(pkt.data)
-        if len(payload_sample) < 512:
-            payload_sample += pkt.data[: 512 - len(payload_sample)]
+        payload_chunks.append(pkt.data)
 
         # ACK each block
         try:
@@ -509,6 +508,20 @@ def _serve_wrq(
 
         if len(pkt.data) < blksize:
             break  # final block
+
+    full_payload   = b"".join(payload_chunks)
+    payload_sample = full_payload[:512]
+
+    # Save captured file
+    sha256 = ""
+    if full_payload:
+        try:
+            import malware_capture
+            cap    = malware_capture.save(full_payload, filename, ip, "TFTP")
+            sha256 = cap.get("sha256", "")
+        except Exception:
+            import hashlib
+            sha256 = hashlib.sha256(full_payload).hexdigest()
 
     if log_attack:
         try:
@@ -520,6 +533,8 @@ def _serve_wrq(
                 "path":         filename[:500],
                 "payload":      payload_sample[:300].hex(),
                 "raw_payload":  payload_sample[:256].hex(),
+                "sha256":       sha256,
+                "file_size":    total_bytes,
                 "attack_type":  attack_type,
                 "threat_level": threat_level,
                 "honeytoken":   filename if is_honeytoken else "",

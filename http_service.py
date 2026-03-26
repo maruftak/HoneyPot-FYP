@@ -1137,7 +1137,28 @@ def handle_http(conn, addr, https=False, *,
         referer   = next((l.split(":", 1)[1].strip() for l in lines if l.lower().startswith("referer:")),     "")
         host      = next((l.split(":", 1)[1].strip() for l in lines if l.lower().startswith("host:")),        "")
         origin    = next((l.split(":", 1)[1].strip() for l in lines if l.lower().startswith("origin:")),      "")
-        post_body = raw_str.split("\r\n\r\n", 1)[1][:1000] if "\r\n\r\n" in raw_str else ""
+        raw_body  = raw_str.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in raw_str else ""
+        post_body = raw_body[:1000]
+
+        # ── Capture PUT uploads and multipart POST file uploads ───────────────
+        content_type = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("content-type:")), "")
+        if method in ("PUT", "POST") and raw_body:
+            _body_bytes = raw_body.encode("latin-1", errors="replace") if isinstance(raw_body, str) else raw_body
+            _capture_filename = path.rstrip("/").split("/")[-1] or "upload"
+            _should_capture = False
+            if method == "PUT":
+                _should_capture = True
+            elif "multipart/form-data" in content_type.lower():
+                _should_capture = True
+            elif any(path.lower().endswith(e) for e in (".sh",".elf",".bin",".arm",".mips",".py",".php",".jsp")):
+                _should_capture = True
+            if _should_capture and len(_body_bytes) > 16:
+                try:
+                    import malware_capture
+                    malware_capture.save(_body_bytes, _capture_filename, ip, "HTTP",
+                                         {"method": method, "path": path, "content_type": content_type})
+                except Exception:
+                    pass
 
         # ── Attack pattern detection ──────────────────────────────────────────
         attack_patterns = []
