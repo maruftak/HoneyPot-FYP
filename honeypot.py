@@ -684,14 +684,20 @@ def handle_telnet(conn, addr):
     except Exception:
         pass
     finally:
-        if all_commands or login_attempts:
+        # Only log session_complete when the attacker actually ran commands —
+        # pure credential-spray connections already have a brute_force entry,
+        # no need for a second blank row in the dashboard.
+        if all_commands:
+            last = login_attempts[-1] if login_attempts else {}
             db.log_attack({
                 "timestamp":    _ts(), "source_ip": ip, "source_port": port,
                 "dest_port":    23, "service": "telnet", "protocol": "TCP",
+                "username":     last.get("username", ""),
+                "password":     last.get("password", ""),
                 "country":      gdata["country"], "city": gdata["city"],
                 "latitude":     gdata["latitude"], "longitude": gdata["longitude"],
                 "attack_type":  "session_complete",
-                "threat_level": "high" if all_commands else "medium",
+                "threat_level": "critical",
                 "session_id":   sid, "commands": all_commands,
                 "is_botnet":    any(la["is_botnet"] for la in login_attempts),
                 **_intel_fields(gdata),
