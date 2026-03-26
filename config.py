@@ -39,6 +39,10 @@ SESSION_LOG    = os.path.join(LOG_DIR,  "sessions.jsonl")
 HONEYTOKEN_LOG = os.path.join(LOG_DIR,  "honeytokens.jsonl")
 GEOIP_DB       = os.path.join(BASE_DIR, "GeoLite2-City.mmdb")
 
+# ─── Dashboard Authentication ────────────────────────────────────────────────
+DASHBOARD_USERNAME = os.getenv("DASHBOARD_USER", "admin")
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASS", "honeypot2024!")
+
 # ─── Rate Limiting ────────────────────────────────────────────────────────────
 RATE_LIMIT_CONN_PER_MIN = 120   # max connections per IP per minute
 RATE_LIMIT_BAN_SECONDS  = 1800  # 30 min ban after exceeding limit

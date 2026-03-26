@@ -22,6 +22,23 @@ START_TIME     = time.time()
 app = Flask(__name__)
 CORS(app)
 
+# ─── HTTP Basic Auth ───────────────────────────────────────────────────────────
+_NO_AUTH_PATHS = {"/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"}
+
+@app.before_request
+def check_auth():
+    if request.path in _NO_AUTH_PATHS:
+        return
+    auth = request.authorization
+    if (not auth
+            or auth.username != config.DASHBOARD_USERNAME
+            or auth.password != config.DASHBOARD_PASSWORD):
+        return Response(
+            "Authentication required",
+            401,
+            {"WWW-Authenticate": 'Basic realm="honeyPot Dashboard"'},
+        )
+
 # ─── Simple in-memory cache ────────────────────────────────────────────────────
 _cache = {}
 
