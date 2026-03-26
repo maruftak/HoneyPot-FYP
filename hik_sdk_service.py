@@ -31,6 +31,7 @@ import re
 import random
 import threading
 import datetime
+import device_identity as _dev
 
 # ─── SDK Protocol Constants ───────────────────────────────────────────────────
 
@@ -99,11 +100,11 @@ _TOOL_FINGERPRINTS = {
 
 # ─── Realistic binary response builders ──────────────────────────────────────
 
-_DEVICE_SERIAL   = "DS-2CD2043G2-I20230313CCCH012345678"
-_DEVICE_MODEL    = "DS-2CD2043G2-I"
-_DEVICE_FIRMWARE = "V5.7.15 build 230313"
-_DEVICE_MAC      = "44:19:B6:7A:2C:D9"
-_SDK_VERSION     = "V6.1.9.48"
+_DEVICE_SERIAL   = _dev.HIK["serial"]
+_DEVICE_MODEL    = _dev.HIK["model"]
+_DEVICE_FIRMWARE = _dev.HIK["firmware"]
+_DEVICE_MAC      = _dev.HIK["mac_upper"]
+_SDK_VERSION     = _dev.HIK["sdk_version"]
 
 def _random_session_token():
     return "".join(random.choices("0123456789ABCDEF", k=32))

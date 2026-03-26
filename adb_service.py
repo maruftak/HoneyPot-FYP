@@ -44,12 +44,15 @@ CMD_AUTH  = 0x48545541
 ADB_VERSION      = 0x01000000
 ADB_MAX_DATA     = 4096
 
-# Fake device properties
-_DEVICE_MODEL    = "AndroidTV"
-_DEVICE_SERIAL   = "emulator-5554"
-_ANDROID_VERSION = "9"
-_SDK_VERSION     = "28"
-_BUILD_ID        = "PI/android-build/generic_x86:9/PSR1.180720.094"
+# Fake device properties — Android-based NVR (HiChip, common in cheap Chinese NVRs)
+import device_identity as _dev
+_DEVICE_MODEL    = _dev.ADB_DEV["model"]
+_DEVICE_SERIAL   = _dev.ADB_DEV["serial"]
+_ANDROID_VERSION = _dev.ADB_DEV["android_ver"]
+_SDK_VERSION     = _dev.ADB_DEV["sdk_ver"]
+_BUILD_ID        = _dev.ADB_DEV["build_id"]
+_MANUFACTURER    = _dev.ADB_DEV["manufacturer"]
+_PRODUCT         = _dev.ADB_DEV["product"]
 
 
 def _ts():
@@ -145,9 +148,10 @@ def handle_adb(conn, addr, log_attack=None, geoip_func=None,
         device_banner = (
             f"device::{_DEVICE_SERIAL};"
             f"model:{_DEVICE_MODEL};"
-            f"product:sdk_phone_x86;"
+            f"product:{_PRODUCT};"
             f"ro.build.version.release:{_ANDROID_VERSION};"
             f"ro.build.version.sdk:{_SDK_VERSION};"
+            f"ro.product.manufacturer={_MANUFACTURER};"
             f"features=shell_v2,cmd"
         ).encode()
         conn.sendall(_build_packet(CMD_CNXN, ADB_VERSION, ADB_MAX_DATA, device_banner))
@@ -279,26 +283,33 @@ def _fake_shell_output(cmd: str) -> bytes:
     if c in ("id", "whoami"):
         return b"uid=0(root) gid=0(root) groups=0(root)\n"
     if c == "uname":
-        return b"Linux localhost 3.18.91-perf #1 SMP PREEMPT Fri Jan 12 11:28:43 CST 2018 armv7l Android\n"
+        return (f"Linux {_DEVICE_MODEL.lower()} 3.18.91-perf #1 SMP PREEMPT "
+                f"Fri Jan 12 11:28:43 CST 2018 armv7l Android\n").encode()
     if cmd.startswith("getprop"):
         return (
-            b"[ro.build.version.release]: [9]\n"
-            b"[ro.product.model]: [AndroidTV]\n"
-            b"[ro.serialno]: [emulator-5554]\n"
-            b"[ro.product.manufacturer]: [Android]\n"
-        )
+            f"[ro.build.version.release]: [{_ANDROID_VERSION}]\n"
+            f"[ro.product.model]: [{_DEVICE_MODEL}]\n"
+            f"[ro.serialno]: [{_DEVICE_SERIAL}]\n"
+            f"[ro.product.manufacturer]: [{_MANUFACTURER}]\n"
+            f"[ro.product.name]: [{_PRODUCT}]\n"
+            f"[ro.build.id]: [{_BUILD_ID}]\n"
+            f"[ro.hardware]: [hi3798mv200]\n"
+            f"[ro.build.version.sdk]: [{_SDK_VERSION}]\n"
+        ).encode()
     if c == "ls":
-        return b"/\ndata\ndev\nproc\nsys\nsystem\ncache\nmnt\nvendor\nconfig\n"
+        return b"data\ndev\nmnt\nproc\nsys\nsystem\ntmp\nvendor\n"
     if c in ("cat",):
         return b""
     if c in ("pwd",):
         return b"/\n"
     if c in ("ps",):
         return (
-            b"USER     PID   PPID  VSIZE  RSS   WCHAN    PC         NAME\n"
-            b"root      1     0     5496   692   SyS_epoll_wait 0 S /init\n"
-            b"root      2     0     0      0     kthreadd 0 S kthreadd\n"
-            b"u0_a55    1234  312   1085M  52M   SyS_epoll_wait 0 S com.android.tv\n"
+            b"USER     PID   PPID  VSIZE  RSS   NAME\n"
+            b"root      1     0     5496   692   /init\n"
+            b"root      2     0     0      0     kthreadd\n"
+            b"root      312   1     12480  4096  /system/bin/nvr_main\n"
+            b"root      313   1     8192   2048  /system/bin/rtspd\n"
+            b"root      314   1     4096   1024  /system/bin/telnetd\n"
         )
     if c in ("rm", "kill", "chmod", "mkdir", "touch"):
         return b""

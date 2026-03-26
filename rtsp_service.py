@@ -31,13 +31,34 @@ _WEAK_CREDS = {
     "guest":   ["", "guest"],
 }
 
-# ─── SDP templates per Hikvision channel ─────────────────────────────────────
+# ─── SDP generator — uses real server IP so VLC/ffmpeg actually try to connect ──
 
-_SDP = {
-    "101": (
-        "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n"
-        "s=Hikvision DS-2CD2043G2-I Main Stream\r\n"
-        "c=IN IP4 0.0.0.0\r\nt=0 0\r\n"
+def _build_sdp(channel: str, server_ip: str) -> str:
+    """Generate SDP with the real server IP (not 0.0.0.0)."""
+    ip = server_ip or "0.0.0.0"
+    if channel == "102":
+        return (
+            f"v=0\r\no=- 0 0 IN IP4 {ip}\r\n"
+            f"s=Hikvision DS-2CD2043G2-I Sub Stream\r\n"
+            f"c=IN IP4 {ip}\r\nt=0 0\r\n"
+            "m=video 0 RTP/AVP 96\r\nb=AS:512\r\n"
+            "a=rtpmap:96 H264/90000\r\n"
+            "a=fmtp:96 packetization-mode=1;profile-level-id=42001f\r\n"
+            "a=control:trackID=1\r\n"
+        )
+    if channel == "201":
+        return (
+            f"v=0\r\no=- 0 0 IN IP4 {ip}\r\n"
+            f"s=Hikvision DS-2CD2043G2-I Third Stream\r\n"
+            f"c=IN IP4 {ip}\r\nt=0 0\r\n"
+            "m=video 0 RTP/AVP 96\r\nb=AS:256\r\n"
+            "a=rtpmap:96 H264/90000\r\na=control:trackID=1\r\n"
+        )
+    # Default: main stream (channel 101 or any unknown)
+    return (
+        f"v=0\r\no=- 0 0 IN IP4 {ip}\r\n"
+        f"s=Hikvision DS-2CD2043G2-I Main Stream\r\n"
+        f"c=IN IP4 {ip}\r\nt=0 0\r\n"
         "a=tool:libavformat 58.29.100\r\n"
         "m=video 0 RTP/AVP 96\r\nb=AS:4096\r\n"
         "a=rtpmap:96 H264/90000\r\n"
@@ -45,24 +66,7 @@ _SDP = {
         "sprop-parameter-sets=Z2QAKKzZQHgCJ+WEAAADAAQAAAMAyDxYtlg=,aO48gA==\r\n"
         "a=control:trackID=1\r\n"
         "m=audio 0 RTP/AVP 8\r\na=rtpmap:8 PCMA/8000\r\na=control:trackID=2\r\n"
-    ),
-    "102": (
-        "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n"
-        "s=Hikvision DS-2CD2043G2-I Sub Stream\r\n"
-        "c=IN IP4 0.0.0.0\r\nt=0 0\r\n"
-        "m=video 0 RTP/AVP 96\r\nb=AS:512\r\n"
-        "a=rtpmap:96 H264/90000\r\n"
-        "a=fmtp:96 packetization-mode=1;profile-level-id=42001f\r\n"
-        "a=control:trackID=1\r\n"
-    ),
-    "201": (
-        "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n"
-        "s=Hikvision DS-2CD2043G2-I Third Stream\r\n"
-        "c=IN IP4 0.0.0.0\r\nt=0 0\r\n"
-        "m=video 0 RTP/AVP 96\r\nb=AS:256\r\n"
-        "a=rtpmap:96 H264/90000\r\na=control:trackID=1\r\n"
-    ),
-}
+    )
 
 # ─── CVE patterns in RTSP URLs / headers ──────────────────────────────────────
 
@@ -156,8 +160,13 @@ def handle_rtsp(
     gdata = geoip_func(ip)        if geoip_func        else {}
     intel = intel_fields_func(gdata) if intel_fields_func else {}
 
-    fw    = random.choice(["V5.5.8", "V5.6.2", "V5.7.0", "V5.7.15"])
+    fw    = "V5.7.15"          # consistent firmware across all services
     model = "DS-2CD2043G2-I"
+    # Detect server's public IP so SDP uses the right address
+    try:
+        server_ip = conn.getsockname()[0]
+    except Exception:
+        server_ip = "0.0.0.0"
     nonce = "%016x" % random.getrandbits(64)
     sid   = "%08x" % random.getrandbits(32)
 
@@ -347,7 +356,7 @@ def handle_rtsp(
 
             elif method == "DESCRIBE":
                 ch  = _channel(url)
-                sdp = _SDP.get(ch, _SDP["101"])
+                sdp = _build_sdp(ch, server_ip)
                 _log("rtsp_stream_access", "medium", {
                     "method":  method, "path":    url,
                     "channel": ch,     "payload": f"SDP served for channel {ch}",
