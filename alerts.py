@@ -183,6 +183,29 @@ def redis_rce(ip, country, command):
     ])
     _send(msg)
 
+def vt_result(sha256, result):
+    malicious  = result.get("malicious",  0)
+    suspicious = result.get("suspicious", 0)
+    total      = result.get("total",      0)
+    family     = result.get("family") or "Unknown"
+    permalink  = result.get("permalink", "")
+
+    if malicious == 0 and suspicious == 0:
+        return  # clean file — no alert needed
+
+    key = _cooldown_key("VT", sha256[:16])
+    if _is_cooled_down(key):
+        return
+
+    severity = "CRITICAL" if malicious >= 10 else ("HIGH" if malicious >= 3 else "MEDIUM")
+    msg = _fmt("☣️", f"VirusTotal Hit — {severity}", [
+        ("SHA256",     sha256[:16] + "…"),
+        ("Family",     family),
+        ("Detections", f"{malicious} malicious, {suspicious} suspicious / {total} engines"),
+        ("Report",     permalink),
+    ])
+    _send(msg)
+
 def brute_force_burst(ip, country, service, count, window_secs):
     key = _cooldown_key("BRUTE", ip)
     if _is_cooled_down(key):

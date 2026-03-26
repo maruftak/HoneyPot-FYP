@@ -39,6 +39,9 @@ SESSION_LOG    = os.path.join(LOG_DIR,  "sessions.jsonl")
 HONEYTOKEN_LOG = os.path.join(LOG_DIR,  "honeytokens.jsonl")
 GEOIP_DB       = os.path.join(BASE_DIR, "GeoLite2-City.mmdb")
 
+# ─── VirusTotal ───────────────────────────────────────────────────────────────
+VIRUSTOTAL_API_KEY = os.getenv("VT_API_KEY", "5a50d8e5b2ce3f222c29c2f3394d659ee394dd7a4356e02f26b4a80060a765eb")
+
 # ─── Dashboard Authentication ────────────────────────────────────────────────
 DASHBOARD_USERNAME = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASS", "honeypot2024!")
