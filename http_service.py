@@ -1068,6 +1068,23 @@ HTTP_ROUTES = {
     </Transport></StreamingChannel>
 </StreamingChannelList>"""),
 
+    # ── HNAP1 — D-Link Home Network Administration Protocol ───────────────────
+    # Massively targeted by Mirai variants; D-Link routers expose this on port 80
+    "/HNAP1/": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
+<GetDeviceSettingsResponse xmlns="http://purenetworks.com/HNAP1/">
+  <GetDeviceSettingsResult>OK</GetDeviceSettingsResult>
+  <VendorName>D-Link</VendorName>
+  <ModelName>DSL-2750B</ModelName>
+  <Description>Wireless N ADSL2+ Modem Router</Description>
+  <FirmwareVersion>1.06</FirmwareVersion>
+  <PresentationURL>http://192.168.1.1</PresentationURL>
+  <SOAPActions>
+    <string>http://purenetworks.com/HNAP1/GetDeviceSettings</string>
+    <string>http://purenetworks.com/HNAP1/SetRouterSettings</string>
+    <string>http://purenetworks.com/HNAP1/SetAccessPointMode</string>
+  </SOAPActions>
+</GetDeviceSettingsResponse>"""),
+
     # ── Config files exposed via HTTP — serve as honeytoken downloads ─────────
     "/mnt/mtd/Config/account.ini": (200, "text/plain",
         b"[User1]\nusername=admin\npassword=admin\ngroup=0\nprivilege=255\n"

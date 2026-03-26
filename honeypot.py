@@ -530,10 +530,23 @@ _ECHO_OFF     = _IAC + _WILL + _ECHO
 _ECHO_ON      = _IAC + _WONT + _ECHO
 
 _TELNET_BANNERS = [
+    # Hikvision IP cameras
     "\r\n\r\nHikvision DS-2CD2043G2-I\r\nFirmware: V5.7.15 build 230313\r\n\r\n(none) login: ",
-    "\r\n\r\nBusyBox v1.31.1 (2021-10-19 08:36:54 UTC) built-in shell (ash)\r\n\r\nlogin: ",
     "\r\n\r\nWelcome to HiLinux.\r\n\r\n(none) login: ",
+    # BusyBox — old versions most targeted by Mirai
+    "\r\n\r\nBusyBox v1.16.1 (2009-10-01 23:34:21 CST) built-in shell (ash)\r\n\r\nlogin: ",
+    "\r\n\r\nBusyBox v1.19.4 (2013-08-12 12:00:00 CST) built-in shell (ash)\r\n\r\nlogin: ",
+    "\r\n\r\nBusyBox v1.31.1 (2021-10-19 08:36:54 UTC) built-in shell (ash)\r\n\r\nlogin: ",
+    # DVR/NVR devices
     "\r\n\r\nDVR-4CH Login\r\nKernel: 3.10.14\r\n\r\nlogin: ",
+    "\r\n\r\nHi3518 family \r\nBusyBox v1.16.1\r\n\r\nlogin: ",
+    # Routers — heavily targeted by Mirai variants
+    "\r\n\r\nHuawei Home Gateway\r\nSoftware Version: V100R001C01B020\r\n\r\nlogin: ",
+    "\r\n\r\nTP-LINK Wireless Router\r\nModel: TL-WR841N\r\nFirmware: 3.16.9\r\n\r\nlogin: ",
+    "\r\n\r\nD-Link Corporation.\r\nAll rights reserved.\r\n\r\nlogin: ",
+    "\r\n\r\nlinux\r\nBusyBox v1.01 (2015.08.10-08:30+0000) Built-in shell (ash)\r\n\r\nlogin: ",
+    # GPON/fiber modems (Satori worm target)
+    "\r\n\r\nGPON Home Gateway\r\nModel: EchoLife HG8245\r\n\r\nlogin: ",
 ]
 _PROMPTS = ["# ", "/ # ", "root@dvr:~# ", "[root@camera ~]# ", "root@(none):/# "]
 

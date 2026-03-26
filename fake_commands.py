@@ -184,6 +184,31 @@ _FILE_CONTENTS = {
         "Feb 18 10:45:11 camera01 sshd[102]: Failed password for admin from "
         "45.33.32.156 port 56789 ssh2\n"
     ),
+    "/var/log/auth.log": (
+        "Mar 19 02:11:43 camera sshd[1234]: Failed password for root from 185.220.101.42 port 52341 ssh2\n"
+        "Mar 19 02:11:44 camera sshd[1234]: Failed password for admin from 185.220.101.42 port 52342 ssh2\n"
+        "Mar 19 03:44:21 camera sshd[2211]: Accepted password for root from 45.33.32.156 port 39812 ssh2\n"
+        "Mar 19 03:44:25 camera sshd[2211]: pam_unix(sshd:session): session opened for user root\n"
+        "Mar 19 04:12:07 camera telnetd[312]: connect from 89.248.165.32\n"
+        "Mar 19 04:12:09 camera login[313]: ROOT LOGIN on '/dev/pts/0' from '89.248.165.32'\n"
+        "Mar 19 07:33:18 camera sshd[3301]: Failed password for root from 222.186.42.117 port 41211 ssh2\n"
+        "Mar 19 08:01:55 camera telnetd[401]: connect from 45.33.32.156\n"
+    ),
+    # ARP table — shows fake LAN neighbours, tempts lateral movement
+    "/proc/net/arp": (
+        "IP address       HW type     Flags       HW address            Mask     Device\n"
+        "192.168.1.1      0x1         0x2         a4:b1:c8:22:34:56     *        eth0\n"
+        "192.168.1.50     0x1         0x2         00:0c:29:ab:cd:ef     *        eth0\n"
+        "192.168.1.99     0x1         0x2         b8:27:eb:12:34:56     *        eth0\n"
+        "192.168.1.200    0x1         0x2         dc:a6:32:88:77:66     *        eth0\n"
+    ),
+    "/proc/net/tcp": (
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid\n"
+        "   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0\n"
+        "   1: 00000000:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0\n"
+        "   2: 00000000:0017 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0\n"
+        "   3: 6C01A8C0:0017 0502A8C0:D5C2 01 00000000:00000000 00:00000000 00000000     0\n"
+    ),
 }
 
 PROMPT_VARIANTS = [
@@ -491,6 +516,12 @@ class FakeShell:
             return _FILE_CONTENTS["/mnt/mtd/Config/network.ini"]
         if "system.ini" in path.lower():
             return _FILE_CONTENTS["/mnt/mtd/Config/system.ini"]
+        if "auth.log" in path.lower():
+            return _FILE_CONTENTS["/var/log/auth.log"]
+        if path in ("/proc/net/arp", "/proc/net/tcp"):
+            return _FILE_CONTENTS.get(path, "")
+        if "arp" in path:
+            return _FILE_CONTENTS["/proc/net/arp"]
         if self._fs_isdir(path):
             return f"cat: {args[0]}: Is a directory\n"
         return f"cat: {args[0]}: No such file or directory\n"
@@ -635,6 +666,18 @@ class FakeShell:
 
     def _cmd_history(self, args):
         return "\n".join(f"  {i+1:>4}  {c}" for i, c in enumerate(self._history)) + "\n"
+
+    def _cmd_route(self, args):
+        return (
+            "Kernel IP routing table\n"
+            "Destination     Gateway         Genmask         Flags Metric Ref    Use Iface\n"
+            "0.0.0.0         192.168.1.1     0.0.0.0         UG    0      0        0 eth0\n"
+            "192.168.1.0     0.0.0.0         255.255.255.0   U     0      0        0 eth0\n"
+        )
+
+    def _cmd_nc(self, args):
+        """netcat — pretend to open connection then time out."""
+        return ""
 
     def _cmd_ping(self, args):
         host = next((a for a in args if not a.startswith("-")), "127.0.0.1")

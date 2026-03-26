@@ -91,6 +91,7 @@ SERVICE_PORTS = {
 # ─── Threat Intelligence ──────────────────────────────────────────────────────
 # Known botnet credential pairs (username, password)
 BOTNET_CREDS = {
+    # ── Mirai original 60 credential pairs ────────────────────────────────────
     ("root","root"),("admin","admin"),("root","12345"),("admin","password"),
     ("root","default"),("admin","1234"),("root","xc3511"),("root","vizxv"),
     ("admin","smcadmin"),("root","anko"),("root","7ujMko0vizxv"),("root","5up"),
@@ -105,6 +106,35 @@ BOTNET_CREDS = {
     ("admin","54321"),("root","666666"),("admin","666666"),("root","7ujMko0admin"),
     ("admin","7ujMko0admin"),("root","system"),("admin","system"),
     ("ubnt","ubnt"),("vagrant","vagrant"),("user","1234"),("1234","1234"),
+    # ── Additional Mirai/Satori/Okiru pairs (HiSilicon, DVR, router defaults) ─
+    ("root","hi3518"),        # HiSilicon SoC default (Hikvision/Dahua chipset)
+    ("root","xmhdipc"),       # XMeye/Dahua IP cameras
+    ("root","juantech"),      # Juantech DVR
+    ("root","realtek"),       # Realtek SDK devices
+    ("root","jvbzd"),         # Comtrend/generic
+    ("root","ikwb"),          # Netcam
+    ("root","dreambox"),      # Dreambox STB
+    ("root","000000"),        # Many Chinese cameras
+    ("root","klv1234"),       # Variant
+    ("root","Zte521"),        # ZTE router default
+    ("root","hi3518"),
+    ("666666","666666"),      # DVR 6-digit default
+    ("888888","888888"),      # DVR 8-digit default
+    ("supervisor","supervisor"), # Axis cameras
+    ("Administrator","admin"),   # Windows-style IoT
+    ("admin","1111111"),
+    ("admin","1234567"),
+    ("admin","admin1234"),
+    ("root","1111"),
+    ("root","123456789"),
+    ("root","nopasswd"),
+    ("root",""),              # blank password
+    ("admin","camera"),
+    ("admin","ipcam"),
+    ("admin","dvr"),
+    ("hikvision","12345"),
+    ("root","hi3520"),        # HiSilicon variant
+    ("root","hik12345"),
 }
 
 # CVE patterns to detect in payloads
