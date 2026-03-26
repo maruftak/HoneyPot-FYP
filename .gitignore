@@ -134,3 +134,4 @@ Thumbs.db
 # Secrets
 config.py
 .env
+ssh_host_rsa_key
