@@ -49,6 +49,114 @@ _SERVER_HEADERS = [
     "GoAhead-Webs/2.5.0",
 ]
 
+# ─── Decoy download files ─────────────────────────────────────────────────────
+# Served as realistic fake content; every download is logged as a honeytoken hit.
+# Format: path → (content_type, download_filename, body_bytes)
+
+# Fake MIPS 32-bit big-endian ELF (Hikvision camera firmware style)
+_FAKE_FIRMWARE_BIN = (
+    b'\x7fELF'              # ELF magic
+    + b'\x01'               # 32-bit
+    + b'\x02'               # big-endian
+    + b'\x01'               # version 1
+    + b'\x00' * 9           # padding / OS ABI
+    + b'\x00\x02'           # ET_EXEC
+    + b'\x00\x08'           # EM_MIPS
+    + b'\x00\x00\x00\x01'   # ELF version
+    + b'\x80\x00\x10\x00'   # entry point
+    + b'\x00\x00\x00\x34'   # phoff
+    + b'\x00\x1f\x80\x00'   # shoff (placeholder)
+    + b'\x30\x00\x10\x00'   # flags (MIPS)
+    + b'\x00\x34'           # ehsize
+    + b'\x00\x20'           # phentsize
+    + b'\x00\x03'           # phnum
+    + b'\x00\x28'           # shentsize
+    + b'\x00\x0e'           # shnum
+    + b'\x00\x0d'           # shstrndx
+    + b'\x00\x01\x00\x01' * 512
+    + b'DS-2CD2043G2-I\x00'
+    + b'V5.7.15 build 230313\x00'
+    + b'Hikvision\x00'
+    + b'\x00' * 2048
+)
+
+# Minimal gzip stream containing a fake config XML (FNAME field gives filename hint)
+_FAKE_CONFIG_GZ = (
+    b'\x1f\x8b'             # gzip magic
+    + b'\x08'               # deflate
+    + b'\x08'               # FNAME flag
+    + b'\x00' * 4           # mtime
+    + b'\x00'               # XFL
+    + b'\x03'               # OS = Unix
+    + b'config.xml\x00'     # original filename
+    + b'\x01'               # deflate stored block, BFINAL=1
+    + b'\x00' * 4           # LEN/NLEN placeholder
+    + b'<?xml version="1.0"?><Config><version>5.7.15</version></Config>'
+    + b'\x00' * 4           # CRC32 + ISIZE placeholder
+)
+
+_FAKE_PASSWD = (
+    b"root:x:0:0:root:/root:/bin/sh\n"
+    b"daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
+    b"nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n"
+    b"admin:x:1000:1000:Administrator:/home/admin:/bin/sh\n"
+    b"user:x:1001:1001:User:/home/user:/bin/sh\n"
+    b"guest:x:1002:1002:Guest:/home/guest:/bin/sh\n"
+    b"ftp:x:33:33:FTP daemon:/var/ftp:/usr/sbin/nologin\n"
+    b"sshd:x:74:74:Privilege-separated SSH:/var/empty/sshd:/sbin/nologin\n"
+    b"hikvision:x:500:500:Hikvision:/home/hikvision:/bin/sh\n"
+)
+
+_FAKE_SYSTEM_CFG = (
+    b"# DS-2CD2043G2-I System Configuration\n"
+    b"# Generated: 2024-11-01 08:32:15\n"
+    b"[system]\n"
+    b"hostname=IPCamera\n"
+    b"model=DS-2CD2043G2-I\n"
+    b"firmware=V5.7.15\n"
+    b"serial=DS-2CD2043G2-I20230313CCCH012345678\n"
+    b"[network]\n"
+    b"ip=192.168.1.108\n"
+    b"mask=255.255.255.0\n"
+    b"gateway=192.168.1.1\n"
+    b"dns=8.8.8.8\n"
+    b"[auth]\n"
+    b"admin_user=admin\n"
+    b"admin_pass=Admin@2024!\n"
+    b"[rtsp]\n"
+    b"port=554\n"
+    b"path=/Streaming/Channels/101\n"
+)
+
+_FAKE_NVRAM_CFG = (
+    b"wan_ipaddr=98.90.248.178\n"
+    b"wan_gateway=98.90.248.1\n"
+    b"wan_netmask=255.255.255.0\n"
+    b"lan_ipaddr=192.168.1.1\n"
+    b"lan_netmask=255.255.255.0\n"
+    b"http_passwd=Admin@2024!\n"
+    b"http_username=admin\n"
+    b"model=DS-2CD2043G2-I\n"
+    b"firmware_version=V5.7.15\n"
+    b"uptime=1382945\n"
+)
+
+_FAKE_PROC_VERSION = (
+    b"Linux version 3.10.0-862 (gcc version 4.9.3) "
+    b"#1 SMP Thu Nov  1 08:32:15 UTC 2023\n"
+)
+
+_DECOY_FILES = {
+    "/firmware.bin":    ("application/octet-stream", "firmware.bin",    _FAKE_FIRMWARE_BIN),
+    "/upgrade.bin":     ("application/octet-stream", "upgrade.bin",     _FAKE_FIRMWARE_BIN),
+    "/config.tar.gz":   ("application/gzip",         "config.tar.gz",   _FAKE_CONFIG_GZ),
+    "/backup.tar.gz":   ("application/gzip",         "backup.tar.gz",   _FAKE_CONFIG_GZ),
+    "/etc/passwd":      ("text/plain",               "passwd",          _FAKE_PASSWD),
+    "/system.cfg":      ("text/plain",               "system.cfg",      _FAKE_SYSTEM_CFG),
+    "/nvram.cfg":       ("text/plain",               "nvram.cfg",       _FAKE_NVRAM_CFG),
+    "/proc/version":    ("text/plain",               "version",         _FAKE_PROC_VERSION),
+}
+
 
 # ─── Shared fragments ─────────────────────────────────────────────────────────
 
@@ -1890,6 +1998,15 @@ def handle_http(conn, addr, https=False, *,
                 })
                 conn.sendall(_http_resp(500, "application/json", b'{"error":"internal"}'))
                 return
+
+        # ── Decoy file downloads ──────────────────────────────────────────────
+        # Serve realistic fake content for bait paths (firmware, passwd, configs).
+        # Honeytoken alert + DB log already fired above at the honeytoken check.
+        if method == "GET" and path in _DECOY_FILES:
+            ct, fname, body = _DECOY_FILES[path]
+            extra = f'Content-Disposition: attachment; filename="{fname}"\r\n'
+            conn.sendall(_http_resp(200, ct, body, extra))
+            return
 
         # ── Route → response ──────────────────────────────────────────────────
         # Camera dashboard — rendered fresh each request so the timestamp is live

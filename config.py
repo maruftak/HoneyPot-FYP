@@ -243,6 +243,15 @@ HONEYTOKEN_FILES = [
     "/api/keys.json",
     "/kubernetes/config",
     "/root/.bash_history",
+    # Decoy download files — serve realistic fake content
+    "/firmware.bin",
+    "/upgrade.bin",
+    "/config.tar.gz",
+    "/backup.tar.gz",
+    "/etc/passwd",
+    "/system.cfg",
+    "/nvram.cfg",
+    "/proc/version",
 ]
 
 # Honeytoken credentials — using these fires a CRITICAL alert
