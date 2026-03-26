@@ -1633,6 +1633,264 @@ def handle_http(conn, addr, https=False, *,
                 f"<html><body><pre>{out}</pre></body></html>".encode()))
             return
 
+        # ── IoT CVE / botnet-targeted endpoint handlers ───────────────────────
+
+        # Helper: detect botnet download keywords in a payload string
+        def _has_botnet_dl(s):
+            return any(k in s for k in ["busybox", "wget", "curl", "chmod", "tftp"])
+
+        # Helper: extract first http/https URL from a payload string
+        def _extract_url(s):
+            m = re.search(r"https?://\S+", s)
+            return m.group(0) if m else None
+
+        # Helper: detect command injection patterns in a payload
+        def _has_cmd_injection(s):
+            return any(k in s for k in [
+                "$(wget", "$(curl", ";wget", "|busybox", "`wget", "`curl",
+                ";curl", "$(", "`", "|wget", "|curl", ";busybox",
+            ])
+
+        # Helper: log a malware URL if found in the payload
+        def _maybe_log_malware(payload):
+            url = _extract_url(payload)
+            if url and log_malware_func:
+                try:
+                    log_malware_func(ts_func(), ip, url, payload,
+                                     "Unknown", "unknown", gdata["country"])
+                except Exception:
+                    pass
+
+        # ── CVE-2023-1389: TP-Link Archer AX21 — unauthenticated RCE via /cgi-bin/luci/;stok=
+        # Mirai/Moobot botnets heavily exploit this. stok value is whatever the
+        # attacker puts in the URL; the device executes the POST body as a command.
+        if "/cgi-bin/luci/" in path and ";stok=" in path:
+            _payload = post_body or query
+            _at       = "cve_CVE-2023-1389"
+            _tl       = "critical"
+            attack_patterns.append(_at)
+            threat_level = _tl
+            inc_counter_func("cves")
+            if _has_botnet_dl(_payload):
+                attack_patterns.append("botnet_download")
+            _maybe_log_malware(_payload)
+            log_attack_func({
+                "timestamp":    ts_func(),
+                "source_ip":    ip,
+                "source_port":  port,
+                "dest_port":    dport,
+                "service":      svc,
+                "username":     "",
+                "password":     "",
+                "raw_payload":  _payload[:500],
+                "country":      gdata["country"],
+                "city":         gdata["city"],
+                "latitude":     gdata["latitude"],
+                "longitude":    gdata["longitude"],
+                "attack_type":  _at,
+                "threat_level": _tl,
+                "cve_id":       "CVE-2023-1389",
+                "scanner_tool": scanner_tool,
+                "user_agent":   ua,
+            })
+            conn.sendall(_http_resp(200, "application/json", b'{"result":0}'))
+            return
+
+        # ── CVE-2017-17215: Huawei HG532 — UPnP/TR-064 NewNTPServer command injection
+        # Mirai and Satori use this to propagate. The exploit POSTs to /cgi-bin/tool.cgi
+        # with a SOAP body containing NewNTPServer holding a shell command.
+        if method == "POST" and path in ("/cgi-bin/tool.cgi", "/cgi-bin/igd/control"):
+            _payload = post_body or ""
+            if "NewNTPServer" in _payload:
+                _at  = "cve_CVE-2017-17215"
+                _tl  = "critical"
+                attack_patterns.append(_at)
+                threat_level = _tl
+                inc_counter_func("cves")
+                if _has_botnet_dl(_payload):
+                    attack_patterns.append("botnet_download")
+                _maybe_log_malware(_payload)
+                log_attack_func({
+                    "timestamp":    ts_func(),
+                    "source_ip":    ip,
+                    "source_port":  port,
+                    "dest_port":    dport,
+                    "service":      svc,
+                    "username":     "",
+                    "password":     "",
+                    "raw_payload":  _payload[:500],
+                    "country":      gdata["country"],
+                    "city":         gdata["city"],
+                    "latitude":     gdata["latitude"],
+                    "longitude":    gdata["longitude"],
+                    "attack_type":  _at,
+                    "threat_level": _tl,
+                    "cve_id":       "CVE-2017-17215",
+                    "scanner_tool": scanner_tool,
+                    "user_agent":   ua,
+                })
+                conn.sendall(_http_resp(500, "application/json", b'{"error":"internal"}'))
+                return
+
+        # ── CVE-2014-8361: Realtek miniigd UPnP SOAP — NewInternalClient RCE
+        # Exploited by Mirai, Gafgyt and variants to inject commands via SOAP action.
+        # Targets /picsdesc.xml (service description probe) and /igd/control (action endpoint).
+        if method == "POST" and path in ("/picsdesc.xml", "/igd/control",
+                                          "/upnp/control/WANIPConn1"):
+            _payload = post_body or ""
+            if "NewInternalClient" in _payload:
+                _at  = "cve_CVE-2014-8361"
+                _tl  = "critical"
+                attack_patterns.append(_at)
+                threat_level = _tl
+                inc_counter_func("cves")
+                if _has_botnet_dl(_payload):
+                    attack_patterns.append("botnet_download")
+                _maybe_log_malware(_payload)
+                log_attack_func({
+                    "timestamp":    ts_func(),
+                    "source_ip":    ip,
+                    "source_port":  port,
+                    "dest_port":    dport,
+                    "service":      svc,
+                    "username":     "",
+                    "password":     "",
+                    "raw_payload":  _payload[:500],
+                    "country":      gdata["country"],
+                    "city":         gdata["city"],
+                    "latitude":     gdata["latitude"],
+                    "longitude":    gdata["longitude"],
+                    "attack_type":  _at,
+                    "threat_level": _tl,
+                    "cve_id":       "CVE-2014-8361",
+                    "scanner_tool": scanner_tool,
+                    "user_agent":   ua,
+                })
+                _soap_resp = (
+                    b'<?xml version="1.0"?>'
+                    b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+                    b'<s:Body>'
+                    b'<u:AddPortMappingResponse'
+                    b' xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1"/>'
+                    b'</s:Body></s:Envelope>'
+                )
+                conn.sendall(_http_resp(200, "text/xml", _soap_resp))
+                return
+
+        # ── CVE-2017-6334: Netgear DGN2200 setup.cgi RCE
+        # Unauthenticated RCE — attacker passes a shell command in next_file= parameter.
+        if "setup.cgi" in path and "next_file=" in query:
+            _payload = query + (post_body or "")
+            _at  = "cve_CVE-2017-6334"
+            _tl  = "critical"
+            attack_patterns.append(_at)
+            threat_level = _tl
+            inc_counter_func("cves")
+            if _has_botnet_dl(_payload):
+                attack_patterns.append("botnet_download")
+            _maybe_log_malware(_payload)
+            log_attack_func({
+                "timestamp":    ts_func(),
+                "source_ip":    ip,
+                "source_port":  port,
+                "dest_port":    dport,
+                "service":      svc,
+                "username":     "",
+                "password":     "",
+                "raw_payload":  _payload[:500],
+                "country":      gdata["country"],
+                "city":         gdata["city"],
+                "latitude":     gdata["latitude"],
+                "longitude":    gdata["longitude"],
+                "attack_type":  _at,
+                "threat_level": _tl,
+                "cve_id":       "CVE-2017-6334",
+                "scanner_tool": scanner_tool,
+                "user_agent":   ua,
+            })
+            # Netgear returns a minimal HTML page on vulnerable firmware
+            conn.sendall(_http_resp(200, "text/html",
+                b"<html><head><title>NETGEAR DGN2200</title></head>"
+                b"<body>Done</body></html>"))
+            return
+
+        # ── /boaform/admin/formLogin: Realtek/Boa router credential harvest + RCE
+        # Widespread Mirai/Moobot target — captures credentials submitted to the
+        # Boa web server login form and detects inline command injection attempts.
+        if path == "/boaform/admin/formLogin" and method == "POST":
+            _fields  = _parse_post_body(post_body) if post_body else {}
+            _user    = (_fields.get("username") or _fields.get("admin_name") or
+                        _fields.get("loginUser") or "")
+            _pass    = (_fields.get("password") or _fields.get("admin_pwd") or
+                        _fields.get("loginPwd") or "")
+            _payload = post_body or ""
+            _at      = "cgi_command_injection" if _has_cmd_injection(_payload) else "credential_harvest"
+            _tl      = "critical"
+            attack_patterns.append(_at)
+            threat_level = _tl
+            if _has_botnet_dl(_payload):
+                attack_patterns.append("botnet_download")
+            _maybe_log_malware(_payload)
+            log_attack_func({
+                "timestamp":    ts_func(),
+                "source_ip":    ip,
+                "source_port":  port,
+                "dest_port":    dport,
+                "service":      svc,
+                "username":     _user,
+                "password":     _pass,
+                "raw_payload":  _payload[:500],
+                "country":      gdata["country"],
+                "city":         gdata["city"],
+                "latitude":     gdata["latitude"],
+                "longitude":    gdata["longitude"],
+                "attack_type":  _at,
+                "threat_level": _tl,
+                "cve_id":       "",
+                "scanner_tool": scanner_tool,
+                "user_agent":   ua,
+            })
+            # Boa/Realtek firmware returns a redirect to the main page on success
+            conn.sendall(_http_resp(302, "text/html", b"",
+                "Location: /\r\n"))
+            return
+
+        # ── Generic /cgi-bin/ command injection handler
+        # Covers /cgi-bin/ itself and common variants not matched above.
+        # Detects shell injection patterns planted by Mirai/Gafgyt/Moobot scanners.
+        _CGI_PREFIXES = ("/cgi-bin/",)
+        if any(path.startswith(p) for p in _CGI_PREFIXES) and method == "POST":
+            _payload = post_body or ""
+            if _has_cmd_injection(_payload) or _has_botnet_dl(_payload):
+                _at  = "cgi_command_injection"
+                _tl  = "critical"
+                attack_patterns.append(_at)
+                threat_level = _tl
+                if _has_botnet_dl(_payload):
+                    attack_patterns.append("botnet_download")
+                _maybe_log_malware(_payload)
+                log_attack_func({
+                    "timestamp":    ts_func(),
+                    "source_ip":    ip,
+                    "source_port":  port,
+                    "dest_port":    dport,
+                    "service":      svc,
+                    "username":     "",
+                    "password":     "",
+                    "raw_payload":  _payload[:500],
+                    "country":      gdata["country"],
+                    "city":         gdata["city"],
+                    "latitude":     gdata["latitude"],
+                    "longitude":    gdata["longitude"],
+                    "attack_type":  _at,
+                    "threat_level": _tl,
+                    "cve_id":       "",
+                    "scanner_tool": scanner_tool,
+                    "user_agent":   ua,
+                })
+                conn.sendall(_http_resp(500, "application/json", b'{"error":"internal"}'))
+                return
+
         # ── Route → response ──────────────────────────────────────────────────
         # Camera dashboard — rendered fresh each request so the timestamp is live
         if path == "/doc/page/main.asp" and method == "GET":

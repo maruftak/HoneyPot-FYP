@@ -559,49 +559,57 @@ def handle_telnet(conn, addr):
             """Strip IAC/control bytes, keep printable ASCII + tab."""
             return "".join(c for c in s if ord(c) >= 32 or c == "\t").strip()
 
-        def _has_printable(raw: bytes) -> bool:
-            return any(32 <= b < 127 for b in raw)
+        def _recv_line(timeout=25, server_echo=True):
+            """Buffer chars until newline — handles char-mode telnet (each keystroke = separate recv).
+            Bots sending full lines work too since \r/\n flushes immediately.
+            Returns (line_str, ok) where ok=False means the connection closed."""
+            buf = ""
+            while True:
+                try:
+                    conn.settimeout(timeout)
+                    chunk = conn.recv(64)
+                except socket.timeout:
+                    return buf, bool(buf)
+                if not chunk:
+                    return buf, False   # connection closed
+                i = 0
+                while i < len(chunk):
+                    b = chunk[i]
+                    if b >= 240:           # IAC — skip this byte + next 2 option bytes
+                        i += 3
+                        continue
+                    if b == 13:            # CR — consume trailing LF/NUL if present
+                        if i + 1 < len(chunk) and chunk[i + 1] in (0, 10):
+                            i += 1
+                        conn.sendall(b"\r\n")
+                        return buf, True
+                    if b == 10:            # bare LF
+                        conn.sendall(b"\r\n")
+                        return buf, True
+                    elif b in (127, 8):    # backspace / DEL
+                        if buf:
+                            buf = buf[:-1]
+                            if server_echo:
+                                conn.sendall(b"\x08 \x08")
+                    elif b >= 32:          # printable char
+                        buf += chr(b)
+                        if server_echo:
+                            conn.sendall(bytes([b]))
+                    i += 1
 
         for attempt in range(12):
             _random_delay(80, 200)
-            conn.settimeout(25)
-            try:
-                uraw = conn.recv(256)
-            except socket.timeout:
-                break
-            if not uraw:
-                break
 
-            # Telnet clients send IAC negotiation bytes immediately on connect —
-            # skip these until we get data that contains real printable content.
-            if not _has_printable(uraw):
-                continue
+            uraw, u_ok = _recv_line(timeout=25, server_echo=True)
+            username   = _sanitize_cred(uraw)
+            if not u_ok and not username:
+                break   # connection closed before any printable input
 
-            # Strip IAC bytes (>=240) then decode
-            raw_clean = bytes(b for b in uraw if b < 240)
-            decoded   = raw_clean.decode(errors="ignore").replace("\r", "\n")
-            # Bots often send "user\npass\n" in one burst — split it
-            lines    = [l.strip() for l in decoded.split("\n") if l.strip()]
-            username = _sanitize_cred(lines[0]) if lines else ""
-
-            if len(lines) >= 2:
-                # Password bundled in same recv
-                password = _sanitize_cred(lines[1])
-                # Echo username back + newline, then password prompt (hidden)
-                conn.sendall(username.encode() + b"\r\n" + _ECHO_OFF + b"Password: ")
-                _random_delay(50, 150)
-                conn.sendall(b"\r\n" + _ECHO_ON)
-            else:
-                # Echo username + newline, ask for password with echo off
-                conn.sendall(username.encode() + b"\r\n" + _ECHO_OFF + b"Password: ")
-                try:
-                    praw = conn.recv(256)
-                except socket.timeout:
-                    conn.sendall(b"\r\n" + _ECHO_ON)
-                    break
-                conn.sendall(b"\r\n" + _ECHO_ON)
-                raw_pass = praw.strip().decode(errors="ignore") if praw else ""
-                password = _sanitize_cred(raw_pass)
+            # Ask for password with echo off
+            conn.sendall(_ECHO_OFF + b"Password: ")
+            praw, _    = _recv_line(timeout=25, server_echo=False)
+            password   = _sanitize_cred(praw)
+            conn.sendall(_ECHO_ON)
 
             is_bot         = _check_botnet(username, password)
             is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
@@ -644,25 +652,19 @@ def handle_telnet(conn, addr):
         if not authenticated:
             return
 
-        for _ in range(150):
-            _random_delay(30, 120)
-            try:
-                conn.settimeout(120)
-                raw = conn.recv(4096)
-            except socket.timeout:
-                break
-            if not raw:
-                break
-            # Strip IAC bytes and control chars — telnet clients send negotiation
-            # bytes during the shell session (window resize, etc.) that must not
-            # be passed to the fake shell as commands.
-            raw_clean = bytes(b for b in raw if b < 240)
-            cmd = raw_clean.decode(errors="ignore").strip()
-            cmd = "".join(c for c in cmd if ord(c) >= 32 or c == "\t")
-            if not cmd:
-                continue
+        # Shell loop — accumulate chars into a line buffer so that character-mode
+        # telnet clients (each keystroke is a separate recv) work correctly.
+        # Bots send whole commands at once and also work because \n flushes the buffer.
+        _cmd_buf  = ""
+        _cmd_done = False
+
+        def _run_cmd(cmd):
+            """Process one complete shell command. Returns False to end session."""
             if cmd.lower() in ("exit", "quit", "logout"):
-                break
+                return False
+            if not cmd:
+                conn.sendall(prompt.encode())
+                return True
 
             all_commands.append(cmd)
             _inc("commands")
@@ -695,6 +697,44 @@ def handle_telnet(conn, addr):
             if out:
                 conn.sendall(out.encode())
             conn.sendall(prompt.encode())
+            return True
+
+        for _ in range(2000):
+            _random_delay(5, 30)
+            try:
+                conn.settimeout(120)
+                raw = conn.recv(256)
+            except socket.timeout:
+                break
+            if not raw:
+                break
+
+            for b in raw:
+                if b >= 240:
+                    # IAC byte — skip the option negotiation byte
+                    continue
+                if b in (10, 13):
+                    # Newline / CR — flush buffer as a command
+                    conn.sendall(b"\r\n")
+                    cmd = "".join(
+                        c for c in _cmd_buf if ord(c) >= 32 or c == "\t"
+                    ).strip()
+                    _cmd_buf = ""
+                    if not _run_cmd(cmd):
+                        _cmd_done = True
+                        break
+                elif b in (127, 8):
+                    # DEL / Backspace — erase last char
+                    if _cmd_buf:
+                        _cmd_buf = _cmd_buf[:-1]
+                        conn.sendall(b"\x08 \x08")
+                elif b >= 32:
+                    # Printable char — echo it and add to buffer
+                    _cmd_buf += chr(b)
+                    conn.sendall(bytes([b]))
+
+            if _cmd_done:
+                break
 
     except Exception:
         pass
