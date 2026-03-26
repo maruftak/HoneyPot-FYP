@@ -1325,7 +1325,7 @@ def _http_resp(status: int, ct: str, body: bytes, extra: str = "") -> bytes:
     status_map = {200: "OK", 302: "Found", 401: "Unauthorized",
                   403: "Forbidden", 404: "Not Found"}
     phrase     = status_map.get(status, "OK")
-    server_hdr = random.choice(_SERVER_HEADERS)   # randomise per request
+    server_hdr = "App-webs/"   # Hikvision's fixed identifier — consistent across all requests
     hdr = (
         f"HTTP/1.1 {status} {phrase}\r\n"
         f"Server: {server_hdr}\r\n"
