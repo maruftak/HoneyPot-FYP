@@ -84,12 +84,17 @@ def _get_host_key():
 # ═══════════════════════════════════════════════════════════════════════════
 
 _BANNERS = [
-    "SSH-2.0-OpenSSH_7.4p1 Debian-10+deb9u7",
-    "SSH-2.0-OpenSSH_8.4p1 Ubuntu-6ubuntu2.1",
-    "SSH-2.0-dropbear_2022.82",
+    # Old dropbear versions — top targets for Mirai and variants
+    "SSH-2.0-dropbear_0.52",
+    "SSH-2.0-dropbear_2016.74",
+    "SSH-2.0-dropbear_2019.78",
+    "SSH-2.0-dropbear_2020.81",
+    # Old OpenSSH — embedded/IoT Linux devices (DVR, router, camera)
+    "SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2",
     "SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13",
-    "SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.3",
-    "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5",
+    "SSH-2.0-OpenSSH_5.5p1 Debian-6+squeeze5",
+    "SSH-1.99-OpenSSH_4.3",              # supports SSH1 — old Cisco/HP/embedded
+    "SSH-2.0-OpenSSH_6.7p1 Debian-5+deb8u4",
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════

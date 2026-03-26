@@ -1018,10 +1018,64 @@ HTTP_ROUTES = {
     "/web/login":          (200, "text/html", LOGIN_PAGE.encode()),
     "/admin":              (200, "text/html", ADMIN_PAGE.encode()),
     "/doc/page/main.asp":  (200, "text/html", b""),   # placeholder — served dynamically below
+    "/login":              (302, "text/html", b"", "Location: /doc/page/login.asp\r\n"),
 
     # forgot-password endpoints — bodies are throwaway; POST data is what matters
     "/forgot-password":       (200, "text/html", b"<html><body></body></html>"),
     "/forgot-password/reset": (200, "text/html", b"<html><body></body></html>"),
+
+    # ── Hikvision version/info XML — heavily scanned by IoT crawlers ──────────
+    "/doc/xml/version.xml": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
+<Version>
+  <DeviceType>IPCamera</DeviceType>
+  <MacAddress>44:19:B6:7A:2C:D9</MacAddress>
+  <FirmwareVersion>V5.7.15 build 230313</FirmwareVersion>
+  <HardwareVersion>DS-2CD2043G2-I</HardwareVersion>
+  <SoftwareVersion>V5.7.15</SoftwareVersion>
+  <BuildDate>230313</BuildDate>
+  <DeviceID>44194e2a-5b9c-4c9a-9c4b-12ef8e4d5f6a</DeviceID>
+</Version>"""),
+    "/codebase/version.xml": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
+<Version>
+  <DeviceVersion>V5.7.15 build 230313</DeviceVersion>
+  <Model>DS-2CD2043G2-I</Model>
+  <Manufacturer>Hikvision</Manufacturer>
+</Version>"""),
+    "/doc/script/global_config.js": (200, "application/javascript",
+        b"var g_model='DS-2CD2043G2-I';\n"
+        b"var g_firmware='V5.7.15 build 230313';\n"
+        b"var g_rtsp_port=554;\n"
+        b"var g_sdk_port=8000;\n"
+        b"var g_onvif_port=8000;\n"
+    ),
+
+    # ── RTSP discovery endpoint — tools that find this try to connect ─────────
+    "/Streaming/Channels/101": (401, "application/xml",
+        b'<?xml version="1.0"?><ResponseStatus>'
+        b'<statusCode>401</statusCode>'
+        b'<statusString>Unauthorized</statusString>'
+        b'<subStatusCode>noOperatePermission</subStatusCode>'
+        b'</ResponseStatus>'),
+    "/Streaming/Channels/": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
+<StreamingChannelList version="2.0">
+  <StreamingChannel><id>101</id><channelName>Camera 01</channelName>
+    <enabled>true</enabled><Transport><rtspPortNo>554</rtspPortNo>
+    <rtspURL>rtsp://192.168.1.108:554/Streaming/Channels/101</rtspURL>
+    </Transport></StreamingChannel>
+  <StreamingChannel><id>102</id><channelName>Camera 01 Sub</channelName>
+    <enabled>true</enabled><Transport><rtspPortNo>554</rtspPortNo>
+    <rtspURL>rtsp://192.168.1.108:554/Streaming/Channels/102</rtspURL>
+    </Transport></StreamingChannel>
+</StreamingChannelList>"""),
+
+    # ── Config files exposed via HTTP — serve as honeytoken downloads ─────────
+    "/mnt/mtd/Config/account.ini": (200, "text/plain",
+        b"[User1]\nusername=admin\npassword=admin\ngroup=0\nprivilege=255\n"
+        b"[User2]\nusername=guest\npassword=guest\ngroup=1\nprivilege=4\n"
+        b"[User3]\nusername=operator\npassword=Camera123\ngroup=1\nprivilege=12\n"),
+    "/mnt/mtd/Config/network.ini": (200, "text/plain",
+        b"[Network]\nIPMode=Static\nIP=192.168.1.108\nSubnet=255.255.255.0\n"
+        b"Gateway=192.168.1.1\nDNS1=8.8.8.8\nHTTP_Port=80\nRTSP_Port=554\n"),
 
     # ── ISAPI endpoints ───────────────────────────────────────────────────────
     "/ISAPI/System/deviceInfo": (200, "application/xml", b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -1125,8 +1179,26 @@ aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
         b"admin:Admin@2024\nroot:ProductionKey999\ndbuser:MyDB_P@ssw0rd\n"),
 
     "/robots.txt": (200, "text/plain",
-        b"User-agent: *\nDisallow: /admin/\nDisallow: /backup/\n"
-        b"Disallow: /.env\nDisallow: /.git/\nDisallow: /ISAPI/\n"),
+        b"User-agent: *\n"
+        b"Disallow: /admin/\n"
+        b"Disallow: /backup/\n"
+        b"Disallow: /.env\n"
+        b"Disallow: /.git/\n"
+        b"Disallow: /ISAPI/\n"
+        b"Disallow: /cgi-bin/\n"
+        b"Disallow: /firmware.bin\n"
+        b"Disallow: /upgrade.bin\n"
+        b"Disallow: /system.cfg\n"
+        b"Disallow: /nvram.cfg\n"
+        b"Disallow: /etc/passwd\n"
+        b"Disallow: /etc/shadow\n"
+        b"Disallow: /mnt/mtd/Config/\n"
+        b"Disallow: /ISAPI/System/configurationData\n"
+        b"Disallow: /onvif/\n"
+        b"Disallow: /Streaming/\n"
+        b"Disallow: /doc/xml/\n"
+        b"Disallow: /root/\n"
+    ),
 
     # ── CMS / framework honeypots ─────────────────────────────────────────────
     "/wp-login.php": (200, "text/html", b"""<!DOCTYPE html>

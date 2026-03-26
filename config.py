@@ -258,6 +258,10 @@ HONEYTOKEN_FILES = [
     "/cgi-bin/config_export.cgi",
     "/cgi-bin/deviceInfo.cgi",
     "/onvif/device_service",
+    # Config files served over HTTP
+    "/mnt/mtd/Config/account.ini",
+    "/mnt/mtd/Config/network.ini",
+    "/Streaming/Channels/",
 ]
 
 # Honeytoken credentials — using these fires a CRITICAL alert
