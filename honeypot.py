@@ -685,11 +685,22 @@ def handle_telnet(conn, addr):
         _cmd_buf  = ""
         _cmd_done = False
 
+        # Login-response strings that bleed into the shell buffer when bots pipeline
+        # credentials and the first attempt fails ("Login incorrect" → "ncorrect").
+        _GARBAGE_CMDS = frozenset([
+            "ncorrect", "incorrect", "login incorrect", "wrong password",
+            "authentication failed", "access denied",
+        ])
+
         def _run_cmd(cmd):
             """Process one complete shell command. Returns False to end session."""
             if cmd.lower() in ("exit", "quit", "logout"):
                 return False
             if not cmd:
+                conn.sendall(prompt.encode())
+                return True
+            # Drop garbage artifacts from pipelined login-failure responses
+            if cmd.lower().strip() in _GARBAGE_CMDS:
                 conn.sendall(prompt.encode())
                 return True
 
@@ -840,6 +851,11 @@ def ssh_log_attack(ip, port, event_type, details):
             except Exception: details = {"raw": details}
         if isinstance(details, dict):
             log_entry.update(details)
+        # SSH logs "command" (singular) per event — map it to payload+commands columns
+        if log_entry.get("command") and not log_entry.get("payload"):
+            log_entry["payload"]  = log_entry["command"]
+        if log_entry.get("command") and not log_entry.get("commands"):
+            log_entry["commands"] = [log_entry["command"]]
         # Classify threat level from event type
         if event_type in ("SSH_MALWARE", "SSH_HONEYTOKEN"):
             log_entry["threat_level"] = "critical"

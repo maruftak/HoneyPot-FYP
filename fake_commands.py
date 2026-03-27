@@ -404,6 +404,10 @@ class FakeShell:
 
         # Handle path-based execution: ./file, /tmp/file, /bin/file
         if parts[0].startswith("./") or parts[0].startswith("/"):
+            # Route /bin/busybox <applet> through the busybox handler so bots get
+            # the correct "applet not found" response and proceed to download stage.
+            if os.path.basename(parts[0]) == "busybox":
+                return self._cmd_busybox(parts[1:])
             return self._exec_binary(parts[0], parts[1:])
 
         cmd  = parts[0].lower()
@@ -436,7 +440,11 @@ class FakeShell:
         # Silent no-ops
         if cmd in ("sync", "reboot", "halt", "poweroff", "export",
                    "source", ".", "eval", "exec", "nohup", "setsid",
-                   "sh", "ash", "bash"):
+                   "sh", "ash", "bash",
+                   # Router/IoT restricted-shell escape probes — bots send these
+                   # blindly before /bin/busybox BOTNET; silence them so they
+                   # don't confuse bot parsers or pollute our logs.
+                   "enable", "shell", "linuxshell", "system", "su"):
             return ""
 
         if cmd in ("exit", "logout", "quit"):
