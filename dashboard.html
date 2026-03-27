@@ -299,8 +299,8 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="card">
       <div class="card-title">Attack Timeline
         <div style="display:flex;gap:6px">
-          <button class="btn-sm active" onclick="setTimeRange('24h',this)">24H</button>
-          <button class="btn-sm" onclick="setTimeRange('7d',this)">7D</button>
+          <button class="btn-sm" onclick="setTimeRange('24h',this)">24H</button>
+          <button class="btn-sm active" onclick="setTimeRange('7d',this)">7D</button>
           <button class="btn-sm" onclick="setTimeRange('30d',this)">30D</button>
         </div>
       </div>
@@ -868,7 +868,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 <script>
 'use strict';
 const S = {
-  panel:'overview', timeRange:'24h', stats:{},
+  panel:'overview', timeRange:'7d', stats:{},
   sessions:[], sessions_all:[], cves_all:[], creds_all:[], malware_all:[],
   charts:{}, map:null, mapMarkers:null, logPaused:false, logSeen:new Set(),
 };
@@ -939,10 +939,11 @@ function mkChart(id,type,data,opts={}){
 
 // ── Overview ───────────────────────────────────────────────────────────────
 async function loadOverview(){
+  const h={'24h':24,'7d':168,'30d':720}[S.timeRange]||24;
   const [s,countries,ips,tl,heatmap,botnet,iotStats,anonStats]=await Promise.all([
-    api('/api/stats'),api('/api/countries?hours=24'),api('/api/top-ips?hours=24&limit=10'),
+    api('/api/stats?hours='+h),api('/api/countries?hours='+h),api('/api/top-ips?hours='+h+'&limit=10'),
     api('/api/chart-data?range='+S.timeRange),api('/api/hourly-heatmap'),
-    api('/api/botnet-distribution'),api('/api/iot-stats?hours=24'),api('/api/anonymization-stats?hours=24'),
+    api('/api/botnet-distribution'),api('/api/iot-stats?hours='+h),api('/api/anonymization-stats?hours='+h),
   ]);
   if(!s)return;
   S.stats=s;
@@ -1047,8 +1048,7 @@ async function setTimeRange(r,btn){
   S.timeRange=r;
   document.querySelectorAll('#panel-overview .btn-sm').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  const tl=await api('/api/chart-data?range='+r);
-  if(tl?.labels){const c=S.charts['timelineChart'];if(c){c.data.labels=tl.labels.map(l=>l.slice(-5));c.data.datasets[0].data=tl.datasets.connections;c.data.datasets[1].data=tl.datasets.malicious;c.data.datasets[2].data=tl.datasets.cve_exploits;c.update();}}
+  loadOverview();
 }
 
 // ── Map ────────────────────────────────────────────────────────────────────
