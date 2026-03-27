@@ -1911,7 +1911,7 @@ async function loadAbuseIPDBPanel(){
 
 async function loadAbuseTopIPs(){
   const data=await api('/api/top-ips?hours=168&limit=30');
-  const ips=(data&&data.ips)||[];
+  const ips=(data&&(data.ips||data.top_ips))||[];
   document.getElementById('abuseTopBody').innerHTML=ips.length?ips.map(ip=>{
     const cached=_abuseScores[ip.ip];
     const scoreHtml=cached
@@ -1921,14 +1921,14 @@ async function loadAbuseTopIPs(){
     return `<tr>
       <td class="mono" style="color:var(--blue)">${ip.ip}</td>
       <td style="font-size:11px">${ip.country||'—'}</td>
-      <td class="mono" style="color:var(--red)">${ip.cnt}</td>
+      <td class="mono" style="color:var(--red)">${ip.count||ip.cnt||0}</td>
       <td style="font-size:10px">${(ip.services||[]).join(' ')}</td>
       <td id="score-cell-${ip.ip.replace(/\./g,'-')}">${scoreHtml}</td>
       <td id="rep-cell-${ip.ip.replace(/\./g,'-')}" style="font-size:10px;color:var(--muted)">${cached?cached.total_reports||0:'—'}</td>
       <td style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px">
         <button class="btn-check" onclick="checkOneAbuseIP('${ip.ip}')">Score</button>
         <button class="btn-report${reported?' reported':''}" id="rbtn-${ip.ip.replace(/\./g,'-')}"
-          onclick="quickReport('${ip.ip}','${(ip.services||[]).join(',')}','${ip.country||''}')"
+          onclick="quickReport('${ip.ip}','${(ip.services||[]).slice(0,5).join(',')}','${(ip.country||'').replace(/'/g,'')}')"
           ${reported?'disabled':''}>
           ${reported?'✓ Reported':'🚨 Report'}
         </button>
@@ -1969,9 +1969,11 @@ async function bulkCheckAbuseIPs(){
     });
   }
   // Update stats
-  const scores=Object.values(_abuseScores).filter(s=>s.score>=0);
-  document.getElementById('abuse-checked').textContent=scores.length;
-  document.getElementById('abuse-highrisk').textContent=scores.filter(s=>s.score>=75).length;
+  const scores=Object.values(_abuseScores).filter(s=>s&&s.score>=0);
+  const checkedEl=document.getElementById('abuse-checked');
+  const highriskEl=document.getElementById('abuse-highrisk');
+  if(checkedEl)checkedEl.textContent=scores.length;
+  if(highriskEl)highriskEl.textContent=scores.filter(s=>s.score>=75).length;
   btn.textContent='⚡ Check All Scores';btn.disabled=false;
 }
 
