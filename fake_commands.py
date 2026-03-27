@@ -27,8 +27,9 @@ _FS_TEMPLATE = {
                    "grep", "kill", "ls", "mkdir", "mount", "mv", "ping", "ps",
                    "rm", "sh", "sleep", "tar", "touch", "wget"],
     "/etc":       ["config", "crontab", "dvr.conf", "group", "hosts", "init.d",
-                   "inittab", "mtab", "passwd", "profile", "rc.d", "resolv.conf",
-                   "shadow", "ssh", "syslog.conf"],
+                   "inittab", "mtab", "openwrt_release", "passwd", "profile",
+                   "rc.d", "resolv.conf", "shadow", "ssh", "syslog.conf"],
+    "/etc/config":["dhcp", "dropbear", "firewall", "network", "system", "wireless"],
     "/etc/ssh":   ["sshd_config", "ssh_host_ecdsa_key", "ssh_host_rsa_key"],
     "/etc/init.d":["rcS", "S10syslog", "S20network", "S30httpd", "S40ipcam", "S50telnetd"],
     "/home":      ["admin", "user"],
@@ -251,6 +252,51 @@ _FILE_CONTENTS = {
         "  eth0: 98765432 123456  0    0    0     0          0         0 12345678  65432\n"
     ),
     "/proc/sys/kernel/hostname": "dvr\n",
+    # WiFi — not present on wired IP cameras (confirms wired-only IoT device)
+    "/proc/net/wireless": (
+        "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n"
+        " face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n"
+    ),
+    # OpenWRT-style UCI config — attracts router-targeted scanners
+    "/etc/config/network": (
+        "config interface 'loopback'\n"
+        "\toption ifname 'lo'\n"
+        "\toption proto 'static'\n"
+        "\toption ipaddr '127.0.0.1'\n"
+        "\toption netmask '255.0.0.0'\n\n"
+        "config interface 'lan'\n"
+        "\toption ifname 'eth0'\n"
+        "\toption type 'bridge'\n"
+        "\toption proto 'static'\n"
+        "\toption ipaddr '" + dev.HIK['lan_ip'] + "'\n"
+        "\toption netmask '255.255.255.0'\n"
+        "\toption gateway '" + dev.HIK['gateway'] + "'\n"
+        "\toption dns '" + dev.HIK['dns1'] + "'\n"
+    ),
+    "/etc/config/system": (
+        "config system\n"
+        "\toption hostname 'DVR'\n"
+        "\toption timezone 'UTC'\n"
+        "\toption ttylogin '0'\n"
+        "\toption log_size '64'\n"
+        "\toption urandom_seed '0'\n\n"
+        "config timeserver 'ntp'\n"
+        "\toption enabled '1'\n"
+        "\tlist server '0.openwrt.pool.ntp.org'\n"
+        "\tlist server '1.openwrt.pool.ntp.org'\n"
+    ),
+    "/etc/config/wireless": (
+        "# No wireless interfaces configured\n"
+    ),
+    "/etc/openwrt_release": (
+        "DISTRIB_ID=\"OpenWrt\"\n"
+        "DISTRIB_RELEASE=\"18.06.9\"\n"
+        "DISTRIB_REVISION=\"r8077-7cbbab7246\"\n"
+        "DISTRIB_CODENAME=\"Reboot\"\n"
+        "DISTRIB_TARGET=\"ramips/mt7621\"\n"
+        "DISTRIB_ARCH=\"mipsel_24kc\"\n"
+        "DISTRIB_TAINTS=\"\"\n"
+    ),
 }
 
 PROMPT_VARIANTS = [
@@ -299,6 +345,7 @@ class FakeShell:
         self.cwd           = "/"
         self.prompt        = random.choice(PROMPT_VARIANTS)
         self._session_start = time.time()
+        self._hostname     = "dvr"   # updated by busybox hostname <name>
         self.env = {
             "HOME":  "/root",
             "PATH":  "/bin:/sbin:/usr/bin:/usr/sbin",
@@ -393,15 +440,46 @@ class FakeShell:
                 self.execute(p.strip()) for p in raw.split(";") if p.strip()
             )
 
-        # Strip output redirections but keep command
-        cleaned = raw.split(">")[0].strip() if ">" in raw else raw
+        # Handle output redirections: capture target file and create it in session state
+        _redir_target = None
+        if ">" in raw:
+            import re as _re_redir
+            _m = _re_redir.search(r'>+\s*(\S+)', raw)
+            if _m:
+                _redir_target = self._resolve(_m.group(1))
+            cleaned = raw.split(">")[0].strip()
+        else:
+            cleaned = raw
         # Strip background & operator
         cleaned = cleaned.rstrip("&").strip()
 
         parts = cleaned.split()
         if not parts:
+            # Bare redirect like "> /tmp/.ri" — just create the file
+            if _redir_target:
+                self._create_redir_file(_redir_target)
             return ""
 
+        result = self._dispatch(parts)
+
+        # If command had a redirect (> or >>), create the output file and suppress stdout
+        if _redir_target:
+            self._create_redir_file(_redir_target)
+            return ""   # stdout goes to file, not terminal
+
+        return result
+
+    def _create_redir_file(self, path: str):
+        """Create a file at path in session state (simulates shell output redirect)."""
+        bname = os.path.basename(path)
+        parent = os.path.dirname(path)
+        if parent == "/tmp":
+            self._add_to_tmp(bname)
+        if path not in self._extra_files:
+            self._extra_files[path] = ""
+
+    def _dispatch(self, parts: list) -> str:
+        """Dispatch a pre-parsed command (no redirects, no chains)."""
         # Handle path-based execution: ./file, /tmp/file, /bin/file
         if parts[0].startswith("./") or parts[0].startswith("/"):
             # Route /bin/busybox <applet> through the busybox handler so bots get
@@ -590,6 +668,14 @@ class FakeShell:
             return _FILE_CONTENTS["/etc/init.d/rcS"]
         if "net/dev" in path:
             return _FILE_CONTENTS.get("/proc/net/dev", "")
+        if "net/wireless" in path or path.endswith("/wireless") and "proc" in path:
+            return _FILE_CONTENTS["/proc/net/wireless"]
+        if "openwrt_release" in path:
+            return _FILE_CONTENTS["/etc/openwrt_release"]
+        if path.endswith("/network") and "config" in path:
+            return _FILE_CONTENTS["/etc/config/network"]
+        if path.endswith("/system") and "config" in path:
+            return _FILE_CONTENTS["/etc/config/system"]
         if self._fs_isdir(path):
             return f"cat: {args[0]}: Is a directory\n"
         return f"cat: {args[0]}: No such file or directory\n"
@@ -606,17 +692,21 @@ class FakeShell:
 
     def _cmd_uname(self, args):
         if "-a" in args:
-            return (f"Linux dvr 3.10.14 #1 SMP PREEMPT "
+            return (f"Linux {self._hostname} 3.10.14 #1 SMP PREEMPT "
                     f"Mon Sep 18 16:26:25 CST 2017 {dev.HIK['arch']} GNU/Linux\n")
         if "-r" in args: return "3.10.14\n"
         if "-m" in args: return f"{dev.HIK['arch']}\n"
         if "-s" in args: return "Linux\n"
-        if "-n" in args: return "dvr\n"
+        if "-n" in args: return self._hostname + "\n"
         return "Linux\n"
 
     def _cmd_whoami(self, args):  return "root\n"
     def _cmd_id(self, args):      return "uid=0(root) gid=0(root) groups=0(root),10(wheel)\n"
-    def _cmd_hostname(self, args):return "dvr\n"
+    def _cmd_hostname(self, args):
+        if args and not args[0].startswith("-"):
+            self._hostname = args[0]
+            return ""
+        return self._hostname + "\n"
 
     def _cmd_ps(self, args):
         lines = ["  PID USER       VSZ STAT COMMAND"]
@@ -1127,6 +1217,9 @@ class FakeShell:
         if not args:
             return self._busybox_info()
         sub = args[0].lower()
+        # hostname is handled directly so busybox hostname <NAME> updates session state
+        if sub == "hostname":
+            return self._cmd_hostname(args[1:])
         handler = getattr(self, f"_cmd_{sub}", None)
         if handler:
             return handler(args[1:])
