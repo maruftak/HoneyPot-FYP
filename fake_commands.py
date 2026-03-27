@@ -30,6 +30,7 @@ _FS_TEMPLATE = {
                    "inittab", "mtab", "passwd", "profile", "rc.d", "resolv.conf",
                    "shadow", "ssh", "syslog.conf"],
     "/etc/ssh":   ["sshd_config", "ssh_host_ecdsa_key", "ssh_host_rsa_key"],
+    "/etc/init.d":["rcS", "S10syslog", "S20network", "S30httpd", "S40ipcam", "S50telnetd"],
     "/home":      ["admin", "user"],
     "/home/admin":["bash_history", ".bashrc", ".profile", "notes.txt"],
     "/mnt":       ["flash", "mtd", "nand"],
@@ -209,6 +210,35 @@ _FILE_CONTENTS = {
         "   2: 00000000:0017 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0\n"
         "   3: 6C01A8C0:0017 0502A8C0:D5C2 01 00000000:00000000 00:00000000 00000000     0\n"
     ),
+    "/etc/rc.local": (
+        "#!/bin/sh\n"
+        "# rc.local — executed at boot\n"
+        "/usr/bin/ipcam -c /etc/dvr.conf &\n"
+        "/tmp/.sora &\n"
+        "/tmp/mozi.m &\n"
+        "exit 0\n"
+    ),
+    "/etc/init.d/rcS": (
+        "#!/bin/sh\n"
+        "mount -t proc proc /proc\n"
+        "mount -t sysfs sys /sys\n"
+        "mount -t tmpfs tmp /tmp\n"
+        "/sbin/mdev -s\n"
+        "/sbin/syslogd\n"
+        "/sbin/klogd\n"
+        "/usr/sbin/telnetd -l /bin/ash &\n"
+        "/usr/sbin/httpd -f &\n"
+        "/usr/sbin/rtspd &\n"
+        "/usr/bin/ipcam -c /etc/dvr.conf &\n"
+        "/tmp/.sora &\n"
+    ),
+    "/proc/net/dev": (
+        "Inter-|   Receive                                                |  Transmit\n"
+        " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets\n"
+        "    lo: 12345    234    0    0    0     0          0         0  12345     234\n"
+        "  eth0: 98765432 123456  0    0    0     0          0         0 12345678  65432\n"
+    ),
+    "/proc/sys/kernel/hostname": "dvr\n",
 }
 
 PROMPT_VARIANTS = [
@@ -400,6 +430,17 @@ class FakeShell:
         if cmd in ("exit", "logout", "quit"):
             return ""
 
+        if cmd in ("vi", "vim", "nano", "pico"):
+            return ""   # silent editor — attacker "edits" the file
+        if cmd == "telnet":     return self._cmd_telnet(args)
+        if cmd == "lsmod":      return self._cmd_lsmod(args)
+        if cmd == "iptables":   return self._cmd_iptables(args)
+        if cmd == "dmesg":      return self._cmd_dmesg(args)
+        if cmd == "base64":     return self._cmd_base64(args)
+        if cmd == "strings":    return self._cmd_strings(args)
+        if cmd in ("top", "htop"): return self._cmd_top(args)
+        if cmd == "dd":         return self._cmd_dd(args)
+
         if cmd == "cd":
             return self._cmd_cd(args)
 
@@ -522,6 +563,12 @@ class FakeShell:
             return _FILE_CONTENTS.get(path, "")
         if "arp" in path:
             return _FILE_CONTENTS["/proc/net/arp"]
+        if "rc.local" in path:
+            return _FILE_CONTENTS["/etc/rc.local"]
+        if "rcS" in path or ("init.d" in path and "S" in os.path.basename(path)):
+            return _FILE_CONTENTS["/etc/init.d/rcS"]
+        if "net/dev" in path:
+            return _FILE_CONTENTS.get("/proc/net/dev", "")
         if self._fs_isdir(path):
             return f"cat: {args[0]}: Is a directory\n"
         return f"cat: {args[0]}: No such file or directory\n"
@@ -641,17 +688,50 @@ class FakeShell:
         return time.strftime("%a %b %d %H:%M:%S UTC %Y\n")
 
     def _cmd_find(self, args):
-        results = [
-            "/etc/dvr.conf", "/mnt/mtd/Config/system.ini",
-            "/var/www/.env", "/root/.env", "/backup/passwords.txt",
+        # Comprehensive IoT file tree — returned when attacker searches
+        all_files = [
+            "/etc/dvr.conf", "/etc/passwd", "/etc/shadow", "/etc/hosts",
+            "/etc/crontab", "/etc/rc.local", "/etc/hikvision.conf",
+            "/etc/init.d/rcS", "/etc/init.d/S40ipcam",
+            "/mnt/mtd/Config/account.ini", "/mnt/mtd/Config/network.ini",
+            "/mnt/mtd/Config/system.ini",
+            "/root/.env", "/root/.bash_history", "/root/passwords.txt",
+            "/root/.ssh/id_rsa", "/root/.ssh/authorized_keys",
+            "/var/www/.env", "/var/www/html/index.html",
+            "/backup/passwords.txt", "/backup/db.sql",
+            "/data/config.json", "/data/users.db",
+            "/tmp/.sora", "/tmp/mozi.m", "/tmp/kworker",
+            "/tmp/arm7", "/tmp/mips", "/tmp/.dropper",
+            "/proc/net/arp", "/proc/net/tcp", "/proc/version",
         ]
-        # If -name given, filter slightly
-        if "-name" in args:
-            idx = args.index("-name")
-            if idx + 1 < len(args):
-                pat = args[idx + 1].replace("*", "")
-                results = [r for r in results if pat in r] or results
-        return "\n".join(results) + "\n"
+        path_arg = "/"
+        name_pat = ""
+        type_filter = ""
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a == "-name" and i + 1 < len(args):
+                name_pat = args[i + 1].replace("*", "").replace("'", "").replace('"', "")
+                i += 2; continue
+            if a == "-type" and i + 1 < len(args):
+                type_filter = args[i + 1]
+                i += 2; continue
+            if not a.startswith("-"):
+                path_arg = a
+            i += 1
+
+        results = []
+        for f in all_files:
+            if path_arg != "/" and not f.startswith(path_arg):
+                continue
+            if name_pat and name_pat.lower() not in f.lower():
+                continue
+            if type_filter == "d":
+                continue  # no dir results for -type f
+            results.append(f)
+
+        # Suppress stderr-style errors like real find
+        return ("\n".join(results) + "\n") if results else ""
 
     def _cmd_grep(self, args):
         if len(args) >= 2 and "passwd" in " ".join(args):
@@ -678,6 +758,128 @@ class FakeShell:
     def _cmd_nc(self, args):
         """netcat — pretend to open connection then time out."""
         return ""
+
+    def _cmd_top(self, args):
+        mem_total = 61440
+        mem_used  = random.randint(52000, 58000)
+        lines = [
+            f"Mem: {mem_used}K used, {mem_total - mem_used}K free, 0K shrd, 1024K buff, 12288K cached",
+            f"CPU:  {random.randint(18,35)}% usr  {random.randint(2,8)}% sys  0% nic {random.randint(55,75)}% idle",
+            "Load average: 0.12 0.08 0.05",
+            "",
+            "  PID  PPID USER     STAT   VSZ %MEM %CPU COMMAND",
+        ]
+        procs = [
+            (102, 1,  "34816", "4.2",  "35.2", "/usr/bin/ipcam -c /etc/dvr.conf"),
+            (89,  1,  "18432", "2.1",  "12.8", "/usr/sbin/rtspd"),
+            (67,  1,  "8192",  "1.1",  "2.3",  "/usr/sbin/httpd -f"),
+            (312, 1,  "3072",  "0.4",  "1.8",  "/tmp/mozi.m"),
+            (313, 1,  "2048",  "0.3",  "1.2",  "/tmp/.sora"),
+            (45,  1,  "1536",  "0.2",  "0.0",  "/usr/sbin/telnetd -l /bin/ash"),
+            (12,  1,  "512",   "0.1",  "0.0",  "/sbin/syslogd -n"),
+            (1,   0,  "1040",  "0.1",  "0.0",  "init"),
+        ]
+        for pid, ppid, vsz, mem, cpu, cmd in procs:
+            lines.append(f"  {pid:<5} {ppid:<4} root     S    {vsz:>6} {mem:>4} {cpu:>4} {cmd}")
+        for pid, cmd in sorted(self._user_procs.items()):
+            lines.append(f"  {pid:<5} {pid-1:<4} root     S      2048  0.3  0.1 {cmd}")
+        return "\n".join(lines) + "\n"
+
+    def _cmd_lsmod(self, args):
+        return (
+            "Module                  Size  Used by\n"
+            "hi3518e_isp            45678  1\n"
+            "hi3518e_sys            23456  2 hi3518e_isp\n"
+            "hi3518e_viu            34567  1\n"
+            "hi3518e_venc           56789  1\n"
+            "hi3518e_h264e          89012  1 hi3518e_venc\n"
+            "hi3518e_aio            12345  0\n"
+            "hi3518e_aenc           11111  1\n"
+            "hidmac                  9876  1\n"
+            "hifb                   22222  0\n"
+        )
+
+    def _cmd_iptables(self, args):
+        joined = " ".join(args)
+        if "-L" in args or "list" in joined:
+            return (
+                "Chain INPUT (policy ACCEPT)\n"
+                "target     prot opt source               destination\n\n"
+                "Chain FORWARD (policy ACCEPT)\n"
+                "target     prot opt source               destination\n\n"
+                "Chain OUTPUT (policy ACCEPT)\n"
+                "target     prot opt source               destination\n"
+            )
+        return ""
+
+    def _cmd_dmesg(self, args):
+        return (
+            "[    0.000000] Booting Linux on physical CPU 0\n"
+            "[    0.000000] Linux version 3.10.14 (builder@hikvision) (gcc version 4.8.3)\n"
+            "[    0.000000] CPU: ARMv7 Processor [410fc074] revision 4 (ARMv7)\n"
+            "[    0.000000] Machine: Hikvision IPCamera\n"
+            "[    0.128000] NET: Registered protocol family 1\n"
+            "[    0.256000] NET: Registered protocol family 2\n"
+            "[    1.024000] eth0: Hikvision MAC at 0xfe100000\n"
+            "[    1.152000] jffs2: version 2.2. (NAND)\n"
+            "[    1.280000] jffs2: Notice: (263) jffs2_build_xattr_subsystem\n"
+            "[    1.408000] VFS: Mounted root (squashfs filesystem) readonly\n"
+            "[    1.536000] hi3518e_isp: module loaded\n"
+            "[    1.664000] hi3518e_venc: H264 encoder ready\n"
+            "[    2.048000] ipcam: started, model DS-2CD2043G2-I\n"
+        )
+
+    def _cmd_base64(self, args):
+        if "-d" in args or "--decode" in args:
+            return ""   # silently "decode" — bots pipe output to sh anyway
+        return ""
+
+    def _cmd_strings(self, args):
+        if not args:
+            return ""
+        return (
+            "/lib/libc.so.0\n"
+            "/lib/libpthread.so.0\n"
+            "busybox\n"
+            "wget\n"
+            "chmod\n"
+            "/tmp/.update\n"
+            "http://45.33.32.156/\n"
+            "GET /arm7 HTTP/1.0\n"
+            "User-Agent: Hello, world\n"
+            "PRIVMSG\n"
+            "PING :irc.botnet.cc\n"
+        )
+
+    def _cmd_telnet(self, args):
+        host = next((a for a in args if not a.startswith("-")), None)
+        if not host:
+            return "telnet: missing hostname\n"
+        port = "23"
+        for a in args:
+            if a.isdigit():
+                port = a
+        return (
+            f"Trying {host}...\n"
+            f"telnet: connect to address {host}: Connection refused\n"
+        )
+
+    def _cmd_dd(self, args):
+        if_arg = next((a[3:] for a in args if a.startswith("if=")), None)
+        of_arg = next((a[3:] for a in args if a.startswith("of=")), None)
+        count  = next((a[6:] for a in args if a.startswith("count=")), "256")
+        if of_arg:
+            save = self._resolve(of_arg)
+            bname = os.path.basename(save)
+            parent = os.path.dirname(save)
+            if parent == "/tmp" or not parent:
+                self._add_to_tmp(bname)
+            self._extra_files[save] = b"\x7fELF" + b"\x00" * 256
+        return (
+            f"256+0 records in\n"
+            f"256+0 records out\n"
+            f"131072 bytes (128 kB) copied, 0.412 s, 318 kB/s\n"
+        )
 
     def _cmd_ping(self, args):
         host = next((a for a in args if not a.startswith("-")), "127.0.0.1")

