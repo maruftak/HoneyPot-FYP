@@ -705,6 +705,20 @@ def handle_telnet(conn, addr):
                 db.log_cve(_ts(), ip, cve_id, cve["name"], cve["severity"],
                            "telnet", cmd, gdata["country"])
 
+            # ECCHI — definitive Mirai botnet confirmation marker
+            if "ECCHI" in cmd.upper():
+                _inc("botnets")
+                alerts.mirai_confirmed(ip, gdata["country"], "telnet", cmd)
+                db.log_attack({
+                    "timestamp":    _ts(), "source_ip": ip, "source_port": port,
+                    "dest_port":    23,    "service": "telnet", "protocol": "TCP",
+                    "attack_type":  "mirai_ecchi_confirmed", "threat_level": "critical",
+                    "payload":      cmd,   "country": gdata["country"],
+                    "city":         gdata["city"], "latitude": gdata["latitude"],
+                    "longitude":    gdata["longitude"], "session_id": sid,
+                    **_intel_fields(gdata),
+                })
+
             out = shell.execute(cmd)
             time.sleep(0.1)
             if out:
@@ -770,6 +784,19 @@ def handle_telnet(conn, addr):
                 "is_botnet":    any(la["is_botnet"] for la in login_attempts),
                 **_intel_fields(gdata),
             })
+
+            # Kill-chain alert — fire when attacker ran real commands including downloads
+            mal_urls = [u for u in (_detect_malware_url(c) for c in all_commands) if u]
+            family   = _detect_botnet_family(" ".join(all_commands))
+            arch     = next((_detect_arch(c) for c in all_commands
+                             if _detect_arch(c) != "unknown"), "unknown")
+            if len(all_commands) >= 2 and (mal_urls or family != "Unknown"):
+                la = login_attempts[-1] if login_attempts else {}
+                steps = [f"telnet_login({la.get('username','?')}/{la.get('password','?')})"]
+                steps += [c[:60] for c in all_commands[:5]]
+                alerts.kill_chain(ip, gdata["country"], "telnet",
+                                  steps, family, arch, mal_urls)
+
         try: conn.close()
         except: pass
 

@@ -628,6 +628,26 @@ def handle_mqtt(conn, addr,
 
         session["auth_accepted"] = True
 
+        # ── Client ID botnet fingerprinting ───────────────────────────────
+        _BOTNET_CLIENT_PATTERNS = [
+            ("Mirai",    ["mirai", "iot_", "bot_", "mozi"]),
+            ("Gafgyt",   ["gafgyt", "bashlite", "qbot"]),
+            ("EasyCash", ["ESP8266", "ESP32", "MQTT_FX"]),
+            ("Scanner",  ["mqtt-spy", "mosquitto", "pahomqtt", "mqttfx"]),
+            ("Randbot",  ["ffffffff", "00000000", "aaaaaaaa"]),  # hex random IDs
+        ]
+        cid_lower = (info["client_id"] or "").lower()
+        _cid_family = "Unknown"
+        for _fam, _pats in _BOTNET_CLIENT_PATTERNS:
+            if any(p in cid_lower for p in _pats):
+                _cid_family = _fam
+                break
+        # Also flag suspiciously short (1-2 char) or pure-hex client IDs (scripted bots)
+        if _cid_family == "Unknown" and len(cid_lower) in (1, 2):
+            _cid_family = "MinimalBot"
+        if _cid_family not in ("Unknown", "EasyCash", "Scanner"):
+            session["botnet_family"] = _cid_family
+
         # ── 4. Session persistence (clean_session=False) ──────────────────
         session_present = False
         cid = info["client_id"]
@@ -701,10 +721,27 @@ def handle_mqtt(conn, addr,
                         daemon=True)
                     pub_thread.start()
 
+                # Classify subscribe intent
+                _sub_topics = [t for t, _ in topics]
+                _sub_event  = "mqtt_subscribe"
+                _sub_threat = "medium"
+                if any(t.startswith("$SYS") for t in _sub_topics):
+                    _sub_event  = "mqtt_sys_enumeration"   # broker intelligence gathering
+                    _sub_threat = "high"
+                elif any(t in ("#", "+") for t in _sub_topics):
+                    _sub_event  = "mqtt_wildcard_subscribe"  # full broker dump
+                    _sub_threat = "high"
+                elif any("cmd" in t.lower() or "exec" in t.lower()
+                         or "control" in t.lower() for t in _sub_topics):
+                    _sub_event  = "mqtt_c2_subscribe"      # C2 command channel
+                    _sub_threat = "critical"
+
                 _log_event(log_attack, geoip_func, intel_fields_func,
                            client_ip, server_port, gdata, session,
-                           "mqtt_subscribe",
-                           extra={"topics": [t for t, _ in topics]})
+                           _sub_event,
+                           extra={"topics": _sub_topics,
+                                  "botnet_family": session.get("botnet_family", "")},
+                           threat_level=_sub_threat)
 
             # ── PUBLISH (0x30) ────────────────────────────────────────────
             elif ptype == 0x30:

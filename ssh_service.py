@@ -849,6 +849,19 @@ def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool,
                             except Exception:
                                 pass
 
+                    # ECCHI — definitive Mirai confirmation
+                    if "ECCHI" in cmd.upper():
+                        if log_attack:
+                            log_attack(ip, 22, "SSH_MIRAI_ECCHI", json.dumps({
+                                "command": cmd,
+                                "note":    "busybox ECCHI = definitive Mirai marker",
+                            }))
+                        try:
+                            import alerts as _alerts
+                            _alerts.mirai_confirmed(ip, "Unknown", "ssh", cmd)
+                        except Exception:
+                            pass
+
                     if is_tarpitted:
                         time.sleep(TARPIT_DELAY)
 

@@ -262,6 +262,40 @@ def malware_upload(ip, country, filename, sha256, size_bytes, service, mime="unk
     ])
     _send(msg)
 
+def mirai_confirmed(ip, country, service, cmd):
+    """Fire when busybox ECCHI is detected — definitive Mirai infection marker."""
+    key = _cooldown_key("MIRAI_ECCHI", ip)
+    if _is_cooled_down(key):
+        return
+    msg = _fmt("🤖", "MIRAI CONFIRMED — ECCHI Detected", [
+        ("IP",      ip),
+        ("Country", country),
+        ("Service", service.upper()),
+        ("Command", cmd[:120]),
+        ("Note",    "busybox ECCHI = definitive Mirai botnet marker"),
+    ])
+    _send(msg)
+
+
+def kill_chain(ip, country, service, steps, botnet_family, arch, malware_urls):
+    """Send a complete attack kill-chain narrative when a full compromise is observed."""
+    key = _cooldown_key("KILL_CHAIN", ip)
+    if _is_cooled_down(key):
+        return
+    chain_str = " → ".join(str(s)[:40] for s in steps[:6])
+    urls_str  = " | ".join(malware_urls[:3]) if malware_urls else "none"
+    msg = _fmt("🎯", f"COMPLETE ATTACK CHAIN — {botnet_family}", [
+        ("IP",           ip),
+        ("Country",      country),
+        ("Entry",        service.upper()),
+        ("Botnet Family",botnet_family),
+        ("Architecture", arch),
+        ("Kill Chain",   chain_str[:250]),
+        ("Malware URLs", urls_str[:200]),
+    ])
+    _send(msg)
+
+
 def generic(icon_key, title, fields, ip="", cooldown_key=None):
     key = _cooldown_key(cooldown_key or title, ip or "global")
     if _is_cooled_down(key):
