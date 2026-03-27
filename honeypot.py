@@ -531,26 +531,42 @@ _ECHO_OFF     = _IAC + _WONT + _ECHO
 # After password received: server resumes echoing
 _ECHO_ON      = _IAC + _WILL + _ECHO
 
-_TELNET_BANNERS = [
-    # Hikvision IP cameras — consistent with device identity
-    "\r\n\r\nHikvision DS-2CD2043G2-I\r\nFirmware: V5.7.15 build 230313\r\n\r\n(none) login: ",
-    "\r\n\r\nWelcome to HiLinux.\r\n\r\n(none) login: ",
-    "\r\n\r\nHikvision DS-2CD2085G1-I\r\nFirmware: V5.5.800 build 210628\r\n\r\n(none) login: ",
-    # HiSilicon SoC — the chip inside Hikvision/Dahua/XMEye cameras
-    "\r\n\r\nHi3518 family \r\nBusyBox v1.16.1\r\n\r\nlogin: ",
-    "\r\n\r\nHi3520D family\r\nBusyBox v1.19.4 (2013-08-12 12:00:00 CST) built-in shell (ash)\r\n\r\nlogin: ",
-    # BusyBox on embedded camera Linux — old versions targeted by Mirai
-    "\r\n\r\nBusyBox v1.16.1 (2009-10-01 23:34:21 CST) built-in shell (ash)\r\n\r\nlogin: ",
-    "\r\n\r\nBusyBox v1.19.4 (2013-08-12 12:00:00 CST) built-in shell (ash)\r\n\r\nlogin: ",
-    "\r\n\r\nBusyBox v1.31.1 (2021-10-19 08:36:54 UTC) built-in shell (ash)\r\n\r\nlogin: ",
-    # DVR/NVR units
-    "\r\n\r\nDVR-4CH Login\r\nKernel: 3.10.14\r\n\r\nlogin: ",
-    "\r\n\r\nDahua Technology DVR\r\nFirmware: 2.460.0000.14.R\r\n\r\nlogin: ",
-    # XMEye/generic embedded Linux (millions of budget cameras)
-    "\r\n\r\nlinux\r\nBusyBox v1.01 (2015.08.10-08:30+0000) Built-in shell (ash)\r\n\r\nlogin: ",
-    "\r\n\r\nXMeye Security\r\nFirmware: V4.02.R11.00000117.10001.131900\r\n\r\nlogin: ",
+# Each entry: (banner_text, shell_prompt)
+# Banner + prompt are paired so the device identity is internally consistent.
+# The pair is chosen ONCE at process startup (hash of MAC) so every attacker
+# connecting to this server sees the same device — just like a real IoT device.
+_TELNET_PROFILES = [
+    # (banner, prompt)
+    (
+        "\r\n\r\nHikvision DS-2CD2043G2-I\r\nFirmware: V5.7.15 build 230313\r\n\r\n(none) login: ",
+        "root@(none):~# ",
+    ),
+    (
+        "\r\n\r\nHi3520D family\r\nBusyBox v1.19.4 (2013-08-12 12:00:00 CST) built-in shell (ash)\r\n\r\nlogin: ",
+        "# ",
+    ),
+    (
+        "\r\n\r\nXMeye Security\r\nFirmware: V4.02.R11.00000117.10001.131900\r\n\r\nlogin: ",
+        "[root@camera ~]# ",
+    ),
+    (
+        "\r\n\r\nDahua Technology DVR\r\nFirmware: 2.460.0000.14.R\r\n\r\nlogin: ",
+        "root@dvr:~# ",
+    ),
+    (
+        "\r\n\r\nBusyBox v1.19.4 (2013-08-12 12:00:00 CST) built-in shell (ash)\r\n\r\nlogin: ",
+        "/ # ",
+    ),
+    (
+        "\r\n\r\nHi3518 family\r\nBusyBox v1.16.1\r\n\r\nlogin: ",
+        "# ",
+    ),
 ]
-_PROMPTS = ["# ", "/ # ", "root@dvr:~# ", "[root@camera ~]# ", "root@(none):/# "]
+
+# Pick one profile for this server instance — stable across all connections
+import hashlib as _hashlib
+_profile_idx = int(_hashlib.md5(config.DEVICE_MAC.encode()).hexdigest(), 16) % len(_TELNET_PROFILES)
+_TELNET_BANNER, _TELNET_PROMPT = _TELNET_PROFILES[_profile_idx]
 
 def handle_telnet(conn, addr):
     ip, port = addr
@@ -558,7 +574,7 @@ def handle_telnet(conn, addr):
     gdata  = _geoip(ip)
     sid    = _sid()
     shell  = FakeShell(ip)
-    prompt = _PROMPTS[hash(ip) % len(_PROMPTS)]
+    prompt = _TELNET_PROMPT
     _inc("sessions")
 
     all_commands   = []
@@ -568,7 +584,7 @@ def handle_telnet(conn, addr):
     try:
         _random_delay(100, 400)
         # Send IAC negotiation then banner — puts client into char mode with server echo
-        conn.sendall(_TELNET_INIT + random.choice(_TELNET_BANNERS).encode())
+        conn.sendall(_TELNET_INIT + _TELNET_BANNER.encode())
 
         def _sanitize_cred(s):
             """Strip IAC/control bytes, keep printable ASCII + tab."""
@@ -613,6 +629,9 @@ def handle_telnet(conn, addr):
                         _sock_buf.extend(chunk[i + 1:])  # save remaining bytes
                         conn.sendall(b"\r\n")
                         return buf, True
+                    elif b == 3:           # Ctrl+C — treat as disconnect
+                        conn.sendall(b"\r\n")
+                        return buf, False
                     elif b in (127, 8):    # backspace / DEL
                         if buf:
                             buf = buf[:-1]
@@ -786,6 +805,12 @@ def handle_telnet(conn, addr):
             for b in raw:
                 if b >= 240:
                     # IAC byte — skip the option negotiation byte
+                    continue
+                if b == 3:
+                    # Ctrl+C — interrupt current command, show fresh prompt
+                    conn.sendall(b"^C\r\n")
+                    _cmd_buf = ""
+                    conn.sendall(prompt.encode())
                     continue
                 if b in (10, 13):
                     # Newline / CR — flush buffer as a command

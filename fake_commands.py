@@ -22,7 +22,7 @@ import device_identity as dev
 # ─── Static filesystem skeleton (module-level READ-ONLY template) ─────────────
 _FS_TEMPLATE = {
     "/":          ["bin", "dev", "etc", "home", "lib", "mnt", "proc", "root",
-                   "sbin", "sys", "tmp", "usr", "var", "backup", "data"],
+                   "sbin", "sys", "tmp", "usr", "var"],
     "/bin":       ["ash", "busybox", "cat", "chmod", "cp", "date", "df", "echo",
                    "grep", "kill", "ls", "mkdir", "mount", "mv", "ping", "ps",
                    "rm", "sh", "sleep", "tar", "touch", "wget"],
