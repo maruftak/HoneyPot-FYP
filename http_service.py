@@ -1798,8 +1798,12 @@ def handle_http(conn, addr, https=False, *,
                          svc, full_request[:1000], gdata["country"])
 
         # ── Honeytoken file detection ─────────────────────────────────────────
+        # Skip paths that are clearly non-HTTP binary garbage (TLS handshakes,
+        # port scanners, etc. hitting port 80) — they'd produce false positives
+        # on the root path "/" or garbled paths.
+        _path_printable = path and all(0x20 <= ord(c) < 0x7f for c in path[:20])
         ht_f, ht_fv = check_honeytoken_file_func(path)
-        if ht_f:
+        if ht_f and path != "/" and _path_printable:
             inc_counter_func("honeytokens")
             attack_patterns.append("honeytoken_file")
             threat_level = "critical"

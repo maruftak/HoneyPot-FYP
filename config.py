@@ -89,6 +89,9 @@ SERVICE_PORTS = {
     # ── Cloud-native / container attack surface ──────────────────────────────
     "redis":      6379,  # Redis — common RCE via CONFIG SET + BGSAVE
     "docker":     2375,  # Docker daemon API — container escape / cryptominer
+    # ── High-value missed IoT web ports ──────────────────────────────────────
+    "dvr_web":    9527,  # XiongMai/NetSurveillance cameras (millions on Shodan, Satori target)
+    "nvr_web":    8888,  # Generic cheap NVR/DVR alternate web port
 }
 
 # ─── Threat Intelligence ──────────────────────────────────────────────────────

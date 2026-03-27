@@ -1506,6 +1506,8 @@ _SERVICES = [
     (handle_ssdp,                       config.SERVICE_PORTS["ssdp"],      "SSDP/UPnP",     "udp"),
     (handle_redis,                      config.SERVICE_PORTS["redis"],     "Redis",         "tcp"),
     (handle_docker,                     config.SERVICE_PORTS["docker"],    "Docker-API",    "tcp"),
+    (handle_http,                       config.SERVICE_PORTS["dvr_web"],   "XiongMai-DVR",  "tcp"),
+    (handle_http,                       config.SERVICE_PORTS["nvr_web"],   "NVR-Web",       "tcp"),
 ]
 
 

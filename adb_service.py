@@ -226,9 +226,9 @@ def handle_adb(conn, addr, log_attack=None, geoip_func=None,
                         conn.sendall(_build_packet(CMD_OKAY, local_id, remote_id))
 
                     _log(attack_type, threat, {
-                        "service":  service[:100],
-                        "command":  cmd_text[:200],
-                        "notes":    "ADB shell command — full device access",
+                        "adb_service": service[:100],
+                        "payload":     cmd_text[:200],
+                        "notes":       "ADB shell command — full device access",
                     })
 
                 elif service.startswith("sync:") or service == "sync:":
@@ -237,7 +237,7 @@ def handle_adb(conn, addr, log_attack=None, geoip_func=None,
                         "notes": "ADB file sync — attacker pushing/pulling files",
                     })
                 else:
-                    _log("adb_service_open", "high", {"service": service[:100]})
+                    _log("adb_service_open", "high", {"adb_service": service[:100]})
 
                 shell_open = True
 
