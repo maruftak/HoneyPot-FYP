@@ -107,7 +107,7 @@ WEAK_CREDENTIALS = {
                   "rootroot","raspberry","alpine","vizxv","xc3511","juantech",
                   "anko","Zte521","pass","test","qwerty","letmein",""],
     "admin":     ["admin","password","12345","123456","admin123","1234",
-                  "administrator","smcadmin","Admin@2024","admin@123",""],
+                  "administrator","smcadmin","Admin@2024","admin@123","1234567890",""],
     "pi":        ["raspberry","pi","123456","password",""],
     "user":      ["user","password","12345","1234",""],
     "ubuntu":    ["ubuntu","password","123456",""],
@@ -167,7 +167,7 @@ _FS = {
         "RTSP_PORT=554\nHTTP_PORT=80\nONVIF_PORT=8000\n"
         "SERIAL=DS-2CD2043G2-I20230313BBRR012345\n"
     ),
-    "/.dvr_config": (                   # HONEYTOKEN
+    "/root/.dvr_config": (              # HONEYTOKEN
         "[System]\nDeviceType=NVR\nModel=DS-2CD2043G2-I\n"
         "SerialNumber=DS-2CD2043G2-I20230313BBRR012345\n"
         "FirmwareVersion=V5.7.15 build 230313\n\n"
@@ -515,7 +515,17 @@ _CMD = {
 # COMMAND EXECUTION ENGINE
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _execute(cmd: str) -> str:
+def _resolve_path(target: str, cwd: str = "/root") -> str:
+    """Resolve a possibly-relative path against cwd."""
+    import os as _os
+    if not target or target in ("~", "~root", "~/"):
+        return "/root"
+    if not target.startswith("/"):
+        target = cwd.rstrip("/") + "/" + target
+    return _os.path.normpath(target)
+
+
+def _execute(cmd: str, cwd: str = "/root") -> str:
     cmd = cmd.strip()
     if not cmd:
         return ""
@@ -523,11 +533,11 @@ def _execute(cmd: str) -> str:
     # Chained commands (&&, ||, ;)
     for sep in (" && ", " ; ", "; "):
         if sep in cmd:
-            return "".join(_execute(p.strip()) for p in cmd.split(sep))
+            return "".join(_execute(p.strip(), cwd) for p in cmd.split(sep))
 
     # Pipes — run only the first segment (we fake output anyway)
     if " | " in cmd and cmd not in _CMD:
-        return _execute(cmd.split(" | ")[0].strip())
+        return _execute(cmd.split(" | ")[0].strip(), cwd)
 
     # Exact match
     if cmd in _CMD:
@@ -541,18 +551,26 @@ def _execute(cmd: str) -> str:
     # ── cat ───────────────────────────────────────────────────────────────
     if verb == "cat":
         target = rest.strip()
-        if target in _FS:
-            return _FS[target]
+        # Resolve relative paths against cwd
+        resolved = _resolve_path(target, cwd) if target else target
+        # Try exact match first (absolute), then resolved path
+        for key in (target, resolved):
+            if key in _FS:
+                return _FS[key]
         for path, content in _FS.items():
-            if path.rstrip("/") == target.rstrip("/"):
+            if path.rstrip("/") == resolved.rstrip("/"):
                 return content
         return f"cat: {target}: No such file or directory\n"
+
+    # ── pwd ───────────────────────────────────────────────────────────────
+    if verb == "pwd":
+        return cwd + "\n"
 
     # ── ls ────────────────────────────────────────────────────────────────
     if verb in ("ls", "ll", "dir"):
         flags   = [a for a in args if a.startswith("-")]
         targets = [a for a in args if not a.startswith("-")]
-        target  = (targets[-1].rstrip("/") if targets else "/root")
+        target  = _resolve_path(targets[-1], cwd) if targets else cwd
 
         for dirpath, listing in _DIRS.items():
             dp = dirpath.rstrip("/") or "/"
@@ -791,6 +809,7 @@ def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool,
                log_malware=None, log_honeytoken=None):
     prompt = random.choice(_PROMPTS)
     buf    = ""
+    _cwd   = "/root"   # session cwd — start in home directory
 
     channel.send(
         b"\r\nWelcome to Hikvision IP Camera\r\n"
@@ -876,10 +895,24 @@ def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool,
                         except Exception:
                             pass
 
+                    # Handle cd before _execute (updates session cwd)
+                    _cd_parts = cmd.strip().split()
+                    if _cd_parts and _cd_parts[0] == "cd":
+                        _dest = _cd_parts[1] if len(_cd_parts) > 1 else "/root"
+                        _resolved = _resolve_path(_dest, _cwd)
+                        if _resolved in _DIRS or _resolved == "/root":
+                            _cwd = _resolved
+                        # cd is always silent
+                        channel.send(prompt.encode())
+                        continue
+
                     if is_tarpitted:
                         time.sleep(TARPIT_DELAY)
+                    else:
+                        # Simulate embedded device latency — real IoT SSH takes 80-300ms
+                        time.sleep(random.uniform(0.08, 0.30))
 
-                    output = _execute(cmd)
+                    output = _execute(cmd, _cwd)
                     if output:
                         channel.send(output.replace("\n", "\r\n").encode(errors="replace"))
 

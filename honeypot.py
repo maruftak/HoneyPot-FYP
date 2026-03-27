@@ -526,10 +526,10 @@ _SGA       = bytes([3])   # Suppress Go Ahead — needed for character mode
 
 # Sent at connection: server will echo + suppress go-ahead (line mode → char mode)
 _TELNET_INIT  = _IAC + _WILL + _ECHO + _IAC + _WILL + _SGA + _IAC + _DO + _SGA
-# Before password prompt: stop echoing (client types blind)
-_ECHO_OFF     = _IAC + _WILL + _ECHO
-# After password received: resume echoing
-_ECHO_ON      = _IAC + _WONT + _ECHO
+# Before password prompt: server stops echoing so password is hidden
+_ECHO_OFF     = _IAC + _WONT + _ECHO
+# After password received: server resumes echoing
+_ECHO_ON      = _IAC + _WILL + _ECHO
 
 _TELNET_BANNERS = [
     # Hikvision IP cameras — consistent with device identity
@@ -624,22 +624,32 @@ def handle_telnet(conn, addr):
                             conn.sendall(bytes([b]))
                     i += 1
 
-        for attempt in range(12):
+        # Valid credentials: known botnet defaults (BOTNET_CREDS) + explicit honeypot login
+        _VALID_CREDS = {("admin", "1234567890")}
+
+        for attempt in range(3):
             _random_delay(80, 200)
+
+            # Show login prompt on retries (banner already ends with "login: " on first attempt)
+            if attempt > 0:
+                conn.sendall(b"\r\nlogin: ")
 
             uraw, u_ok = _recv_line(timeout=25, server_echo=True)
             username   = _sanitize_cred(uraw)
             if not u_ok and not username:
                 break   # connection closed before any printable input
 
-            # Ask for password with echo off
-            conn.sendall(_ECHO_OFF + b"Password: ")
+            # Ask for password — do NOT send IAC WONT ECHO (that would make the
+            # client re-enable its own local echo). We already negotiated
+            # IAC WILL ECHO at init, so just silently stop echoing server-side.
+            conn.sendall(b"Password: ")
             praw, _    = _recv_line(timeout=25, server_echo=False)
             password   = _sanitize_cred(praw)
-            conn.sendall(_ECHO_ON)
 
             is_bot         = _check_botnet(username, password)
             is_ht_c, ht_cv = _check_honeytoken_cred(username, password)
+            is_valid       = is_bot or is_ht_c or (username, password) in _VALID_CREDS
+
             login_attempts.append({"username": username, "password": password,
                                     "is_botnet": is_bot, "attempt": attempt + 1})
             _inc("logins")
@@ -667,14 +677,16 @@ def handle_telnet(conn, addr):
                 db.log_honeytoken(_ts(), ip, "CREDENTIAL", ht_cv, "telnet",
                                   gdata["country"], gdata["city"])
 
-            if attempt >= 1 or is_bot or is_ht_c:
+            if is_valid:
                 authenticated = True
                 time.sleep(0.8)
                 conn.sendall(b"\r\nLogin successful\r\n")
                 conn.sendall(prompt.encode())
                 break
             else:
-                conn.sendall(b"Login incorrect\r\n")
+                conn.sendall(b"\r\nLogin incorrect\r\n")
+                if attempt == 2:
+                    conn.sendall(b"Maximum authentication attempts exceeded.\r\n")
 
         if not authenticated:
             return
@@ -751,8 +763,13 @@ def handle_telnet(conn, addr):
             conn.sendall(prompt.encode())
             return True
 
+        _last_activity = time.time()
         for _ in range(2000):
-            _random_delay(5, 30)
+            # Simulate embedded device command latency (50-200 ms per cycle)
+            _random_delay(50, 200)
+            # Idle timeout — real cameras drop telnet after ~5 min with no input
+            if time.time() - _last_activity > 300:
+                break
             if _sock_buf:
                 raw = bytes(_sock_buf)
                 _sock_buf.clear()
@@ -762,6 +779,7 @@ def handle_telnet(conn, addr):
                     raw = conn.recv(256)
                 except socket.timeout:
                     break
+            _last_activity = time.time()
             if not raw:
                 break
 

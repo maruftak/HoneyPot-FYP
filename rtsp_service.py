@@ -266,7 +266,7 @@ def handle_rtsp(
                 })
 
             # ── Authentication flow ───────────────────────────────────────
-            if method in ("DESCRIBE", "SETUP", "PLAY", "RECORD", "GET_PARAMETER"):
+            if method in ("DESCRIBE", "SETUP", "PLAY", "RECORD", "GET_PARAMETER", "PAUSE"):
                 if not session["authenticated"]:
                     if not auth_hdr:
                         _log("rtsp_probe", "low", {
@@ -422,6 +422,24 @@ def handle_rtsp(
                 conn.sendall((
                     f"RTSP/1.0 403 Forbidden\r\nCSeq: {cseq}\r\n"
                     f"Server: Hikvision RTSP Server {fw}\r\n\r\n"
+                ).encode())
+
+            elif method == "PAUSE":
+                conn.sendall((
+                    f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n"
+                    f"Session: {sid}\r\n"
+                    f"Server: Hikvision RTSP Server {fw}\r\n"
+                    f"Date: {_now()}\r\n\r\n"
+                ).encode())
+
+            elif method == "GET_PARAMETER":
+                # Keep-alive used by VLC, ffmpeg, and live555 — must return 200
+                conn.sendall((
+                    f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n"
+                    f"Session: {sid}\r\n"
+                    f"Content-Length: 0\r\n"
+                    f"Server: Hikvision RTSP Server {fw}\r\n"
+                    f"Date: {_now()}\r\n\r\n"
                 ).encode())
 
             elif method == "TEARDOWN":

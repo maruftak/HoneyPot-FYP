@@ -165,9 +165,45 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 .exit-tag{font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:3px;background:rgba(10,132,255,0.1);color:var(--blue);border:1px solid rgba(10,132,255,0.2)}
 .change-row{background:var(--raised);border-left:3px solid var(--purple);border-radius:4px;padding:10px 14px;margin-bottom:6px;font-family:var(--mono);font-size:11px;}
 .change-arrow{color:var(--muted);margin:0 8px}
+/* ── Session detail modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.82);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);}
+.modal-overlay.hidden{display:none}
+.modal-box{background:var(--card);border:1px solid var(--border2);border-radius:10px;width:100%;max-width:860px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;}
+.modal-header{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--card);z-index:1;}
+.modal-title{font-family:var(--mono);font-weight:700;font-size:14px;color:#fff;flex:1}
+.modal-close{background:none;border:1px solid var(--border2);color:var(--muted);font-size:16px;width:28px;height:28px;border-radius:4px;cursor:pointer;line-height:1;}
+.modal-close:hover{border-color:var(--red);color:var(--red)}
+.modal-body{padding:20px;display:flex;flex-direction:column;gap:16px;}
+.modal-section{background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px;}
+.modal-section-title{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;}
+.modal-kv{display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:11px;}
+.modal-key{color:var(--muted);font-family:var(--mono);}
+.modal-val{color:var(--text);font-family:var(--mono);word-break:break-all;}
+.modal-cmds{list-style:none;display:flex;flex-direction:column;gap:3px;max-height:300px;overflow-y:auto;}
+.modal-cmd{font-family:var(--mono);font-size:11px;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:3px;border-left:2px solid var(--green);color:var(--text);white-space:pre-wrap;word-break:break-all;}
+.modal-ip-tbl{width:100%;border-collapse:collapse;font-size:11px;}
+.modal-ip-tbl th{color:var(--muted);font-family:var(--mono);font-size:9px;text-transform:uppercase;padding:4px 8px;text-align:left;border-bottom:1px solid var(--border);}
+.modal-ip-tbl td{padding:4px 8px;font-family:var(--mono);border-bottom:1px solid rgba(255,255,255,0.04);}
+.tr-hot{background:rgba(255,140,0,0.06);}
+.cmd-count-badge{display:inline-flex;align-items:center;gap:3px;font-family:var(--mono);font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(0,255,136,0.1);color:var(--green);border:1px solid rgba(0,255,136,0.2);cursor:pointer;margin-left:4px;}
+.auto-refresh-btn{font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;transition:.2s;}
+.auto-refresh-btn.on{background:rgba(0,255,136,0.15);border:1px solid rgba(0,255,136,0.4);color:var(--green);}
+.auto-refresh-btn.off{background:none;border:1px solid var(--border2);color:var(--muted);}
 </style>
 </head>
 <body>
+
+<!-- ══ SESSION DETAIL MODAL ══ -->
+<div class="modal-overlay hidden" id="sessModal" onclick="if(event.target===this)closeSessModal()">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title" id="modalTitle">Session Detail</span>
+      <button class="modal-close" onclick="closeSessModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
 <div class="layout">
 
 <!-- TOPBAR -->
@@ -321,9 +357,9 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="card-title">
       <span>Attack Sessions &nbsp;<span class="badge b-blue" id="session-count">0</span></span>
       <div class="section-actions">
+        <button class="auto-refresh-btn off" id="autoRefreshBtn" onclick="toggleAutoRefresh()">⏱ Auto</button>
         <button class="btn-sm" onclick="exportSessionsCSV()">↓ CSV</button>
         <button class="btn-sm" onclick="exportSessionsJSON()">↓ JSON</button>
-        <button class="btn-sm" onclick="downloadTxtReport()">↓ Report</button>
         <button class="btn-sm" onclick="loadSessions()">↺ Refresh</button>
       </div>
     </div>
@@ -395,20 +431,36 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 <!-- ══ PANEL: CREDENTIALS ══ -->
 <div class="panel" id="panel-creds">
   <div class="filter-bar">
-    <input type="text" id="credSearch" placeholder="Filter credentials…" oninput="filterCreds()" style="flex:1">
-    <select id="credBot" onchange="filterCreds()"><option value="">All</option><option value="botnet">Botnet Only</option></select>
+    <input type="text" id="credSearch" placeholder="Filter username, password, service…" oninput="filterCreds()" style="flex:1">
+    <select id="credService" onchange="filterCreds()">
+      <option value="">All Services</option>
+      <option value="telnet">Telnet</option>
+      <option value="ssh">SSH</option>
+      <option value="ftp">FTP</option>
+      <option value="http">HTTP</option>
+      <option value="rtsp">RTSP</option>
+      <option value="mqtt">MQTT</option>
+      <option value="vnc">VNC</option>
+      <option value="redis">Redis</option>
+      <option value="docker">Docker</option>
+    </select>
+    <select id="credBot" onchange="filterCreds()"><option value="">All Types</option><option value="botnet">Botnet Only</option><option value="normal">Normal Only</option></select>
   </div>
   <div class="grid-60-40">
     <div class="card">
-      <div class="card-title">Top Credential Pairs</div>
+      <div class="card-title">
+        Credential Pairs
+        <span id="credCount" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:8px"></span>
+        <button class="btn-sm" id="credLimitBtn" onclick="toggleCredLimit()" style="margin-left:auto">Show Top 50</button>
+      </div>
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>#</th><th>Username</th><th>Password</th><th>Count</th><th>Botnet</th></tr></thead>
-          <tbody id="credBody"><tr><td colspan="5" class="loading"><span class="spin">◌</span></td></tr></tbody>
+          <thead><tr><th>#</th><th>Username</th><th>Password</th><th>Service</th><th>Count</th><th>Type</th></tr></thead>
+          <tbody id="credBody"><tr><td colspan="6" class="loading"><span class="spin">◌</span></td></tr></tbody>
         </table>
       </div>
     </div>
-    <div class="card"><div class="card-title">Attack Distribution</div><div class="chart-wrap" style="height:240px"><canvas id="credChart"></canvas></div></div>
+    <div class="card"><div class="card-title">Attempts by Service</div><div class="chart-wrap" style="height:240px"><canvas id="credChart"></canvas></div></div>
   </div>
 </div>
 
@@ -978,22 +1030,114 @@ function filterSessions(){
 
 function renderSessions(rows){
   if(!rows.length){document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No sessions match filter</td></tr>';return;}
-  document.getElementById('sessionsBody').innerHTML=rows.map(s=>{
-    const display=(s.commands&&s.commands.length>0)?s.commands.join(' <span style="color:var(--border2)">;</span> '):(s.path||s.method||'—');
-    return`<tr>
+  document.getElementById('sessionsBody').innerHTML=rows.map((s,idx)=>{
+    const cmdCount=s.cmd_count||s.commands?.length||0;
+    const cmdBadge=cmdCount>0?`<span class="cmd-count-badge">${cmdCount} cmd${cmdCount>1?'s':''}</span>`:'';
+    const firstCmd=s.commands&&s.commands.length>0?s.commands[0]:'';
+    const display=firstCmd?`<span style="color:var(--text)">${firstCmd}</span>${cmdBadge}`:(s.path?`<span style="color:var(--muted)">${s.path}</span>`:s.method||'—');
+    const hot=cmdCount>=10?'tr-hot':'';
+    return`<tr class="${hot}" style="cursor:pointer" onclick="openSessModal(${idx})">
       <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
       <td class="mono" style="color:var(--blue)">${s.ip}</td>
       <td>${s.country||'—'}${s.city?'<br><span style="color:var(--muted);font-size:10px">'+s.city+'</span>':''}</td>
       <td>${svcBadge(s.service)}</td>
-      <td class="mono">${s.username||'—'}</td>
-      <td class="mono">${s.password||'—'}</td>
-      <td class="mono truncate" style="font-size:10px;color:var(--muted);max-width:200px">${display}</td>
+      <td class="mono">${s.username||'<span style="color:var(--muted)">—</span>'}</td>
+      <td class="mono">${s.password||'<span style="color:var(--muted)">—</span>'}</td>
+      <td class="mono truncate" style="font-size:10px;max-width:220px">${display}</td>
       <td>${s.cve?`<span class="badge b-crit" style="font-size:9px">${s.cve}</span>`:'<span style="color:var(--muted)">—</span>'}</td>
       <td>${badge(s.threat)}</td>
       <td>${anonBadge(s)}</td>
-      <td style="font-size:10px">${s.is_botnet?'<span style="color:var(--orange)">🤖</span>':''}${s.scanner_tool?`<span class="badge b-blue" style="font-size:8px">${s.scanner_tool}</span>`:''}</td>
+      <td style="font-size:10px">${s.is_botnet?'<span style="color:var(--orange)">🤖</span> ':''}${s.scanner_tool?`<span class="badge b-blue" style="font-size:8px">${s.scanner_tool}</span>`:''}</td>
     </tr>`;
   }).join('');
+}
+
+// ── Session detail modal ────────────────────────────────────────────────────
+function openSessModal(idx){
+  const s=S.sessions[idx];
+  if(!s)return;
+  document.getElementById('modalTitle').textContent=`${s.service} · ${s.ip} · ${fmtTime(s.ts)}`;
+  const anonInfo=[s.is_tor?'Tor':null,s.is_vpn?`VPN (${s.vpn_provider||'?'})`:null,s.is_proxy?`Proxy (${s.proxy_type||'?'})`:null].filter(Boolean).join(', ')||'Direct';
+  const cmds=s.commands||[];
+  const payload=s.payload||'';
+  document.getElementById('modalBody').innerHTML=`
+    <div class="modal-section">
+      <div class="modal-section-title">Session Info</div>
+      <div class="modal-kv">
+        <span class="modal-key">Timestamp</span><span class="modal-val">${s.ts}</span>
+        <span class="modal-key">Source IP</span><span class="modal-val" style="color:var(--blue)">${s.ip}</span>
+        <span class="modal-key">Country / City</span><span class="modal-val">${s.country||'—'} ${s.city?'/ '+s.city:''}</span>
+        <span class="modal-key">Service</span><span class="modal-val">${svcBadge(s.service)} port ${s.port||'?'}</span>
+        <span class="modal-key">Attack Type</span><span class="modal-val">${s.attack_type||'—'}</span>
+        <span class="modal-key">Threat</span><span class="modal-val">${badge(s.threat)}</span>
+        <span class="modal-key">ASN / Org</span><span class="modal-val">${s.asn?s.asn+' ':''}<span style="color:var(--muted)">${s.org||'—'}</span></span>
+        <span class="modal-key">Anonymization</span><span class="modal-val">${anonInfo}</span>
+        ${s.scanner_tool?`<span class="modal-key">Scanner Tool</span><span class="modal-val"><span class="badge b-blue">${s.scanner_tool}</span></span>`:''}
+        ${s.cve?`<span class="modal-key">CVE</span><span class="modal-val"><span class="badge b-crit">${s.cve}</span></span>`:''}
+      </div>
+    </div>
+    ${(s.username||s.password)?`
+    <div class="modal-section">
+      <div class="modal-section-title">Credentials Used</div>
+      <div class="modal-kv">
+        <span class="modal-key">Username</span><span class="modal-val" style="color:var(--orange)">${s.username||'(empty)'}</span>
+        <span class="modal-key">Password</span><span class="modal-val" style="color:var(--red)">${s.password||'(empty)'}</span>
+        <span class="modal-key">Botnet Cred</span><span class="modal-val">${s.is_botnet?'<span class="badge b-crit">Yes — known botnet credential</span>':'No'}</span>
+      </div>
+    </div>`:''}
+    ${cmds.length?`
+    <div class="modal-section">
+      <div class="modal-section-title">Shell Commands (${cmds.length})</div>
+      <ul class="modal-cmds">${cmds.map((c,i)=>`<li class="modal-cmd"><span style="color:var(--muted);margin-right:8px">${i+1}</span>${escHtml(c)}</li>`).join('')}</ul>
+    </div>`:''}
+    ${payload?`
+    <div class="modal-section">
+      <div class="modal-section-title">Payload / Request</div>
+      <pre style="font-family:var(--mono);font-size:10px;color:var(--muted);white-space:pre-wrap;word-break:break-all;margin:0">${escHtml(payload)}</pre>
+    </div>`:''}
+    <div class="modal-section">
+      <div class="modal-section-title">All attacks from ${s.ip} &nbsp;<span id="ipProfileLoading" style="color:var(--muted);font-size:10px">loading…</span></div>
+      <div id="ipProfileBody" style="overflow-x:auto"></div>
+    </div>`;
+  document.getElementById('sessModal').classList.remove('hidden');
+  document.body.style.overflow='hidden';
+  loadIpProfile(s.ip);
+}
+function closeSessModal(){
+  document.getElementById('sessModal').classList.add('hidden');
+  document.body.style.overflow='';
+}
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+async function loadIpProfile(ip){
+  const data=await api(`/api/ip-profile?ip=${encodeURIComponent(ip)}`);
+  const el=document.getElementById('ipProfileBody');
+  const ld=document.getElementById('ipProfileLoading');
+  if(!data||!el)return;
+  if(ld)ld.textContent=`— ${data.total} total attacks · first: ${fmtTime(data.first_seen)} · last: ${fmtTime(data.last_seen)}`;
+  // services_hit is [[svc,cnt], ...]
+  const svcSummary=(data.services_hit||[]).map(([k,v])=>`${svcBadge(k)} <span style="color:var(--muted);font-size:10px">${v}</span>`).join('  ');
+  const events=data.recent_events||[];
+  el.innerHTML=`<div style="margin-bottom:10px;font-size:11px;display:flex;flex-wrap:wrap;gap:6px">${svcSummary}</div>
+  <table class="modal-ip-tbl"><thead><tr><th>Time</th><th>Service</th><th>Attack Type</th><th>User</th><th>Pass</th><th>CVE</th><th>Cmds</th><th>Threat</th></tr></thead>
+  <tbody>${events.map(a=>`<tr>
+    <td style="color:var(--muted)">${fmtTime(a.ts)}</td>
+    <td>${svcBadge(a.service)}</td>
+    <td style="color:var(--muted);font-size:10px">${a.attack_type||'—'}</td>
+    <td style="color:var(--orange)">${a.username||'—'}</td>
+    <td>${a.password||'—'}</td>
+    <td>${a.cve?`<span class="badge b-crit" style="font-size:9px">${a.cve}</span>`:'—'}</td>
+    <td>${a.cmd_count>0?`<span class="cmd-count-badge">${a.cmd_count}</span>`:'—'}</td>
+    <td>${badge(a.threat)}</td>
+  </tr>`).join('')}</tbody></table>`;
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSessModal();});
+
+// ── Auto-refresh ────────────────────────────────────────────────────────────
+let _autoRefreshTimer=null;
+function toggleAutoRefresh(){
+  const btn=document.getElementById('autoRefreshBtn');
+  if(_autoRefreshTimer){clearInterval(_autoRefreshTimer);_autoRefreshTimer=null;btn.className='auto-refresh-btn off';btn.textContent='⏱ Auto';}
+  else{_autoRefreshTimer=setInterval(()=>{if(document.getElementById('panel-sessions').style.display!=='none')loadSessions();},30000);btn.className='auto-refresh-btn on';btn.textContent='⏱ 30s ON';}
 }
 
 function exportSessionsJSON(){
@@ -1044,23 +1188,52 @@ function renderCVE(rows){
 }
 
 // ── Credentials ────────────────────────────────────────────────────────────
-let _credsAll=[];
+let _credsAll=[], _credLimit=0; // 0 = show all
+const _SVC_COLORS={telnet:'#ff8c00',ssh:'#00ff88',ftp:'#0a84ff',http:'#bf5af2',rtsp:'#ffd60a',mqtt:'#ff3054',vnc:'#34c759',redis:'#ff453a',docker:'#30b0c7',unknown:'#636366'};
+function _svcBadge(s){const col=_SVC_COLORS[s]||'#636366';return`<span style="font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;background:${col}22;color:${col};border:1px solid ${col}44">${s||'?'}</span>`;}
 async function loadCreds(){
   const data=await api('/api/top-credentials?hours=168');if(!data)return;
-  _credsAll=data.credentials||[];renderCreds(_credsAll);
-  const botnet=_credsAll.filter(c=>c.is_botnet).reduce((a,c)=>a+c.count,0);
-  const normal=_credsAll.filter(c=>!c.is_botnet).reduce((a,c)=>a+c.count,0);
-  mkChart('credChart','doughnut',{labels:['Botnet Listed','Normal Attempt'],datasets:[{data:[botnet,normal],backgroundColor:['#ff305488','#0a84ff88'],borderColor:['#ff3054','#0a84ff'],borderWidth:1}]},{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:10},boxWidth:12}}}});
+  _credsAll=data.credentials||[];filterCreds();
+  // Chart: attempts by service
+  const svcTotals=data.service_totals||{};
+  const labels=Object.keys(svcTotals).filter(k=>svcTotals[k]>0).sort((a,b)=>svcTotals[b]-svcTotals[a]);
+  const vals=labels.map(k=>svcTotals[k]);
+  const colors=labels.map(l=>_SVC_COLORS[l]||'#636366');
+  if(labels.length)
+    mkChart('credChart','doughnut',{labels,datasets:[{data:vals,backgroundColor:colors.map(c=>c+'88'),borderColor:colors,borderWidth:1}]},{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:10},boxWidth:12}}}});
+}
+function toggleCredLimit(){
+  _credLimit=_credLimit===0?50:0;
+  document.getElementById('credLimitBtn').textContent=_credLimit===0?'Show Top 50':'Show All';
+  filterCreds();
 }
 function filterCreds(){
   const q=(document.getElementById('credSearch').value||'').toLowerCase();
+  const svc=document.getElementById('credService').value;
   const bot=document.getElementById('credBot').value;
-  const filtered=_credsAll.filter(c=>(!q||(c.username+c.password).toLowerCase().includes(q))&&(!bot||c.is_botnet));
+  let filtered=_credsAll.filter(c=>{
+    if(q&&!(c.username+c.password+(c.service||'')).toLowerCase().includes(q))return false;
+    if(svc&&(c.service||'').toLowerCase()!==svc)return false;
+    if(bot==='botnet'&&!c.is_botnet)return false;
+    if(bot==='normal'&&c.is_botnet)return false;
+    return true;
+  });
+  const total=filtered.length;
+  if(_credLimit>0)filtered=filtered.slice(0,_credLimit);
+  const el=document.getElementById('credCount');
+  if(el)el.textContent=_credLimit>0&&total>_credLimit?`showing ${_credLimit} of ${total}`:`${total} unique pairs`;
   renderCreds(filtered);
 }
 function renderCreds(rows){
-  document.getElementById('credBody').innerHTML=rows.length?rows.map((c,i)=>`<tr><td class="mono" style="color:var(--muted)">${i+1}</td><td class="mono" style="color:var(--orange)">${c.username}</td><td class="mono">${c.password||'<span style="color:var(--muted)">(empty)</span>'}</td><td class="mono" style="font-weight:700">${fmt(c.count)}</td><td>${c.is_botnet?'<span class="badge b-crit">🤖 BOTNET</span>':'<span class="badge b-low">normal</span>'}</td></tr>`).join(''):
-    '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No credentials yet</td></tr>';
+  document.getElementById('credBody').innerHTML=rows.length?rows.map((c,i)=>`<tr>
+    <td class="mono" style="color:var(--muted)">${i+1}</td>
+    <td class="mono" style="color:var(--orange)">${c.username||'<span style="color:var(--muted)">(empty)</span>'}</td>
+    <td class="mono" style="color:var(--red)">${c.password||'<span style="color:var(--muted)">(empty)</span>'}</td>
+    <td>${_svcBadge(c.service||'unknown')}</td>
+    <td class="mono" style="font-weight:700">${fmt(c.count)}</td>
+    <td>${c.is_botnet?'<span class="badge b-crit">🤖 BOTNET</span>':'<span class="badge b-low">normal</span>'}</td>
+  </tr>`).join(''):
+    '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No credentials yet</td></tr>';
 }
 
 // ── Malware ────────────────────────────────────────────────────────────────

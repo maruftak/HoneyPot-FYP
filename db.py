@@ -641,13 +641,21 @@ def get_top_countries(hours=24, limit=20):
     """, (c, limit))
 
 
-def get_top_credentials(hours=168, limit=30):
+def get_top_credentials(hours=168, limit=500, service=None):
     c = _cutoff(hours)
+    if service:
+        return query("""
+            SELECT username, password, service, COUNT(*) cnt, SUM(is_botnet) bots
+            FROM attacks
+            WHERE timestamp>? AND username!='' AND username IS NOT NULL
+              AND service=?
+            GROUP BY username, password, service ORDER BY cnt DESC LIMIT ?
+        """, (c, service, limit))
     return query("""
-        SELECT username, password, COUNT(*) cnt, SUM(is_botnet) bots
+        SELECT username, password, service, COUNT(*) cnt, SUM(is_botnet) bots
         FROM attacks
         WHERE timestamp>? AND username!='' AND username IS NOT NULL
-        GROUP BY username, password ORDER BY cnt DESC LIMIT ?
+        GROUP BY username, password, service ORDER BY cnt DESC LIMIT ?
     """, (c, limit))
 
 

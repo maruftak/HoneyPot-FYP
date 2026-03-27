@@ -176,10 +176,10 @@ _FILE_CONTENTS = {
     "/proc/version": dev.HIK["kernel"] + "\n",
     "/proc/mounts": (
         "rootfs / rootfs rw 0 0\n"
-        "/dev/root / squashfs ro,relatime 0 0\n"
-        "proc /proc proc rw,relatime 0 0\n"
-        "tmpfs /tmp tmpfs rw,relatime 0 0\n"
-        "/dev/mtdblock3 /mnt/mtd jffs2 rw,relatime 0 0\n"
+        "/dev/root / squashfs ro,noatime 0 0\n"
+        "proc /proc proc rw,noatime 0 0\n"
+        "tmpfs /tmp tmpfs rw,noatime 0 0\n"
+        "/dev/mtdblock3 /mnt/mtd jffs2 rw,noatime 0 0\n"
     ),
     "/backup/passwords.txt": (
         "== Backup Passwords ==\n"
@@ -562,8 +562,9 @@ class FakeShell:
             return self._extra_files[path]
         if path in _FILE_CONTENTS:
             return _FILE_CONTENTS[path]
-        # Fuzzy matches
-        if "password" in path.lower() or "passwd" in path.lower():
+        # Fuzzy matches — only for specific known paths, not any path containing "password"
+        basename = os.path.basename(path)
+        if basename in ("passwd", "passwd.txt") and "etc" in path:
             return _FILE_CONTENTS["/etc/passwd"]
         if "shadow" in path.lower():
             return "cat: /etc/shadow: Permission denied\n"
@@ -594,7 +595,13 @@ class FakeShell:
         return f"cat: {args[0]}: No such file or directory\n"
 
     def _cmd_echo(self, args):
-        text = " ".join(args).replace("\\n", "\n")
+        import re as _re
+        text = " ".join(args).replace("\\n", "\n").replace("\\t", "\t")
+        # Expand $VAR and ${VAR} — bots test variable expansion to fingerprint shells
+        def _expand(m):
+            name = m.group(1) or m.group(2)
+            return self.env.get(name, "")
+        text = _re.sub(r'\$\{(\w+)\}|\$(\w+)', _expand, text)
         return text + "\n"
 
     def _cmd_uname(self, args):
@@ -1173,10 +1180,10 @@ class FakeShell:
     def _cmd_mount(self, args):
         return (
             "rootfs on / type rootfs (rw)\n"
-            "/dev/root on / type squashfs (ro,relatime)\n"
-            "proc on /proc type proc (rw,relatime)\n"
-            "tmpfs on /tmp type tmpfs (rw,relatime)\n"
-            "/dev/mtdblock3 /mnt/mtd jffs2 rw,relatime 0 0\n"
+            "/dev/root on / type squashfs (ro,noatime)\n"
+            "proc on /proc type proc (rw,noatime)\n"
+            "tmpfs on /tmp type tmpfs (rw,noatime)\n"
+            "/dev/mtdblock3 /mnt/mtd jffs2 rw,noatime 0 0\n"
         )
 
     # ─── Public accessors ─────────────────────────────────────────────────────

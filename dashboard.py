@@ -151,7 +151,10 @@ def _build_session_row(r):
         "attack_patterns":      r.get("attack_patterns",""),
         "asn":                  r.get("asn",""),
         "org":                  r.get("org",""),
-        "commands":             cmds[:5],
+        "commands":             cmds,          # full list — UI decides how many to show
+        "cmd_count":            len(cmds),
+        "payload":              (r.get("payload") or "")[:500],
+        "session_id":           r.get("session_id",""),
     }
 
 def _apply_session_filters(rows, filters):
@@ -275,15 +278,23 @@ def api_cve_exploits():
 @app.route("/api/top-credentials")
 @cached(15)
 def api_top_credentials():
-    hours = request.args.get("hours", 168, type=int)
-    rows  = db.get_top_credentials(hours)
+    hours   = request.args.get("hours", 168, type=int)
+    service = request.args.get("service", "", type=str) or None
+    rows    = db.get_top_credentials(hours, service=service)
+    # Build per-service totals for the chart
+    svc_totals = {}
+    for r in rows:
+        svc = r.get("service") or "unknown"
+        svc_totals[svc] = svc_totals.get(svc, 0) + r["cnt"]
     return jsonify({
         "credentials": [{
             "username":  r["username"],
             "password":  r["password"] or "",
+            "service":   r.get("service") or "unknown",
             "count":     r["cnt"],
             "is_botnet": bool(r.get("bots",0)),
         } for r in rows],
+        "service_totals": svc_totals,
         "total": len(rows),
     })
 
