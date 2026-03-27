@@ -778,7 +778,7 @@ def handle_telnet(conn, addr):
             out = shell.execute(cmd)
             time.sleep(0.1)
             if out:
-                conn.sendall(out.encode())
+                conn.sendall(out.replace("\n", "\r\n").encode())
             conn.sendall(prompt.encode())
             return True
 
