@@ -1533,6 +1533,184 @@ def api_threat_summary():
     })
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  ABUSEIPDB INTEGRATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+_ABUSEIPDB_REPORTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "logs", "abuseipdb_reports.json")
+
+def _load_abuseipdb_reports():
+    try:
+        if os.path.exists(_ABUSEIPDB_REPORTS_FILE):
+            with open(_ABUSEIPDB_REPORTS_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+def _save_abuseipdb_report(ip, categories, comment, score):
+    try:
+        reports = _load_abuseipdb_reports()
+        reports.append({
+            "ip":         ip,
+            "timestamp":  datetime.datetime.utcnow().isoformat(),
+            "categories": categories,
+            "comment":    comment[:300],
+            "score":      score,
+        })
+        os.makedirs(os.path.dirname(_ABUSEIPDB_REPORTS_FILE), exist_ok=True)
+        with open(_ABUSEIPDB_REPORTS_FILE, "w") as f:
+            json.dump(reports[-2000:], f)
+    except Exception:
+        pass
+
+@app.route("/api/abuseipdb/check")
+def api_abuseipdb_check():
+    """Check a single IP's AbuseIPDB confidence score."""
+    ip  = request.args.get("ip", "").strip()
+    key = request.args.get("key", "").strip() or config.ABUSEIPDB_API_KEY
+    if not ip:
+        return jsonify({"error": "ip parameter required"}), 400
+    if not key:
+        return jsonify({"error": "no_api_key",
+                        "message": "No AbuseIPDB API key configured."}), 503
+    try:
+        import urllib.request as _ur, urllib.parse as _up
+        url = ("https://api.abuseipdb.com/api/v2/check?"
+               + _up.urlencode({"ipAddress": ip, "maxAgeInDays": 90, "verbose": ""}))
+        req = _ur.Request(url, headers={"Key": key, "Accept": "application/json"})
+        with _ur.urlopen(req, timeout=8) as resp:
+            raw = json.loads(resp.read())
+        d   = raw.get("data", {})
+        already_reported = any(r["ip"] == ip for r in _load_abuseipdb_reports())
+        return jsonify({
+            "ip":               d.get("ipAddress", ip),
+            "score":            d.get("abuseConfidenceScore", 0),
+            "country":          d.get("countryCode", ""),
+            "isp":              d.get("isp", ""),
+            "usage_type":       d.get("usageType", ""),
+            "total_reports":    d.get("totalReports", 0),
+            "num_users":        d.get("numDistinctUsers", 0),
+            "last_reported":    d.get("lastReportedAt", ""),
+            "is_tor":           bool(d.get("isTor", False)),
+            "domain":           d.get("domain", ""),
+            "already_reported": already_reported,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/abuseipdb/report", methods=["POST"])
+def api_abuseipdb_report():
+    """Submit an IP report to AbuseIPDB."""
+    body       = request.get_json(force=True) or {}
+    ip         = (body.get("ip") or "").strip()
+    categories = (body.get("categories") or "18,22").strip()
+    comment    = (body.get("comment") or "")[:1000]
+    key        = (body.get("key") or "").strip() or config.ABUSEIPDB_API_KEY
+
+    if not ip:
+        return jsonify({"error": "ip required"}), 400
+    if not key:
+        return jsonify({"error": "no_api_key",
+                        "message": "No AbuseIPDB API key configured."}), 503
+    try:
+        import urllib.request as _ur, urllib.parse as _up
+        payload = _up.urlencode({
+            "ip":         ip,
+            "categories": categories,
+            "comment":    comment,
+        }).encode()
+        req = _ur.Request(
+            "https://api.abuseipdb.com/api/v2/report",
+            data=payload,
+            headers={"Key": key, "Accept": "application/json"},
+        )
+        with _ur.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+        score = raw.get("data", {}).get("abuseConfidenceScore", 0)
+        _save_abuseipdb_report(ip, categories, comment, score)
+        return jsonify({"success": True, "ip": ip, "score": score})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/abuseipdb/bulk-check", methods=["POST"])
+def api_abuseipdb_bulk_check():
+    """Check multiple IPs at once (up to 20). Returns scores dict."""
+    body = request.get_json(force=True) or {}
+    ips  = (body.get("ips") or [])[:20]
+    key  = (body.get("key") or "").strip() or config.ABUSEIPDB_API_KEY
+    if not key:
+        return jsonify({"error": "no_api_key"}), 503
+    results = {}
+    already = {r["ip"] for r in _load_abuseipdb_reports()}
+    import urllib.request as _ur, urllib.parse as _up
+    for ip in ips:
+        try:
+            url = ("https://api.abuseipdb.com/api/v2/check?"
+                   + _up.urlencode({"ipAddress": ip, "maxAgeInDays": 90}))
+            req = _ur.Request(url, headers={"Key": key, "Accept": "application/json"})
+            with _ur.urlopen(req, timeout=6) as resp:
+                d = json.loads(resp.read()).get("data", {})
+            results[ip] = {
+                "score":          d.get("abuseConfidenceScore", 0),
+                "total_reports":  d.get("totalReports", 0),
+                "country":        d.get("countryCode", ""),
+                "isp":            d.get("isp", ""),
+                "is_tor":         bool(d.get("isTor", False)),
+                "already_reported": ip in already,
+            }
+        except Exception as e:
+            results[ip] = {"error": str(e), "score": -1}
+    return jsonify({"results": results})
+
+
+@app.route("/api/abuseipdb/history")
+def api_abuseipdb_history():
+    """Return previously reported IPs from this honeypot."""
+    reports = _load_abuseipdb_reports()
+    reports.reverse()   # newest first
+    return jsonify({"reports": reports[:200], "total": len(reports)})
+
+
+@app.route("/api/abuseipdb/save-key", methods=["POST"])
+def api_abuseipdb_save_key():
+    """Persist an API key to the environment for the running process."""
+    body = request.get_json(force=True) or {}
+    key  = (body.get("key") or "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    # Write to a key file so it survives dashboard restarts
+    key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "logs", ".abuseipdb_key")
+    try:
+        os.makedirs(os.path.dirname(key_file), exist_ok=True)
+        with open(key_file, "w") as f:
+            f.write(key.strip())
+        config.ABUSEIPDB_API_KEY = key.strip()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Load persisted API key on startup
+def _load_persisted_abuseipdb_key():
+    key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "logs", ".abuseipdb_key")
+    try:
+        if os.path.exists(key_file) and not config.ABUSEIPDB_API_KEY:
+            with open(key_file) as f:
+                k = f.read().strip()
+            if k:
+                config.ABUSEIPDB_API_KEY = k
+    except Exception:
+        pass
+
+_load_persisted_abuseipdb_key()
+
+
 @app.after_request
 def after_request_headers(resp):
     resp.headers["Access-Control-Allow-Origin"]  = "*"

@@ -155,6 +155,26 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 .loading{display:flex;align-items:center;justify-content:center;height:60px;color:var(--muted);font-family:var(--mono);font-size:11px;gap:8px;}
 .spin{animation:spin 1s linear infinite;display:inline-block}
 @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+/* AbuseIPDB styles */
+.abuse-score{display:inline-flex;align-items:center;justify-content:center;width:46px;height:22px;border-radius:4px;font-family:var(--mono);font-size:11px;font-weight:700;border:1px solid;}
+.abuse-score.s-high{background:rgba(255,48,84,.15);color:var(--red);border-color:rgba(255,48,84,.3)}
+.abuse-score.s-med{background:rgba(255,140,0,.12);color:var(--orange);border-color:rgba(255,140,0,.3)}
+.abuse-score.s-low{background:rgba(0,255,136,.1);color:var(--green);border-color:rgba(0,255,136,.2)}
+.abuse-score.s-none{background:var(--raised);color:var(--muted);border-color:var(--border)}
+.abuse-score.s-loading{color:var(--muted);border-color:var(--border);font-size:9px}
+.abuse-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;width:80px;display:inline-block;vertical-align:middle}
+.abuse-bar-fill{height:100%;border-radius:3px;transition:width .6s}
+.api-key-setup{background:rgba(10,132,255,.06);border:1px solid rgba(10,132,255,.2);border-radius:8px;padding:20px;margin-bottom:16px;}
+.abuse-cat-select{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.abuse-cat-cb{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--muted);cursor:pointer;padding:4px 10px;border:1px solid var(--border);border-radius:4px;transition:.15s}
+.abuse-cat-cb:hover{border-color:var(--blue);color:var(--text)}
+.abuse-cat-cb.selected{background:var(--blue2);border-color:rgba(10,132,255,.4);color:var(--blue)}
+.btn-report{font-family:var(--mono);font-size:10px;padding:4px 12px;border-radius:4px;border:1px solid rgba(255,48,84,.3);background:rgba(255,48,84,.08);color:var(--red);cursor:pointer;transition:.15s;white-space:nowrap}
+.btn-report:hover{background:rgba(255,48,84,.18);border-color:var(--red)}
+.btn-report:disabled{opacity:.4;cursor:default}
+.btn-report.reported{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.3);color:var(--green)}
+.btn-check{font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;border:1px solid var(--border2);background:none;color:var(--muted);cursor:pointer;transition:.15s;white-space:nowrap}
+.btn-check:hover{border-color:var(--blue);color:var(--blue)}
 /* VPN/Tor endpoint panel styles */
 .endpoint-card{background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:8px;transition:.2s;}
 .endpoint-card:hover{border-color:var(--border2)}
@@ -243,6 +263,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 
   <div class="nav-group-label">ANALYSIS</div>
   <div class="nav-item" onclick="showPanel('services',this)"><span class="ni-icon">⚡</span>Services</div>
+  <div class="nav-item" onclick="showPanel('abuseipdb',this)"><span class="ni-icon">🛡️</span>AbuseIPDB<span class="ni-badge" id="sn-abuse" style="display:none">0</span></div>
   <div class="nav-item" onclick="showPanel('report',this)"><span class="ni-icon">📄</span>Report</div>
   <div class="sidebar-footer">honeyPot v1.0.0<br><span id="sf-uptime">—</span></div>
 </nav>
@@ -669,6 +690,117 @@ tr:hover td{background:rgba(255,255,255,0.02)}
   </div>
 </div>
 
+<!-- ══ PANEL: ABUSEIPDB ══ -->
+<div class="panel" id="panel-abuseipdb">
+
+  <!-- API key banner (hidden when key is set) -->
+  <div class="api-key-setup" id="abuseKeySetup">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:22px">🔑</span>
+      <div>
+        <div style="font-family:var(--mono);font-size:12px;color:var(--blue);font-weight:700">AbuseIPDB API Key Required</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">Free key at <span style="color:var(--blue)">abuseipdb.com/account/api</span> — 1,000 checks/day free</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="abuseKeyInput" type="password" placeholder="Paste your AbuseIPDB API key…"
+        style="flex:1;background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:8px 12px;border-radius:4px;outline:none">
+      <button class="btn-sm" onclick="saveAbuseKey()" style="border-color:rgba(10,132,255,.4);color:var(--blue)">Save Key</button>
+      <button class="btn-sm" onclick="document.getElementById('abuseKeyInput').type==='password'?document.getElementById('abuseKeyInput').type='text':document.getElementById('abuseKeyInput').type='password'">👁</button>
+    </div>
+    <div id="abuseKeyStatus" style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--muted)"></div>
+  </div>
+
+  <!-- Top stats row -->
+  <div class="grid-3">
+    <div class="metric-card mc-red">
+      <div class="mc-icon">🚨</div>
+      <div class="mc-label">Total Reported</div>
+      <div class="mc-val" id="abuse-reported">—</div>
+      <div class="mc-sub">from this honeypot</div>
+    </div>
+    <div class="metric-card mc-orange">
+      <div class="mc-icon">⚠️</div>
+      <div class="mc-label">High Risk IPs</div>
+      <div class="mc-val" id="abuse-highrisk">—</div>
+      <div class="mc-sub">score ≥ 75</div>
+    </div>
+    <div class="metric-card mc-blue">
+      <div class="mc-icon">🔍</div>
+      <div class="mc-label">IPs Checked</div>
+      <div class="mc-val" id="abuse-checked">—</div>
+      <div class="mc-sub">via AbuseIPDB API</div>
+    </div>
+  </div>
+
+  <!-- Main grid: attacker table + IP lookup -->
+  <div class="grid-60-40">
+
+    <!-- Top attacking IPs with AbuseIPDB scores -->
+    <div class="card">
+      <div class="card-title">Top Attackers — Check &amp; Report
+        <div style="display:flex;gap:8px">
+          <button class="btn-sm" onclick="loadAbuseTopIPs()">↺ Refresh</button>
+          <button class="btn-sm" onclick="bulkCheckAbuseIPs()" id="bulkCheckBtn">⚡ Check All Scores</button>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>IP Address</th><th>Country</th><th>Attacks</th><th>Services</th>
+            <th>Abuse Score</th><th>Reports</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="abuseTopBody"><tr><td colspan="7" class="loading"><span class="spin">◌</span> Loading attackers…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- IP Lookup panel -->
+    <div class="card">
+      <div class="card-title">IP Lookup &amp; Manual Report</div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <input id="abuseLookupIP" type="text" placeholder="Enter IP address…"
+          style="flex:1;background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:7px 10px;border-radius:4px;outline:none"
+          onkeydown="if(event.key==='Enter')checkAbuseIP()">
+        <button class="btn-sm" onclick="checkAbuseIP()">Check</button>
+      </div>
+      <div id="abuseLookupResult" style="min-height:140px"></div>
+
+      <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px">Report Categories</div>
+        <div class="abuse-cat-select" id="abuseCatSelect">
+          <label class="abuse-cat-cb selected" data-cat="14"><input type="checkbox" checked style="display:none"> 14 — Port Scan</label>
+          <label class="abuse-cat-cb selected" data-cat="18"><input type="checkbox" checked style="display:none"> 18 — Brute Force</label>
+          <label class="abuse-cat-cb selected" data-cat="22"><input type="checkbox" checked style="display:none"> 22 — SSH</label>
+          <label class="abuse-cat-cb selected" data-cat="23"><input type="checkbox" checked style="display:none"> 23 — IoT Targeted</label>
+          <label class="abuse-cat-cb" data-cat="21"><input type="checkbox" style="display:none"> 21 — Web Attack</label>
+          <label class="abuse-cat-cb" data-cat="15"><input type="checkbox" style="display:none"> 15 — Hacking</label>
+        </div>
+        <textarea id="abuseComment" rows="3" placeholder="Comment (auto-filled from attack data)…"
+          style="width:100%;margin-top:10px;background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:8px;border-radius:4px;resize:vertical;outline:none"></textarea>
+        <button class="btn-report" style="margin-top:8px;width:100%;padding:8px" onclick="submitAbuseReport()">
+          🚨 Submit Report to AbuseIPDB
+        </button>
+        <div id="abuseReportStatus" style="margin-top:8px;font-family:var(--mono);font-size:10px;text-align:center"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Report history -->
+  <div class="card">
+    <div class="card-title">Report History — Submitted from This Honeypot
+      <button class="btn-sm" onclick="loadAbuseHistory()">↺ Refresh</button>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Timestamp</th><th>IP</th><th>Categories</th><th>Score at Report</th><th>Comment</th></tr></thead>
+        <tbody id="abuseHistoryBody"><tr><td colspan="5" class="loading"><span class="spin">◌</span></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
 <!-- ══ PANEL: REPORT ══ -->
 <div class="panel" id="panel-report">
   <div class="card">
@@ -789,6 +921,7 @@ function showPanel(name,el){
   if(name==='iot')loadIotPanel();
   if(name==='attacker')loadAttackerIntel();
   if(name==='services')loadServices();
+  if(name==='abuseipdb')loadAbuseIPDBPanel();
   if(name==='report'){loadThreatSummary();loadAttackTypes();loadCredentialAnalysis();loadAttackTimeline();}
 }
 
@@ -1096,12 +1229,19 @@ function openSessModal(idx){
       <pre style="font-family:var(--mono);font-size:10px;color:var(--muted);white-space:pre-wrap;word-break:break-all;margin:0">${escHtml(payload)}</pre>
     </div>`:''}
     <div class="modal-section">
-      <div class="modal-section-title">All attacks from ${s.ip} &nbsp;<span id="ipProfileLoading" style="color:var(--muted);font-size:10px">loading…</span></div>
+      <div class="modal-section-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>All attacks from ${s.ip} &nbsp;<span id="ipProfileLoading" style="color:var(--muted);font-size:10px">loading…</span></span>
+        <button class="btn-report" id="modalReportBtn" onclick="quickReportFromModal('${escHtml(s.ip)}','${escHtml(s.service)}','${escHtml(s.attack_type||'')}','${escHtml(s.country||'')}','${escHtml(s.cve||'')}')" style="font-size:10px">
+          🚨 Report to AbuseIPDB
+        </button>
+      </div>
+      <div id="modalAbuseScore" style="margin-bottom:8px"></div>
       <div id="ipProfileBody" style="overflow-x:auto"></div>
     </div>`;
   document.getElementById('sessModal').classList.remove('hidden');
   document.body.style.overflow='hidden';
   loadIpProfile(s.ip);
+  loadModalAbuseScore(s.ip);
 }
 function closeSessModal(){
   document.getElementById('sessModal').classList.add('hidden');
@@ -1708,6 +1848,274 @@ async function loadAttackTimeline(){
     {label:'CVEs',data:b.map(x=>x.cve_count||0),borderColor:'#ff3054',backgroundColor:'rgba(255,48,84,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
     {label:'Botnets',data:b.map(x=>x.botnet_count||0),borderColor:'#ff8c00',backgroundColor:'rgba(255,140,0,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
   ]},{plugins:{legend:{display:true,labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9}}}}});
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  ABUSEIPDB
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _abuseScores={};   // ip -> score data cached in-tab
+
+function abuseScoreBadge(score){
+  if(score<0) return `<span class="abuse-score s-none">—</span>`;
+  const cls=score>=75?'s-high':score>=25?'s-med':'s-low';
+  return `<span class="abuse-score ${cls}">${score}%</span>`;
+}
+
+function abuseScoreBar(score){
+  if(score<0)return '';
+  const col=score>=75?'var(--red)':score>=25?'var(--orange)':'var(--green)';
+  return `<span class="abuse-bar"><span class="abuse-bar-fill" style="width:${score}%;background:${col}"></span></span>`;
+}
+
+function abuseCatLabel(cats){
+  const names={14:'PortScan',18:'BruteForce',22:'SSH',23:'IoT',21:'WebAttack',15:'Hacking'};
+  return (cats||'').split(',').map(c=>names[c.trim()]||c).join(' · ');
+}
+
+function getSelectedCats(){
+  return [...document.querySelectorAll('#abuseCatSelect .abuse-cat-cb.selected')]
+    .map(el=>el.dataset.cat).join(',');
+}
+
+// Toggle category checkboxes
+document.addEventListener('click',e=>{
+  const cb=e.target.closest('.abuse-cat-cb');
+  if(cb&&cb.closest('#abuseCatSelect'))cb.classList.toggle('selected');
+});
+
+async function saveAbuseKey(){
+  const key=(document.getElementById('abuseKeyInput').value||'').trim();
+  if(!key){document.getElementById('abuseKeyStatus').textContent='Please enter a key.';return;}
+  const r=await fetch('/api/abuseipdb/save-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
+  const d=await r.json();
+  if(d.success){
+    document.getElementById('abuseKeyStatus').innerHTML='<span style="color:var(--green)">✓ Key saved. Reloading…</span>';
+    document.getElementById('abuseKeySetup').style.display='none';
+    setTimeout(loadAbuseTopIPs,500);
+  } else {
+    document.getElementById('abuseKeyStatus').innerHTML=`<span style="color:var(--red)">Error: ${d.error||'unknown'}</span>`;
+  }
+}
+
+async function loadAbuseIPDBPanel(){
+  await Promise.all([loadAbuseTopIPs(), loadAbuseHistory()]);
+  // Check if API key is configured
+  const r=await api('/api/abuseipdb/check?ip=1.1.1.1');
+  if(r&&r.error==='no_api_key'){
+    document.getElementById('abuseKeySetup').style.display='';
+  } else {
+    document.getElementById('abuseKeySetup').style.display='none';
+  }
+}
+
+async function loadAbuseTopIPs(){
+  const data=await api('/api/top-ips?hours=168&limit=30');
+  const ips=(data&&data.ips)||[];
+  document.getElementById('abuseTopBody').innerHTML=ips.length?ips.map(ip=>{
+    const cached=_abuseScores[ip.ip];
+    const scoreHtml=cached
+      ?abuseScoreBadge(cached.score)+' '+abuseScoreBar(cached.score)
+      :`<span class="abuse-score s-none" id="abs-${ip.ip.replace(/\./g,'-')}">—</span>`;
+    const reported=cached&&cached.already_reported;
+    return `<tr>
+      <td class="mono" style="color:var(--blue)">${ip.ip}</td>
+      <td style="font-size:11px">${ip.country||'—'}</td>
+      <td class="mono" style="color:var(--red)">${ip.cnt}</td>
+      <td style="font-size:10px">${(ip.services||[]).join(' ')}</td>
+      <td id="score-cell-${ip.ip.replace(/\./g,'-')}">${scoreHtml}</td>
+      <td id="rep-cell-${ip.ip.replace(/\./g,'-')}" style="font-size:10px;color:var(--muted)">${cached?cached.total_reports||0:'—'}</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px">
+        <button class="btn-check" onclick="checkOneAbuseIP('${ip.ip}')">Score</button>
+        <button class="btn-report${reported?' reported':''}" id="rbtn-${ip.ip.replace(/\./g,'-')}"
+          onclick="quickReport('${ip.ip}','${(ip.services||[]).join(',')}','${ip.country||''}')"
+          ${reported?'disabled':''}>
+          ${reported?'✓ Reported':'🚨 Report'}
+        </button>
+      </td>
+    </tr>`;
+  }).join(''):`<tr><td colspan="7" class="loading">No attackers found</td></tr>`;
+}
+
+async function checkOneAbuseIP(ip){
+  const id=ip.replace(/\./g,'-');
+  const cell=document.getElementById(`score-cell-${id}`);
+  if(cell)cell.innerHTML=`<span class="abuse-score s-loading">…</span>`;
+  const d=await api(`/api/abuseipdb/check?ip=${encodeURIComponent(ip)}`);
+  if(!d||d.error){
+    if(cell)cell.innerHTML=`<span class="abuse-score s-none" style="color:var(--red);font-size:9px">${d&&d.error==='no_api_key'?'No Key':'Err'}</span>`;
+    return;
+  }
+  _abuseScores[ip]=d;
+  if(cell)cell.innerHTML=abuseScoreBadge(d.score)+' '+abuseScoreBar(d.score);
+  const rc=document.getElementById(`rep-cell-${id}`);
+  if(rc)rc.textContent=d.total_reports||0;
+}
+
+async function bulkCheckAbuseIPs(){
+  const btn=document.getElementById('bulkCheckBtn');
+  btn.textContent='Checking…';btn.disabled=true;
+  const rows=[...document.querySelectorAll('#abuseTopBody tr')];
+  const ips=rows.map(r=>r.querySelector('td.mono')?.textContent?.trim()).filter(Boolean).slice(0,20);
+  const d=await fetch('/api/abuseipdb/bulk-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ips})}).then(r=>r.json()).catch(()=>null);
+  if(d&&d.results){
+    Object.entries(d.results).forEach(([ip,res])=>{
+      _abuseScores[ip]={...(_abuseScores[ip]||{}), ...res};
+      const id=ip.replace(/\./g,'-');
+      const cell=document.getElementById(`score-cell-${id}`);
+      if(cell)cell.innerHTML=res.score>=0?abuseScoreBadge(res.score)+' '+abuseScoreBar(res.score):`<span style="color:var(--red);font-size:10px">err</span>`;
+      const rc=document.getElementById(`rep-cell-${id}`);
+      if(rc&&res.total_reports!==undefined)rc.textContent=res.total_reports;
+    });
+  }
+  // Update stats
+  const scores=Object.values(_abuseScores).filter(s=>s.score>=0);
+  document.getElementById('abuse-checked').textContent=scores.length;
+  document.getElementById('abuse-highrisk').textContent=scores.filter(s=>s.score>=75).length;
+  btn.textContent='⚡ Check All Scores';btn.disabled=false;
+}
+
+async function checkAbuseIP(){
+  const ip=(document.getElementById('abuseLookupIP').value||'').trim();
+  if(!ip)return;
+  const el=document.getElementById('abuseLookupResult');
+  el.innerHTML=`<div class="loading"><span class="spin">◌</span> Looking up ${ip}…</div>`;
+  const d=await api(`/api/abuseipdb/check?ip=${encodeURIComponent(ip)}`);
+  if(!d||d.error){
+    el.innerHTML=`<div style="color:var(--red);font-family:var(--mono);font-size:11px;padding:10px">${d&&d.error==='no_api_key'?'⚠️ No API key configured — save your key above.':'Error: '+(d&&d.error||'request failed')}</div>`;
+    return;
+  }
+  _abuseScores[ip]=d;
+  const scoreCol=d.score>=75?'var(--red)':d.score>=25?'var(--orange)':'var(--green)';
+  el.innerHTML=`
+    <div style="background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <div style="font-size:36px;font-family:var(--mono);font-weight:700;color:${scoreCol}">${d.score}%</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:13px;color:var(--text)">${ip}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${d.country||'—'} · ${d.isp||'—'}</div>
+          ${d.is_tor?'<span class="badge b-purple" style="margin-top:4px">Tor Exit Node</span>':''}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:var(--mono);font-size:10px;color:var(--muted)">
+        <div>Reports (90d): <span style="color:var(--text)">${d.total_reports}</span></div>
+        <div>Distinct users: <span style="color:var(--text)">${d.num_users||0}</span></div>
+        <div>Usage type: <span style="color:var(--text)">${d.usage_type||'—'}</span></div>
+        <div>Last reported: <span style="color:var(--text)">${d.last_reported?fmtTime(d.last_reported):'Never'}</span></div>
+        <div>Domain: <span style="color:var(--text)">${d.domain||'—'}</span></div>
+        <div>Already reported by us: <span style="${d.already_reported?'color:var(--green)':'color:var(--muted)'}">${d.already_reported?'Yes':'No'}</span></div>
+      </div>
+    </div>`;
+  // Pre-fill comment
+  document.getElementById('abuseComment').value=buildAbuseComment(ip,'','','','');
+}
+
+function buildAbuseComment(ip,service,attackType,country,cve){
+  let parts=[`Honeypot attack detected from ${ip}.`];
+  if(country)parts.push(`Origin: ${country}.`);
+  if(service)parts.push(`Services targeted: ${service}.`);
+  if(attackType)parts.push(`Attack type: ${attackType}.`);
+  if(cve)parts.push(`CVE exploited: ${cve}.`);
+  parts.push('Captured by IoT honeypot (Hikvision/DVR emulation). Attacker attempted credential brute-force and/or shell access.');
+  return parts.join(' ');
+}
+
+async function quickReport(ip,services,country){
+  const ip_=ip.trim();
+  document.getElementById('abuseLookupIP').value=ip_;
+  document.getElementById('abuseComment').value=buildAbuseComment(ip_,services,'',country,'');
+  // Auto-select categories based on services
+  document.querySelectorAll('#abuseCatSelect .abuse-cat-cb').forEach(el=>{
+    const cat=el.dataset.cat;
+    const sel=(cat==='14'||cat==='18'||cat==='22'||cat==='23');
+    el.classList.toggle('selected',sel);
+  });
+  await checkAbuseIP();
+  showPanel('abuseipdb',document.querySelector('[onclick*="abuseipdb"]'));
+}
+
+async function quickReportFromModal(ip,service,attackType,country,cve){
+  document.getElementById('abuseLookupIP').value=ip;
+  document.getElementById('abuseComment').value=buildAbuseComment(ip,service,attackType,country,cve);
+  // Select appropriate categories
+  document.querySelectorAll('#abuseCatSelect .abuse-cat-cb').forEach(el=>{
+    const cat=el.dataset.cat;
+    let sel=cat==='18'||cat==='23'; // brute-force + IoT always
+    if(service==='ssh'||service==='SSH')sel=sel||(cat==='22');
+    if(attackType&&attackType.includes('scan'))sel=sel||(cat==='14');
+    if(cve)sel=sel||(cat==='15');
+    el.classList.toggle('selected',sel);
+  });
+  closeSessModal();
+  showPanel('abuseipdb',document.querySelector('[onclick*="abuseipdb"]'));
+  await checkAbuseIP();
+}
+
+async function submitAbuseReport(){
+  const ip=(document.getElementById('abuseLookupIP').value||'').trim();
+  const cats=getSelectedCats();
+  const comment=(document.getElementById('abuseComment').value||'').trim();
+  const statusEl=document.getElementById('abuseReportStatus');
+  if(!ip){statusEl.innerHTML='<span style="color:var(--red)">Enter an IP address first.</span>';return;}
+  if(!cats){statusEl.innerHTML='<span style="color:var(--red)">Select at least one category.</span>';return;}
+  statusEl.innerHTML='<span style="color:var(--muted)"><span class="spin">◌</span> Submitting…</span>';
+  const d=await fetch('/api/abuseipdb/report',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ip,categories:cats,comment})
+  }).then(r=>r.json()).catch(err=>({error:String(err)}));
+  if(d.success){
+    statusEl.innerHTML=`<span style="color:var(--green)">✓ Reported! New confidence score: ${d.score}%</span>`;
+    // Mark button reported in top table
+    const id=ip.replace(/\./g,'-');
+    const rb=document.getElementById(`rbtn-${id}`);
+    if(rb){rb.textContent='✓ Reported';rb.disabled=true;rb.className='btn-report reported';}
+    // Update stats badge
+    await loadAbuseHistory();
+  } else {
+    const msg=d.error==='no_api_key'?'No API key configured — save your key above.':d.error||'Request failed';
+    statusEl.innerHTML=`<span style="color:var(--red)">Error: ${msg}</span>`;
+  }
+}
+
+async function loadAbuseHistory(){
+  const data=await api('/api/abuseipdb/history');
+  const reports=(data&&data.reports)||[];
+  // Update stats
+  document.getElementById('abuse-reported').textContent=data&&data.total||0;
+  const sn=document.getElementById('sn-abuse');
+  if(reports.length>0){sn.textContent=data.total;sn.style.display='';}
+  document.getElementById('abuseHistoryBody').innerHTML=reports.length?reports.map(r=>`<tr>
+    <td style="color:var(--muted);font-size:10px;font-family:var(--mono)">${fmtTime(r.timestamp)}</td>
+    <td class="mono" style="color:var(--blue)">${r.ip}</td>
+    <td style="font-size:10px;color:var(--muted)">${abuseCatLabel(r.categories)}</td>
+    <td>${abuseScoreBadge(r.score||0)}</td>
+    <td style="font-size:10px;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(r.comment||'—')}</td>
+  </tr>`).join(''):`<tr><td colspan="5" class="loading">No reports submitted yet</td></tr>`;
+}
+
+async function loadModalAbuseScore(ip){
+  const el=document.getElementById('modalAbuseScore');
+  if(!el)return;
+  const cached=_abuseScores[ip];
+  if(cached){
+    el.innerHTML=renderModalAbuseScore(ip,cached);return;
+  }
+  el.innerHTML=`<span style="font-family:var(--mono);font-size:10px;color:var(--muted)">Checking AbuseIPDB… <span class="spin">◌</span></span>`;
+  const d=await api(`/api/abuseipdb/check?ip=${encodeURIComponent(ip)}`);
+  if(d&&!d.error){_abuseScores[ip]=d;el.innerHTML=renderModalAbuseScore(ip,d);}
+  else el.innerHTML='';
+}
+
+function renderModalAbuseScore(ip,d){
+  const col=d.score>=75?'var(--red)':d.score>=25?'var(--orange)':'var(--green)';
+  return `<div style="display:flex;align-items:center;gap:12px;background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:4px">
+    <div style="font-family:var(--mono);font-size:11px;color:var(--muted)">AbuseIPDB:</div>
+    <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${col}">${d.score}%</div>
+    ${abuseScoreBar(d.score)}
+    <div style="font-size:10px;color:var(--muted)">${d.total_reports} reports · ${d.isp||'—'}</div>
+    ${d.is_tor?'<span class="badge b-purple">Tor</span>':''}
+    ${d.already_reported?'<span class="badge b-low">Already Reported</span>':''}
+  </div>`;
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────

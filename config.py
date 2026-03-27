@@ -42,6 +42,11 @@ GEOIP_DB       = os.path.join(BASE_DIR, "GeoLite2-City.mmdb")
 # ─── VirusTotal ───────────────────────────────────────────────────────────────
 VIRUSTOTAL_API_KEY = os.getenv("VT_API_KEY", "")
 
+# ─── AbuseIPDB ────────────────────────────────────────────────────────────────
+# Free API key from https://www.abuseipdb.com/account/api
+# Set env var ABUSEIPDB_KEY or paste key here
+ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_KEY", "")
+
 # ─── Dashboard Authentication ────────────────────────────────────────────────
 DASHBOARD_USERNAME = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASS", "honeypot2024!")
