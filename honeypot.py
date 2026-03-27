@@ -572,17 +572,27 @@ def handle_telnet(conn, addr):
             """Strip IAC/control bytes, keep printable ASCII + tab."""
             return "".join(c for c in s if ord(c) >= 32 or c == "\t").strip()
 
+        # Shared byte buffer — persists across _recv_line calls AND the shell loop.
+        # Critical for bots that send "user\r\npassword\r\ncmd\r\n" all at once:
+        # without this, recv reads everything but _recv_line only consumes up to
+        # the first \r\n, silently dropping the rest.
+        _sock_buf = bytearray()
+
         def _recv_line(timeout=25, server_echo=True):
             """Buffer chars until newline — handles char-mode telnet (each keystroke = separate recv).
-            Bots sending full lines work too since \r/\n flushes immediately.
+            Bots sending full lines work too since \\r/\\n flushes immediately.
             Returns (line_str, ok) where ok=False means the connection closed."""
             buf = ""
             while True:
-                try:
-                    conn.settimeout(timeout)
-                    chunk = conn.recv(64)
-                except socket.timeout:
-                    return buf, bool(buf)
+                if _sock_buf:
+                    chunk = bytes(_sock_buf)
+                    _sock_buf.clear()
+                else:
+                    try:
+                        conn.settimeout(timeout)
+                        chunk = conn.recv(64)
+                    except socket.timeout:
+                        return buf, bool(buf)
                 if not chunk:
                     return buf, False   # connection closed
                 i = 0
@@ -594,9 +604,11 @@ def handle_telnet(conn, addr):
                     if b == 13:            # CR — consume trailing LF/NUL if present
                         if i + 1 < len(chunk) and chunk[i + 1] in (0, 10):
                             i += 1
+                        _sock_buf.extend(chunk[i + 1:])  # save remaining bytes
                         conn.sendall(b"\r\n")
                         return buf, True
                     if b == 10:            # bare LF
+                        _sock_buf.extend(chunk[i + 1:])  # save remaining bytes
                         conn.sendall(b"\r\n")
                         return buf, True
                     elif b in (127, 8):    # backspace / DEL
@@ -728,11 +740,15 @@ def handle_telnet(conn, addr):
 
         for _ in range(2000):
             _random_delay(5, 30)
-            try:
-                conn.settimeout(120)
-                raw = conn.recv(256)
-            except socket.timeout:
-                break
+            if _sock_buf:
+                raw = bytes(_sock_buf)
+                _sock_buf.clear()
+            else:
+                try:
+                    conn.settimeout(120)
+                    raw = conn.recv(256)
+                except socket.timeout:
+                    break
             if not raw:
                 break
 

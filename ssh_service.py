@@ -27,10 +27,10 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════
 
 RATE_LIMIT_WINDOW             = 60
-MAX_CONNECTIONS_PER_MINUTE    = 15
-MAX_FAILED_AUTH_BEFORE_TARPIT = 5
-TARPIT_DURATION               = 300
-TARPIT_DELAY                  = 1.5
+MAX_CONNECTIONS_PER_MINUTE    = 60   # raised — bots spray fast
+MAX_FAILED_AUTH_BEFORE_TARPIT = 50   # raised — don't block after just 5 failures
+TARPIT_DURATION               = 120  # reduced — 2 min not 5, keeps engagement
+TARPIT_DELAY                  = 0.5  # reduced — just slow, not stall
 
 # Persistent RSA host key — generated once, saved next to this file
 _KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ssh_host_rsa_key")
@@ -84,17 +84,18 @@ def _get_host_key():
 # ═══════════════════════════════════════════════════════════════════════════
 
 _BANNERS = [
-    # Old dropbear versions — top targets for Mirai and variants
-    "SSH-2.0-dropbear_0.52",
+    # Dropbear — the SSH daemon on virtually every IoT camera/DVR/router.
+    # Mirai scanners explicitly look for Dropbear to prioritize targets.
+    "SSH-2.0-dropbear_0.52",      # very old — massively targeted
+    "SSH-2.0-dropbear_0.52",      # duplicated to weight older version higher
+    "SSH-2.0-dropbear_2016.74",
     "SSH-2.0-dropbear_2016.74",
     "SSH-2.0-dropbear_2019.78",
     "SSH-2.0-dropbear_2020.81",
-    # Old OpenSSH — embedded/IoT Linux devices (DVR, router, camera)
+    "SSH-2.0-dropbear_2022.83",
+    # Old OpenSSH on embedded Linux (rare on cameras, common on routers)
     "SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2",
-    "SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13",
-    "SSH-2.0-OpenSSH_5.5p1 Debian-6+squeeze5",
-    "SSH-1.99-OpenSSH_4.3",              # supports SSH1 — old Cisco/HP/embedded
-    "SSH-2.0-OpenSSH_6.7p1 Debian-5+deb8u4",
+    "SSH-1.99-OpenSSH_4.3",       # supports SSH1 — old Cisco/HP/embedded
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -173,6 +174,18 @@ _FS = {
         "[Network]\nIP=192.168.1.108\nMAC=44:19:B6:7A:2C:D9\n"
         "Gateway=192.168.1.1\nDNS1=8.8.8.8\n\n"
         "[Admin]\nUsername=admin\nPassword=Admin@2024!\nEnableSSH=true\n"
+    ),
+    "/root/passwords.txt": (             # HONEYTOKEN — fake cred dump keeps attacker engaged
+        "# Device credentials - DO NOT SHARE\n"
+        "admin:Admin@2024!\n"
+        "root:R00t_Hik2024!\n"
+        "backup:Backup@Secure1\n"
+        "operator:Op3rator2024\n"
+        "# Cloud/remote access\n"
+        "cloud_user:Cloud@Admin123\n"
+        "vpn_user:VPN_P@ss2024\n"
+        "# Database\n"
+        "dbadmin:DB_S3cret2024!\n"
     ),
     "/root/.env": (                     # HONEYTOKEN
         "ADMIN_PASS=Admin@2024!\nDB_HOST=192.168.1.50\n"
@@ -721,8 +734,9 @@ class _HoneypotServer(paramiko.ServerInterface):
 
         accept = False
         if is_valid:
-            if self.session["auth_attempts"] >= 2 or random.random() < 0.10:
-                accept = True
+            # Accept on first attempt — bots expect immediate success.
+            # Previous "require 2 attempts" was blocking automated tools.
+            accept = True
 
         if accept:
             self.session["authenticated"] = True

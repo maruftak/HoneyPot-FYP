@@ -313,21 +313,32 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                         "original_commands": replay_session["commands"],
                     }))
         
-        # Process FTP commands
+        # Process FTP commands — use an internal buffer so pipelined clients
+        # (scanners that send USER+PASS+LIST in one TCP segment) work correctly.
+        _ftp_buf = b""
         for _ in range(50):
-            conn.settimeout(30 if not is_tarpitted else 60)
-            try:
-                line = conn.recv(1024).decode(errors="ignore").strip()
-            except socket.timeout:
-                break
-            
+            # Drain buffered lines before reading more from socket
+            if b"\n" not in _ftp_buf:
+                conn.settimeout(30 if not is_tarpitted else 60)
+                try:
+                    chunk = conn.recv(1024)
+                    if not chunk:
+                        break
+                    _ftp_buf += chunk
+                except socket.timeout:
+                    break
+
+            if b"\n" not in _ftp_buf:
+                continue
+            raw_line, _ftp_buf = _ftp_buf.split(b"\n", 1)
+            line = raw_line.decode(errors="ignore").strip()
             if not line:
-                break
-            
+                continue
+
             # Tarpit delay
             if is_tarpitted:
                 time.sleep(FTP_TARPIT_DELAY)
-            
+
             parts = line.split(" ", 1)
             cmd   = parts[0].upper()
             arg   = parts[1] if len(parts) > 1 else ""
@@ -388,8 +399,9 @@ def handle_ftp(conn, addr, log_attack=None, geoip_func=None, intel_fields_func=N
                     except Exception:
                         pass
                 
-                # Accept after 2nd attempt or if valid
-                if (session["auth_attempts"] >= 2 and is_valid) or is_bot or is_ht_c:
+                # Accept on first attempt for botnet/honeytoken creds; otherwise
+                # require 2nd attempt (simulates real camera's auth delay)
+                if is_valid or is_bot or is_ht_c:
                     session["authenticated"] = True
                     conn.sendall(b"230 Login successful.\r\n")
                     
