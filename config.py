@@ -86,6 +86,9 @@ SERVICE_PORTS = {
     "modbus":     502,
     # ── Remote access ────────────────────────────────────────────────────────
     "vnc":        5900,
+    # ── Cloud-native / container attack surface ──────────────────────────────
+    "redis":      6379,  # Redis — common RCE via CONFIG SET + BGSAVE
+    "docker":     2375,  # Docker daemon API — container escape / cryptominer
 }
 
 # ─── Threat Intelligence ──────────────────────────────────────────────────────

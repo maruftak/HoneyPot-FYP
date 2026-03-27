@@ -30,6 +30,8 @@ import dahua_service         # Dahua DVR proprietary protocol (port 37777)
 import xmeye_service         # HiSilicon/XMEye DVR protocol (port 34567)
 import tr069_service         # TR-069 CWMP ISP router management (port 7547)
 import adb_service           # Android Debug Bridge (port 5555)
+import redis_service          # Redis RCE honeypot (port 6379)
+import docker_service         # Docker daemon API honeypot (port 2375)
 
 # ─── State ────────────────────────────────────────────────────────────────────
 _seen_ips    = set()
@@ -1426,6 +1428,42 @@ def handle_adb(conn, addr):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  REDIS (port 6379)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_redis(conn, addr):
+    try:
+        _inc("sessions")
+        redis_service.handle_redis(
+            conn, addr,
+            log_attack=db.log_attack,
+            inc_counter=_inc,
+        )
+    except Exception as e:
+        print(f"[!] Redis handler error: {e}")
+        try: conn.close()
+        except: pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DOCKER API (port 2375)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_docker(conn, addr):
+    try:
+        _inc("sessions")
+        docker_service.handle_docker(
+            conn, addr,
+            log_attack=db.log_attack,
+            inc_counter=_inc,
+        )
+    except Exception as e:
+        print(f"[!] Docker handler error: {e}")
+        try: conn.close()
+        except: pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  SERVICES MAP
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1450,6 +1488,8 @@ _SERVICES = [
     (handle_adb,                        config.SERVICE_PORTS["adb"],       "Android-ADB",   "tcp"),
     (handle_tftp,                       config.SERVICE_PORTS["tftp"],      "TFTP",          "udp"),
     (handle_ssdp,                       config.SERVICE_PORTS["ssdp"],      "SSDP/UPnP",     "udp"),
+    (handle_redis,                      config.SERVICE_PORTS["redis"],     "Redis",         "tcp"),
+    (handle_docker,                     config.SERVICE_PORTS["docker"],    "Docker-API",    "tcp"),
 ]
 
 
