@@ -1235,7 +1235,23 @@ input[type=submit]{width:100%;padding:10px;background:#0073aa;color:#fff;border:
 <input type="hidden" name="redirect_to" value="/wp-admin/">
 </form></div></body></html>"""),
 
-    "/wp-config.php": (403, "text/plain", b"403 Forbidden"),
+    "/wp-config.php": (200, "text/plain", b"""<?php
+/** WordPress config - DO NOT SHARE */
+define('DB_NAME',     'wordpress_db');
+define('DB_USER',     'wp_dbuser');
+define('DB_PASSWORD', 'Wpr3ss_P@ss2024');
+define('DB_HOST',     'localhost');
+define('DB_CHARSET',  'utf8');
+define('AUTH_KEY',         'K9#mP2$xL@nQ7vR');
+define('SECURE_AUTH_KEY',  'B4&jH8*wN3!yT6u');
+define('LOGGED_IN_KEY',    'V7%cE1$oM9#kA2p');
+define('AUTH_SALT',        'N2!hF6*rD4@xW8q');
+$table_prefix = 'wp_';
+define('WP_DEBUG', false);
+if ( !defined('ABSPATH') )
+    define('ABSPATH', dirname(__FILE__) . '/');
+require_once(ABSPATH . 'wp-settings.php');
+"""),
 
     "/phpMyAdmin/": (200, "text/html", b"""<!DOCTYPE html>
 <html><head><title>phpMyAdmin</title>
@@ -1870,13 +1886,44 @@ def handle_http(conn, addr, https=False, *,
         })
         new_ip_alert_func(ip, gdata["country"], gdata["city"], svc)
 
+        # ── Hikvision login POST — accept weak/botnet creds, redirect to camera UI ──
+        # Real cameras redirect to /doc/page/main.asp on success and re-display
+        # the login page with an error on failure. Returning a real session keeps
+        # automated scanners probing further instead of moving on.
+        if method == "POST" and path in ("/doc/page/login.asp", "/web/login", "/login"):
+            _fields = _parse_post_body(post_body) if post_body else {}
+            _user   = (_fields.get("username") or _fields.get("user") or
+                       _fields.get("usr") or "").strip()
+            _pass   = (_fields.get("password") or _fields.get("pass") or
+                       _fields.get("pwd") or "").strip()
+            # Accept any known weak/botnet cred OR common IoT defaults
+            _weak = {("admin","admin"),("admin","12345"),("admin",""),
+                     ("root","root"),("root","12345"),("admin","password"),
+                     ("admin","123456"),("admin","admin123"),("admin","hikvision")}
+            _login_ok = (_user, _pass) in _weak or check_botnet_func(_user, _pass)
+            if _login_ok:
+                import random as _r, time as _t
+                _sid = "".join(_r.choices("0123456789ABCDEF", k=32))
+                conn.sendall(_http_resp(302, "text/html", b"",
+                    f"Location: /doc/page/main.asp\r\n"
+                    f"Set-Cookie: WebSession={_sid}; Path=/\r\n"))
+            else:
+                _err = LOGIN_PAGE.replace(
+                    'id="username"',
+                    'id="username" style="border-color:#c00"'
+                ).replace("</form>",
+                    '<p style="color:#c00;font-size:12px;margin:4px 0 0">Invalid username or password.</p></form>'
+                )
+                conn.sendall(_http_resp(200, "text/html", _err.encode()))
+            return
+
         # ── CVE exploitation responses ────────────────────────────────────────
         # CVE-2021-36260: Hikvision command injection via /SDK/webLanguage
         # Automated exploit tools POST XML like: <language>$(id)</language>
         # A vulnerable device executes the command and returns output.
         # Returning realistic output makes tools mark the device as "pwned"
         # and proceed to drop payloads — which we then capture.
-        if method == "POST" and ("webLanguage" in path or "webLanguage" in raw_body):
+        if method in ("POST", "PUT") and ("webLanguage" in path or "webLanguage" in raw_body):
             injected = ""
             m = re.search(r"<language>\$\(([^)]+)\)</language>", raw_body)
             if not m:
@@ -1921,11 +1968,14 @@ def handle_http(conn, addr, https=False, *,
         if method == "POST" and any(x in path for x in ["/boaform/", "/goform/"]):
             fields = _parse_post_body(post_body) if post_body else {}
             injected = fields.get("cmdinput") or fields.get("cmd") or fields.get("command") or ""
-            from fake_commands import FakeShell as _FS35394
-            _sh2 = _FS35394(ip)
-            out = _sh2.execute(injected) if injected else "uid=0(root) gid=0(root)\n"
-            conn.sendall(_http_resp(200, "text/html",
-                f"<html><body><pre>{out}</pre></body></html>".encode()))
+            if injected:
+                # Log the injected command but DO NOT echo output back — real Boa
+                # firmware silently executes and redirects, giving no output to attacker
+                from fake_commands import FakeShell as _FS35394
+                _FS35394(ip).execute(injected)
+            # Real Realtek/Boa response: redirect to main page (no output leak)
+            conn.sendall(_http_resp(302, "text/html", b"",
+                "Location: /\r\n"))
             return
 
         # ── IoT CVE / botnet-targeted endpoint handlers ───────────────────────

@@ -45,14 +45,14 @@ def _should_tarpit_ftp(ip):
 
 # ─── FTP Banners (IoT/Embedded Style) ─────────────────────────────────────
 _FTP_BANNERS = [
+    "220 IPC FTP server ready.\r\n",               # Hikvision IPC exact format
+    "220 Hikvision DVR FTP Server V1.0\r\n",
+    "220 Hikvision DS-2CD2043G2-I FTP Service\r\n",
+    "220 DVR FTP Server Ready.\r\n",
     "220 (vsFTPd 2.3.4)\r\n",           # Famous backdoored version — heavily fingerprinted
     "220 (vsFTPd 2.2.2)\r\n",           # Old vulnerable version
-    "220 Hikvision DVR FTP Server V1.0\r\n",
-    "220 (vsFTPd 3.0.5)\r\n",
-    "220 FTP Server ready.\r\n",
-    "220 DVR FTP Server Ready.\r\n",
-    "220 Hikvision DS-2CD2043G2-I FTP Service\r\n",
-    "220 Welcome to Camera FTP Service\r\n",
+    "220 XMeye FTP server (1.0) ready.\r\n",
+    "220 IP Camera FTP Service V1.2\r\n",
 ]
 
 # ─── Weak Credentials (Expanded) ──────────────────────────────────────────
