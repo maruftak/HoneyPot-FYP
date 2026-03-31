@@ -149,13 +149,33 @@ def _build_server_init(desktop_name: bytes = b"DS-2CD2043G2-I") -> bytes:
 
 def _build_framebuffer_update() -> bytes:
     """
-    Send a 64×64 tile of the Hikvision grey login screen colour (#1a1a2e).
-    Small enough to be fast, realistic enough to keep the attacker engaged.
+    Send a realistic Hikvision camera login screen framebuffer.
+    Layout: dark navy background (#1a1a2e) with a lighter login panel strip in the center.
+    Full 1920x1080 resolution split into 3 horizontal rects to keep payload manageable.
     """
-    header      = struct.pack(">BBH", 0, 0, 1)                   # type=0, pad, 1 rect
-    rect_header = struct.pack(">HHHHi", 0, 0, 64, 64, 0)         # x,y,w,h, enc=raw
-    pixel       = b"\x1a\x1a\x2e\xff"                             # dark navy, 32bpp
-    return header + rect_header + pixel * (64 * 64)
+    rects = []
+
+    # Top band: dark navy (#1a1a2e) — 1920×400
+    rects.append(struct.pack(">HHHHi", 0, 0, 1920, 400, 0))
+    rects.append(b"\x1a\x1a\x2e\xff" * (1920 * 400))
+
+    # Middle band: slightly lighter panel (#242442) — 1920×280 — simulates login box area
+    rects.append(struct.pack(">HHHHi", 0, 400, 1920, 280, 0))
+    rects.append(b"\x24\x24\x42\xff" * (1920 * 280))
+
+    # Bottom band: dark navy (#1a1a2e) — 1920×400
+    rects.append(struct.pack(">HHHHi", 0, 680, 1920, 400, 0))
+    rects.append(b"\x1a\x1a\x2e\xff" * (1920 * 400))
+
+    num_rects = 3
+    header = struct.pack(">BBH", 0, 0, num_rects)
+    return header + b"".join(rects)
+
+
+def _build_server_cut_text(text: str) -> bytes:
+    """ServerCutText — pushes text to client clipboard on connect."""
+    encoded = text.encode("latin-1", errors="replace")
+    return struct.pack(">BBBBBI", 3, 0, 0, 0, 0, len(encoded)) + encoded
 
 
 def _build_security_result_ok() -> bytes:
@@ -293,6 +313,11 @@ def handle_vnc(
 
         # ── Phase 5: Server init ───────────────────────────────────────────
         conn.sendall(_build_server_init())
+
+        # ── Push device info to client clipboard (real Hikvision cameras do this) ──
+        # Human operators who follow up on scanner hits see this immediately
+        cut_text = "Hikvision DS-2CD2043G2-I | FW:V5.7.15 | http://192.168.1.108"
+        conn.sendall(_build_server_cut_text(cut_text))
 
         # ── Phase 6: Message loop ──────────────────────────────────────────
         conn.settimeout(30)

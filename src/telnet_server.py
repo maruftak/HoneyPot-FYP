@@ -80,9 +80,10 @@ def handle_telnet_client(client, addr):
         session_files = []
         fake_files = {}  # filename -> content
         while True:
-            # Prompt: BusyBox style
+            # Prompt: BusyBox style — use fake IoT hostname, NEVER os.uname() (exposes real EC2 host)
             prompt_user = username if username else "root"
-            prompt = f"{prompt_user}@{os.uname().nodename if hasattr(os, 'uname') else '(none)'}:{cwd}# " if prompt_user == "root" else f"{prompt_user}@{os.uname().nodename if hasattr(os, 'uname') else '(none)'}:{cwd}$ "
+            _fake_host = "(none)"
+            prompt = f"{prompt_user}@{_fake_host}:{cwd}# " if prompt_user == "root" else f"{prompt_user}@{_fake_host}:{cwd}$ "
             client.sendall(prompt.encode())
             cmd_data = client.recv(1024)
             if not cmd_data:
@@ -125,9 +126,9 @@ def handle_telnet_client(client, addr):
                     client.sendall(b"logout\r\n")
                     return
                 elif base_cmd == "busybox":
-                    client.sendall(b"BusyBox v1.22.1 (2014-06-11 17:48:36 CST) multi-call binary.\r\n")
+                    client.sendall(b"BusyBox v1.31.1 (2021-10-19 08:36:54 UTC) multi-call binary.\r\n")
                     client.sendall(b"Usage: busybox [function] [arguments]...\r\n")
-                    client.sendall(b"Available applets: ls, cat, echo, pwd, cd, rm, history, clear, help, exit, ...\r\n")
+                    client.sendall(b"Available applets: ls, cat, echo, pwd, cd, rm, chmod, wget, sh, ash, ...\r\n")
                 elif base_cmd == "uptime":
                     client.sendall(b" 12:34:56 up 14 days,  6:22,  1 user,  load average: 0.00, 0.01, 0.05\r\n")
                 elif base_cmd == "date":
@@ -259,16 +260,16 @@ def handle_telnet_client(client, addr):
                     client.sendall(f"\r\n--- {target_ip} ping statistics ---\r\n".encode())
                     client.sendall(f"{count} packets transmitted, {count} received, 0% packet loss\r\n".encode())
 
-                elif base_cmd.startswith("./"):
-                    # AMAZING FEATURE 3: Validate if file exists. 
-                    # If it exists, throw arch error. If not, throw realistic "not found"
-                    target_file = base_cmd[2:]
-                    if target_file in session_files:
+                elif base_cmd.startswith("./") or (base_cmd.startswith("/") and base_cmd not in ["/etc/passwd"]):
+                    target_file = base_cmd[2:] if base_cmd.startswith("./") else base_cmd.split("/")[-1]
+                    if target_file in session_files or base_cmd in session_files:
+                        # Bot executed downloaded malware — log it and silently succeed
+                        # (real IoT malware daemonizes silently; returning error breaks the kill-chain)
                         session_data["attack_type"] = "malware_execution"
                         session_data["threat_level"] = "critical"
-                        client.sendall(f"{base_cmd}: line 1: syntax error: unexpected word (expecting \")\")\r\n".encode())
+                        pass  # silent — bot thinks it worked and moved on
                     else:
-                        client.sendall(f"{base_cmd}: command not found\r\n".encode())
+                        client.sendall(f"ash: {base_cmd}: not found\r\n".encode())
                         
                 elif base_cmd == "cat":
                     if len(parts) > 1:
@@ -347,8 +348,8 @@ def handle_telnet_client(client, addr):
                     text = " ".join(parts[1:]).strip('"').strip("'")
                     client.sendall(f"{text}\r\n".encode())
                     
-                elif base_cmd in ["sh", "bash", "ash", "system", "enable"]:
-                    pass # Silently accept shells
+                elif base_cmd in ["sh", "bash", "ash", "system", "enable", "shell"]:
+                    pass # Silently accept shells — Mirai kill-chain: enable→system→shell→sh
                     
                 elif base_cmd in ["export", "HISTFILE=/dev/null", "HISTSIZE=0", "ulimit"]:
                     pass # Silently accept anti-forensics / history wiping attempts
@@ -367,8 +368,27 @@ def handle_telnet_client(client, addr):
                 elif base_cmd in ["exit", "quit", "logout"]:
                     break
                     
-                elif base_cmd == "busybox":
-                    client.sendall(b"BusyBox v1.22.1 (2014-06-11)\r\n")
+                elif base_cmd in ("busybox", "/bin/busybox"):
+                    if len(parts) > 1:
+                        sub = parts[1]
+                        sub_up = sub.upper()
+                        # Mirai variant probe: busybox ECCHI / busybox SORA / etc.
+                        # Real BusyBox returns "<NAME>: applet not found" for unknown applets
+                        std_applets = {"cat","ls","ps","sh","ash","echo","chmod","wget","cp",
+                                       "mv","rm","hostname","id","kill","mkdir","touch","grep",
+                                       "find","tar","mount","umount","dd","awk","sed","wc"}
+                        if sub.lower() not in std_applets:
+                            client.sendall(f"{sub}: applet not found\r\n".encode())
+                        elif sub.lower() == "hostname":
+                            if len(parts) > 2:
+                                pass  # busybox hostname NAME — silent set
+                            else:
+                                client.sendall(b"(none)\r\n")
+                        else:
+                            # Delegate: treat as bare command
+                            client.sendall(b"")
+                    else:
+                        client.sendall(b"BusyBox v1.31.1 (2021-10-19 08:36:54 UTC) multi-call binary.\r\n")
                     
                 # Removed the 'help' command so it correctly falls through to "command not found" 
                 # like the real Hikvision device does!
