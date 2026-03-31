@@ -40,7 +40,11 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:9998;
 .tstat-val{font-family:var(--mono);font-size:15px;font-weight:700;color:#fff}
 .tstat-val.red{color:var(--red)}.tstat-val.green{color:var(--green)}.tstat-val.orange{color:var(--orange)}
 .device-tag{font-family:var(--mono);font-size:10px;color:var(--green);background:var(--green2);border:1px solid rgba(0,255,136,0.2);padding:4px 10px;border-radius:4px;white-space:nowrap;}
-#refreshBtn{margin-left:auto;background:none;border:1px solid var(--border2);color:var(--muted);font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;cursor:pointer;transition:.2s;}
+.tb-range{display:flex;align-items:center;gap:3px;margin-left:auto;margin-right:8px}
+.tb-range-btn{background:none;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:9px;padding:4px 8px;border-radius:4px;cursor:pointer;transition:.2s;letter-spacing:.5px}
+.tb-range-btn:hover{border-color:var(--border2);color:var(--text)}
+.tb-range-btn.active{border-color:rgba(0,255,136,0.4);color:var(--green);background:var(--green2)}
+#refreshBtn{background:none;border:1px solid var(--border2);color:var(--muted);font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;cursor:pointer;transition:.2s;}
 #refreshBtn:hover{border-color:var(--green);color:var(--green)}
 .sidebar{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:52px;height:calc(100vh - 52px);overflow-y:auto;}
 .nav-group-label{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;padding:12px 16px 6px;}
@@ -241,6 +245,14 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="tstat"><div class="tstat-lbl">Uptime</div><div class="tstat-val green" id="tb-uptime">—</div></div>
   </div>
   <div class="device-tag">Hikvision DS-2CD2043G2-I | V5.7.15</div>
+  <div class="tb-range">
+    <button class="tb-range-btn" onclick="setGlobalRange('1h',this)">1H</button>
+    <button class="tb-range-btn" onclick="setGlobalRange('6h',this)">6H</button>
+    <button class="tb-range-btn" onclick="setGlobalRange('24h',this)">24H</button>
+    <button class="tb-range-btn active" onclick="setGlobalRange('7d',this)">7D</button>
+    <button class="tb-range-btn" onclick="setGlobalRange('30d',this)">30D</button>
+    <button class="tb-range-btn" onclick="setGlobalRange('all',this)">ALL</button>
+  </div>
   <button id="refreshBtn" onclick="refresh()">↺ Refresh</button>
 </header>
 
@@ -333,6 +345,21 @@ tr:hover td{background:rgba(255,255,255,0.02)}
       <div class="card-title">Botnet Family Distribution</div>
       <div class="chart-wrap" style="height:180px"><canvas id="botnetChart"></canvas></div>
     </div>
+    <div class="card" id="card-botnet-names">
+      <div class="card-title">Active Botnet Names
+        <span id="botnet-names-total" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:8px"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Set via hostname</div>
+          <div id="botnet-names-list" style="display:flex;flex-direction:column;gap:5px"></div>
+        </div>
+        <div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Variant signatures</div>
+          <div id="botnet-sigs-list" style="display:flex;flex-direction:column;gap:5px"></div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -343,7 +370,8 @@ tr:hover td{background:rgba(255,255,255,0.02)}
       <div class="section-actions">
         <select id="mapHours" onchange="loadMap()" style="background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px">
           <option value="1">Last 1h</option><option value="6">Last 6h</option>
-          <option value="24" selected>Last 24h</option><option value="168">Last 7d</option>
+          <option value="24">Last 24h</option><option value="168" selected>Last 7d</option>
+          <option value="720">Last 30d</option><option value="8760">All time</option>
         </select>
       </div>
     </div>
@@ -939,7 +967,7 @@ function mkChart(id,type,data,opts={}){
 
 // ── Overview ───────────────────────────────────────────────────────────────
 async function loadOverview(){
-  const h={'24h':24,'7d':168,'30d':720}[S.timeRange]||24;
+  const h={'1h':1,'6h':6,'24h':24,'7d':168,'30d':720,'all':8760}[S.timeRange]||168;
   const [s,countries,ips,tl,heatmap,botnet,iotStats,anonStats]=await Promise.all([
     api('/api/stats?hours='+h),api('/api/countries?hours='+h),api('/api/top-ips?hours='+h+'&limit=10'),
     api('/api/chart-data?range='+S.timeRange),api('/api/hourly-heatmap'),
@@ -1032,6 +1060,35 @@ async function loadOverview(){
     const colors=['#ff3054','#ff8c00','#ffd60a','#0a84ff','#bf5af2','#00ff88'];
     if(labels.length)mkChart('botnetChart','doughnut',{labels,datasets:[{data:vals,backgroundColor:colors.slice(0,labels.length).map(c=>c+'aa'),borderColor:colors.slice(0,labels.length),borderWidth:1}]},{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9},boxWidth:10}}}});
   }
+
+  // Load botnet names widget
+  loadBotnetNames(h);
+}
+
+async function loadBotnetNames(hours){
+  const data = await api('/api/botnet-names?hours='+(hours||168));
+  if(!data) return;
+  const total = document.getElementById('botnet-names-total');
+  if(total) total.textContent = data.total_named ? data.total_named+' sessions named' : '';
+
+  const nameColors = ['#00ff88','#ffd60a','#ff8c00','#ff3054','#bf5af2','#0a84ff'];
+
+  function renderList(elId, items, colorSet){
+    const el = document.getElementById(elId);
+    if(!el) return;
+    if(!items||!items.length){el.innerHTML='<span style="font-family:var(--mono);font-size:10px;color:var(--muted)">none yet</span>';return;}
+    const max = items[0].count||1;
+    el.innerHTML = items.slice(0,8).map((it,i)=>`
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:${colorSet[i%colorSet.length]};min-width:90px;letter-spacing:.5px">${it.name}</span>
+        <div style="flex:1;height:4px;background:var(--border);border-radius:2px">
+          <div style="width:${Math.round(it.count/max*100)}%;height:100%;background:${colorSet[i%colorSet.length]};border-radius:2px;transition:width .6s"></div>
+        </div>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);min-width:24px;text-align:right">${it.count}</span>
+      </div>`).join('');
+  }
+  renderList('botnet-names-list', data.names, nameColors);
+  renderList('botnet-sigs-list',  data.sigs,  ['#ff8c00','#ffd60a','#ff3054','#bf5af2','#0a84ff','#00ff88']);
 }
 
 function renderHeatmap(buckets){
@@ -1048,7 +1105,40 @@ async function setTimeRange(r,btn){
   S.timeRange=r;
   document.querySelectorAll('#panel-overview .btn-sm').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
+  // Sync topbar range buttons
+  const tbLabel={'24h':'24H','7d':'7D','30d':'30D'};
+  document.querySelectorAll('.tb-range-btn').forEach(b=>b.classList.toggle('active',b.textContent===(tbLabel[r]||'')));
   loadOverview();
+}
+
+function setGlobalRange(r,btn){
+  S.timeRange=r;
+  const hMap={'1h':1,'6h':6,'24h':24,'7d':168,'30d':720,'all':8760};
+  const h=hMap[r]||168;
+  // Sync topbar buttons
+  document.querySelectorAll('.tb-range-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  // Sync overview panel 24H/7D/30D buttons
+  const ovLabel={'24h':'24H','7d':'7D','30d':'30D'};
+  document.querySelectorAll('#panel-overview .btn-sm').forEach(b=>b.classList.toggle('active',b.textContent===(ovLabel[r]||'')));
+  // Sync ALL panel selects — set to closest valid option value
+  function _syncSelect(id, val, max){
+    const el=document.getElementById(id); if(!el) return;
+    const clamped = String(Math.min(val, max));
+    // Try exact match first, then closest available option
+    const opts = Array.from(el.options).map(o=>o.value);
+    el.value = opts.includes(clamped) ? clamped : (opts.includes(String(val)) ? String(val) : opts[opts.length-1]);
+  }
+  _syncSelect('sessHours',  r==='all'?0:h,  8760);
+  _syncSelect('svcHours',   h, 168);
+  _syncSelect('reportHours',h, 720);
+  _syncSelect('mapHours',   h, 8760);
+  // Clear sessions date range inputs so the hours dropdown takes effect
+  const sFrom=document.getElementById('sessFrom');const sTo=document.getElementById('sessTo');
+  if(sFrom)sFrom.value='';if(sTo)sTo.value='';
+  // Reload current panel
+  if(S.panel==='overview')loadOverview();
+  else showPanel(S.panel,document.querySelector('.nav-item.active'));
 }
 
 // ── Map ────────────────────────────────────────────────────────────────────
@@ -1064,7 +1154,17 @@ function initMap(){
 }
 
 async function loadMap(){
-  const hours=document.getElementById('mapHours')?.value||24;
+  // Use global range if map dropdown hasn't been manually overridden
+  const hMap={'1h':1,'6h':6,'24h':24,'7d':168,'30d':720,'all':8760};
+  const globalH=hMap[S.timeRange]||168;
+  const el=document.getElementById('mapHours');
+  // Keep dropdown in sync with global range
+  if(el && el.dataset.userOverride!=='1'){
+    const opts=Array.from(el.options).map(o=>o.value);
+    const target=String(globalH);
+    el.value=opts.includes(target)?target:opts[opts.length-1];
+  }
+  const hours=(el?.value)||globalH;
   const data=await api(`/api/geo-data?hours=${hours}`);
   if(!data)return;
   initMap();if(!S.map)return;

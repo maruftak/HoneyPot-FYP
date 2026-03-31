@@ -213,6 +213,22 @@ def handle_rtsp(
             f'nonce="{nonce}", algorithm="MD5", qop="auth"'
         )
 
+    def _www_auth_basic() -> str:
+        return 'Basic realm="HikVision IP Camera"'
+
+    def _parse_basic(auth_hdr: str) -> tuple:
+        """Extract (username, password) from Basic auth header."""
+        import base64 as _b64
+        try:
+            encoded = auth_hdr[6:].strip()
+            decoded = _b64.b64decode(encoded).decode(errors="ignore")
+            if ":" in decoded:
+                u, p = decoded.split(":", 1)
+                return u[:50], p[:50]
+        except Exception:
+            pass
+        return "", ""
+
     try:
         conn.settimeout(15)
         request_count = 0
@@ -275,28 +291,68 @@ def handle_rtsp(
                             "user_agent": user_agent,
                             "scanner":    tool,
                         })
+                        # Send both Basic and Digest challenges — real cameras do this
+                        # Basic: captured by Hydra/Medusa/simple brute-force tools
+                        # Digest: captured by more advanced tools
                         conn.sendall((
                             f"RTSP/1.0 401 Unauthorized\r\n"
                             f"CSeq: {cseq}\r\n"
+                            f"WWW-Authenticate: {_www_auth_basic()}\r\n"
                             f"WWW-Authenticate: {_www_auth()}\r\n"
                             f"Server: Hikvision RTSP Server {fw}\r\n"
                             f"Date: {_now()}\r\n\r\n"
                         ).encode())
                         continue
 
-                    # Parse Digest credentials
-                    auth       = _parse_digest(auth_hdr)
-                    username   = auth.get("username", "")
-                    resp_hash  = auth.get("response", "")
                     session["auth_attempts"] += 1
 
-                    # Accept if username is in weak creds list, OR on 3rd+ attempt
-                    # (keeps attacker engaged and captures multiple credential pairs)
-                    auth_ok = (
-                        username in _WEAK_CREDS
-                        or session["auth_attempts"] >= 2
-                        or len(resp_hash) == 32   # accept any properly-formed Digest
-                    )
+                    # Handle Basic Auth (Hydra, Medusa, Ncrack, IoT brute-force scripts)
+                    if auth_hdr.lower().startswith("basic "):
+                        username, password = _parse_basic(auth_hdr)
+                        # Accept any weak/known IoT credential
+                        auth_ok = username in _WEAK_CREDS and (
+                            password in _WEAK_CREDS.get(username, [])
+                            or session["auth_attempts"] >= 3
+                        )
+                        _log("rtsp_auth_success" if auth_ok else "rtsp_auth_failed",
+                             "high" if auth_ok else "medium", {
+                            "method":      method,
+                            "path":        url,
+                            "username":    username,
+                            "password":    password,
+                            "auth_method": "basic",
+                            "attempts":    session["auth_attempts"],
+                            "user_agent":  user_agent,
+                            "scanner":     tool,
+                        })
+                        if auth_ok:
+                            session["authenticated"] = True
+                            session["username"]       = username
+                        else:
+                            if session["auth_attempts"] > 8:
+                                conn.sendall((f"RTSP/1.0 403 Forbidden\r\nCSeq: {cseq}\r\n\r\n").encode())
+                                break
+                            conn.sendall((
+                                f"RTSP/1.0 401 Unauthorized\r\n"
+                                f"CSeq: {cseq}\r\n"
+                                f"WWW-Authenticate: {_www_auth_basic()}\r\n"
+                                f"WWW-Authenticate: {_www_auth()}\r\n"
+                                f"Server: Hikvision RTSP Server {fw}\r\n\r\n"
+                            ).encode())
+                            continue
+
+                    else:
+                        # Parse Digest credentials
+                        auth       = _parse_digest(auth_hdr)
+                        username   = auth.get("username", "")
+                        resp_hash  = auth.get("response", "")
+
+                        # Accept if username is in weak creds list, OR on 3rd+ attempt
+                        auth_ok = (
+                            username in _WEAK_CREDS
+                            or session["auth_attempts"] >= 2
+                            or len(resp_hash) == 32
+                        )
 
                     if auth_ok and not session["authenticated"]:
                         session["authenticated"] = True

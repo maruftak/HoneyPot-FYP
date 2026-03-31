@@ -616,6 +616,42 @@ def api_hourly_heatmap():
 def api_botnet_distribution():
     return jsonify(db.get_botnet_distribution())
 
+@app.route("/api/botnet-names")
+@cached(60)
+def api_botnet_names():
+    import re as _re
+    hours = request.args.get("hours", 168, type=int)
+    rows = db.query(
+        "SELECT commands FROM attacks WHERE commands LIKE '%busybox%' AND timestamp > ?",
+        (db._cutoff(hours),)
+    )
+    names = {}   # name -> count
+    sigs  = {}   # variant signature -> count
+    for row in rows:
+        try:
+            cmds = json.loads(row["commands"])
+        except Exception:
+            continue
+        for cmd in cmds:
+            # Hostname-based botnet naming: busybox hostname NAME
+            m = _re.search(r'busybox\s+hostname\s+([A-Za-z0-9_\-]{2,20})', cmd)
+            if m:
+                name = m.group(1)
+                if name.upper() not in ("HOSTNAME", "DVR", "CAMERA", "ROUTER", "NVR", "NONE"):
+                    names[name] = names.get(name, 0) + 1
+            # Variant signature probe: /bin/busybox WORD (expects "applet not found")
+            m2 = _re.match(r'^/?bin/busybox\s+([A-Z][A-Za-z0-9]{3,15})$', cmd.strip())
+            if m2:
+                sig = m2.group(1)
+                sigs[sig] = sigs.get(sig, 0) + 1
+    names_sorted = sorted(names.items(), key=lambda x: -x[1])
+    sigs_sorted  = sorted(sigs.items(),  key=lambda x: -x[1])
+    return jsonify({
+        "names": [{"name": k, "count": v} for k, v in names_sorted[:20]],
+        "sigs":  [{"name": k, "count": v} for k, v in sigs_sorted[:20]],
+        "total_named": sum(names.values()),
+    })
+
 @app.route("/api/live-log")
 @cached(1)
 def api_live_log():

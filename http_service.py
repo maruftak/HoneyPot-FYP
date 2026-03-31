@@ -1718,6 +1718,20 @@ def handle_http(conn, addr, https=False, *,
         raw_body  = raw_str.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in raw_str else ""
         post_body = raw_body[:1000]
 
+        # ── HTTP Basic Auth capture ───────────────────────────────────────────
+        # Extract credentials from Authorization: Basic <b64> header
+        _auth_hdr = next((l.split(":", 1)[1].strip() for l in lines
+                          if l.lower().startswith("authorization:")), "")
+        _basic_user = _basic_pass = ""
+        if _auth_hdr.lower().startswith("basic "):
+            import base64 as _b64
+            try:
+                _decoded = _b64.b64decode(_auth_hdr[6:].strip()).decode(errors="ignore")
+                if ":" in _decoded:
+                    _basic_user, _basic_pass = _decoded.split(":", 1)
+            except Exception:
+                pass
+
         # ── Capture PUT uploads and multipart POST file uploads ───────────────
         content_type = next((l.split(":",1)[1].strip() for l in lines if l.lower().startswith("content-type:")), "")
         if method in ("PUT", "POST") and raw_body:
@@ -1811,11 +1825,16 @@ def handle_http(conn, addr, https=False, *,
             log_honeytoken_func(ts_func(), ip, "HTTP_GET", path, svc,
                                 gdata["country"], gdata["city"])
 
-        # ── POST credential capture (login + forgot-password flows) ───────────
+        # ── POST credential capture + HTTP Basic Auth capture ────────────────
         username = password = ""
+        # Pick up HTTP Basic Auth credentials first
+        if _basic_user or _basic_pass:
+            username, password = _basic_user[:50], _basic_pass[:50]
         if method == "POST" and post_body:
             fields             = _parse_post_body(post_body)
-            username, password = _extract_creds(fields)
+            _form_user, _form_pass = _extract_creds(fields)
+            if _form_user or _form_pass:
+                username, password = _form_user, _form_pass
             # also capture email from forgot-password step 1
             email = fields.get("email", "")
             if username or password or email:
@@ -1889,6 +1908,42 @@ def handle_http(conn, addr, https=False, *,
             **intel_fields_func(gdata),
         })
         new_ip_alert_func(ip, gdata["country"], gdata["city"], svc)
+
+        # ── HTTP Basic Auth challenge for ISAPI / camera API paths ──────────────
+        # Real Hikvision cameras protect /ISAPI/* and /Streaming/* with Basic Auth.
+        # Without the challenge header, brute-force tools (Hydra, Ncrack, Shodan bots)
+        # skip the endpoint entirely. Returning 401 + WWW-Authenticate makes them probe.
+        _BASIC_AUTH_PATHS = (
+            "/ISAPI/", "/Streaming/", "/SDK/", "/ptz/", "/onvif/",
+            "/cgi-bin/snapshot", "/snapshot", "/cgi-bin/hi3510/param",
+        )
+        _needs_auth = any(path.startswith(p) for p in _BASIC_AUTH_PATHS)
+        if _needs_auth and not _basic_user:
+            # No credentials supplied — issue Basic Auth challenge
+            conn.sendall(_http_resp(401, "application/xml",
+                b'<?xml version="1.0"?><ResponseStatus>'
+                b'<statusCode>401</statusCode>'
+                b'<statusString>Unauthorized</statusString>'
+                b'</ResponseStatus>',
+                'WWW-Authenticate: Basic realm="IPCamera"\r\n'))
+            return
+
+        # Accept basic-auth credentials to any ISAPI path so tools get "in"
+        if _needs_auth and _basic_user:
+            _weak_ok = {("admin","admin"),("admin","12345"),("admin",""),
+                        ("root","root"),("root","12345"),("admin","password"),
+                        ("admin","123456"),("admin","admin123"),("admin","hikvision"),
+                        ("admin","12345678"),("admin","888888")}
+            if (_basic_user, _basic_pass) not in _weak_ok:
+                # Wrong creds — re-challenge (keeps brute forcers looping)
+                conn.sendall(_http_resp(401, "application/xml",
+                    b'<?xml version="1.0"?><ResponseStatus>'
+                    b'<statusCode>401</statusCode>'
+                    b'<statusString>Unauthorized</statusString>'
+                    b'</ResponseStatus>',
+                    'WWW-Authenticate: Basic realm="IPCamera"\r\n'))
+                return
+            # Correct creds — fall through to normal ISAPI response
 
         # ── Hikvision login POST — accept weak/botnet creds, redirect to camera UI ──
         # Real cameras redirect to /doc/page/main.asp on success and re-display

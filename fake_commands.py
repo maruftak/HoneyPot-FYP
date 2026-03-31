@@ -567,16 +567,46 @@ class FakeShell:
         cmd_str = resolved + (" " + " ".join(args) if args else "")
         self._user_procs[pid] = cmd_str
 
-        # The binary "runs" silently (like real malware)
+        # ARM binaries assembled via echo -ne chunks: realistic exec-format error
+        content = self._extra_files.get(resolved, "")
+        if isinstance(content, str) and content.startswith("\x7fELF"):
+            return ""  # runs silently on matching arch
+        # Shell scripts (.sh, .k, .b, .ri, .x, .fxcat, .dropper etc) run silently
+        if fname.endswith(".sh") or fname.startswith("."):
+            return ""
+        # Unknown assembled binary — looks like arch mismatch
+        if content and not isinstance(content, str):
+            return f"-ash: {fname}: Exec format error\n"
         return ""
 
     # ─── Core commands ────────────────────────────────────────────────────────
+
+    def _update_prompt(self):
+        """Rewrite self.prompt to reflect current working directory."""
+        cwd = self.cwd
+        display = "~" if cwd == "/root" else cwd
+        p = self.prompt
+        import re as _re
+        # "root@host:dir# " style
+        m = _re.match(r'(root@[^:]+:)[^#]+(#\s*)', p)
+        if m:
+            self.prompt = m.group(1) + display + m.group(2)
+        # "[root@host dir]# " style
+        elif "[root@" in p:
+            m2 = _re.match(r'(\[root@\S+\s+)[^\]]+(\]#?\s*)', p)
+            if m2:
+                self.prompt = m2.group(1) + display + m2.group(2)
+        # "/ # " or "PATH # " style
+        elif p.rstrip().endswith("#"):
+            self.prompt = display + " # "
+        self.env["PS1"] = self.prompt
 
     def _cmd_cd(self, args):
         target = args[0] if args else "~"
         resolved = self._resolve(target)
         if self._fs_isdir(resolved):
             self.cwd = resolved
+            self._update_prompt()
             return ""
         return f"cd: {target}: No such file or directory\n"
 
@@ -631,15 +661,30 @@ class FakeShell:
             lines.append(f"{perm}  1 root  root  {size:>8}  Feb 18 09:12  {f}")
         return "\n".join(lines) + "\n"
 
+    # ARM ELF stub returned when bots cat a binary — passes Mirai's anti-honeypot ELF check
+    _ELF_STUB = (
+        "\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # magic + ARM ident
+        "\x02\x00\x28\x00\x01\x00\x00\x00\x54\x80\x00\x00\x34\x00\x00\x00"
+        "\x00\x00\x00\x00\x00\x05\x00\x00\x34\x00\x20\x00\x01\x00\x28\x00"
+        "\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x80\x00\x00"
+        + "\x00" * 32
+        + "/lib/libc.so.0\x00/lib/ld-linux.so.3\x00busybox\x00"
+    )
+    _BIN_DIRS = frozenset(("/bin", "/sbin", "/usr/bin", "/usr/sbin"))
+
     def _cmd_cat(self, args):
         if not args:
             return "cat: missing operand\n"
         path = self._resolve(args[0])
         # Check session-level extra files first
         if path in self._extra_files:
-            return self._extra_files[path]
+            content = self._extra_files[path]
+            return content if isinstance(content, str) else ""
         if path in _FILE_CONTENTS:
             return _FILE_CONTENTS[path]
+        # Binary executables: return ARM ELF stub — passes Mirai's anti-honeypot check
+        if os.path.dirname(path) in self._BIN_DIRS and self._fs_isfile(path):
+            return self._ELF_STUB
         # Fuzzy matches — only for specific known paths, not any path containing "password"
         basename = os.path.basename(path)
         if basename in ("passwd", "passwd.txt") and "etc" in path:

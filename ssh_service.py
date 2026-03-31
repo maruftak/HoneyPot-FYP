@@ -605,7 +605,9 @@ def _execute(cmd: str, cwd: str = "/root") -> str:
     # ── silent commands ───────────────────────────────────────────────────
     if verb in ("chmod","chown","chgrp","mkdir","rm","mv","cp","touch",
                 "kill","killall","export","unset","sync","cd","ln",
-                "crontab","sed","awk","tr","xargs"):
+                "crontab","sed","awk","tr","xargs",
+                # Mirai kill-chain commands — must be silent or bot detects honeypot
+                "enable","system","shell","sh","ping","tftp"):
         return ""
 
     # ── which ─────────────────────────────────────────────────────────────
@@ -628,8 +630,36 @@ def _execute(cmd: str, cwd: str = "/root") -> str:
     if verb == "grep":
         return ""
 
+    # ── busybox multi-call — handle sub-commands ─────────────────────────
+    if verb in ("busybox", "/bin/busybox"):
+        sub = args[0].upper() if args else ""
+        sub2 = args[0].lower() if args else ""
+        # Mirai variant check: busybox ECCHI / busybox SORA / etc.
+        if sub and re.match(r'^[A-Z0-9]{2,20}$', sub) and sub not in (
+                "CAT","LS","PS","ID","CP","MV","RM","SH","WC","DU","DF","DD"):
+            # Bot is announcing its variant name — echo it back (real busybox does this)
+            return f"{sub}: applet not found\n"
+        # hostname subcommand
+        if sub2 == "hostname":
+            if len(args) >= 2:
+                return ""   # hostname SET — silent
+            return "IPC\n"
+        # cat subcommand (e.g. /bin/busybox cat /bin/echo → ELF bytes for anti-detect)
+        if sub2 == "cat":
+            target = args[1] if len(args) > 1 else ""
+            _BIN_DIRS = ("/bin", "/sbin", "/usr/bin", "/usr/sbin")
+            if any(target.startswith(d + "/") or target == d for d in _BIN_DIRS):
+                # Return ARM ELF stub as latin-1 string — proves binary is real ELF
+                _elf = b"\x7f\x45\x4c\x46\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00"
+                return _elf.decode("latin-1")
+            return _FS.get(target, f"cat: {target}: No such file or directory\n")
+        # Other busybox sub-commands — run as if bare command
+        if sub2:
+            return _execute(" ".join([sub2] + args[1:]), cwd)
+        return f"BusyBox v1.31.1 (2021-10-19 08:36:54 UTC) multi-call binary.\n"
+
     # ── shells ────────────────────────────────────────────────────────────
-    if verb in ("sh","bash","ash","/bin/sh","/bin/bash","/bin/ash","/bin/busybox"):
+    if verb in ("sh","bash","ash","/bin/sh","/bin/bash","/bin/ash"):
         return ""
 
     # ── python ────────────────────────────────────────────────────────────
@@ -805,11 +835,23 @@ class _HoneypotServer(paramiko.ServerInterface):
 # INTERACTIVE SHELL
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _make_prompt(base: str, cwd: str) -> str:
+    """Update the directory portion of a prompt when cwd changes."""
+    display = "~" if cwd in ("/root", "~") else cwd
+    # Handles: root@HOST:DIR# and [root@HOST DIR]#
+    updated = re.sub(r"(:\S+)(#\s*)$", lambda m: f":{display}{m.group(2)}", base)
+    if updated != base:
+        return updated
+    updated = re.sub(r"(\s)\S+(\]#\s*)$", lambda m: f"{m.group(1)}{display}{m.group(2)}", base)
+    return updated if updated != base else base
+
+
 def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool,
                log_malware=None, log_honeytoken=None):
-    prompt = random.choice(_PROMPTS)
-    buf    = ""
-    _cwd   = "/root"   # session cwd — start in home directory
+    _base_prompt = random.choice(_PROMPTS)
+    buf  = ""
+    _cwd = "/root"   # session cwd — start in home directory
+    prompt = _base_prompt
 
     channel.send(
         b"\r\nWelcome to Hikvision IP Camera\r\n"
@@ -895,13 +937,14 @@ def _run_shell(channel, session: dict, ip: str, log_attack, is_tarpitted: bool,
                         except Exception:
                             pass
 
-                    # Handle cd before _execute (updates session cwd)
+                    # Handle cd before _execute (updates session cwd + prompt)
                     _cd_parts = cmd.strip().split()
                     if _cd_parts and _cd_parts[0] == "cd":
                         _dest = _cd_parts[1] if len(_cd_parts) > 1 else "/root"
                         _resolved = _resolve_path(_dest, _cwd)
                         if _resolved in _DIRS or _resolved == "/root":
                             _cwd = _resolved
+                        prompt = _make_prompt(_base_prompt, _cwd)
                         # cd is always silent
                         channel.send(prompt.encode())
                         continue

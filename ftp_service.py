@@ -15,10 +15,10 @@ _ftp_failed_auth_tracker = defaultdict(int)
 _ftp_tarpit_ips = {}
 
 FTP_RATE_LIMIT_WINDOW = 60
-FTP_MAX_CONNECTIONS_PER_MINUTE = 8
-FTP_MAX_FAILED_AUTH_BEFORE_TARPIT = 3
-FTP_TARPIT_DURATION = 300
-FTP_TARPIT_DELAY = 1.5
+FTP_MAX_CONNECTIONS_PER_MINUTE = 80   # raised: let brute-force tools spray creds
+FTP_MAX_FAILED_AUTH_BEFORE_TARPIT = 40  # raised: capture many more credential pairs
+FTP_TARPIT_DURATION = 30              # reduced: 30s not 5min, re-engage faster
+FTP_TARPIT_DELAY = 0.3               # reduced: less delay, more throughput
 
 def _should_tarpit_ftp(ip):
     """Check if IP should be tarpitted"""
