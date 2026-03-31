@@ -16,6 +16,7 @@ Key changes over the original:
 
 import os
 import re
+import json
 import struct
 import time
 import datetime
@@ -276,10 +277,9 @@ def handle_vnc(
             conn.sendall(_build_security_result_ok())
             session["authenticated"] = True
             _log("vnc_auth_bypass", "critical", {
-                "auth_method": "none",
-                "client_version": client_ver,
-                "client_tool": session["client_tool"],
-                "payload": "Client chose SEC_NONE (no authentication)",
+                "payload":      "SEC_NONE: no authentication required — direct access",
+                "scanner_tool": session["client_tool"],
+                "username":     client_ver,
             })
 
         else:
@@ -298,13 +298,11 @@ def handle_vnc(
             session["authenticated"] = True
 
             _log("vnc_auth_attempt", "high", {
-                "auth_method":      "vnc_challenge_response",
-                "challenge_hex":    session["auth_challenge"],
-                "response_hex":     session["auth_response"],
-                "client_version":   client_ver,
-                "client_tool":      session["client_tool"],
-                "payload":          f"VNC auth challenge captured — response: {session['auth_response'][:16]}...",
-                "notes":            _WEAK_CREDS_NOTE,
+                # Map into real DB columns so dashboard can display them
+                "payload":       f"challenge:{session['auth_challenge']} response:{session['auth_response']}",
+                "raw_payload":   f"{session['auth_challenge']}:{session['auth_response']}",
+                "scanner_tool":  session["client_tool"],
+                "username":      client_ver,   # store RFB version as username for display
             })
 
         # ── Phase 4: Client init ───────────────────────────────────────────
@@ -433,17 +431,35 @@ def handle_vnc(
              - datetime.datetime.fromisoformat(session["start"])).total_seconds(), 2
         )
 
-        _log("vnc_session_end", "medium" if typed_text else "low", {
-            "payload":       typed_text[:500] if typed_text else "",
-            "typed_text":    typed_text[:300],
-            "clipboard":     " | ".join(session["clipboard"])[:300],
-            "fb_requests":   session["fb_requests"],
-            "key_events":    len(session["key_events"]),
-            "cve_hits":      session["cve_hits"],
-            "duration_s":    duration,
-            "encodings":     session["encodings"][:10],
-            "client_tool":   session["client_tool"],
-            "authenticated": session["authenticated"],
+        clipboard_str = " | ".join(session["clipboard"])[:300]
+        cve_str       = ",".join(session["cve_hits"])
+
+        # Build a human-readable summary for the dashboard payload column
+        summary_parts = []
+        if typed_text:
+            summary_parts.append(f"typed:{typed_text[:200]}")
+        if clipboard_str:
+            summary_parts.append(f"clipboard:{clipboard_str[:200]}")
+        if cve_str:
+            summary_parts.append(f"cves:{cve_str}")
+        summary_parts.append(f"fb_requests:{session['fb_requests']} keys:{len(session['key_events'])} dur:{duration}s")
+
+        _log("vnc_session_end", "medium" if typed_text or clipboard_str else "low", {
+            "payload":      " | ".join(summary_parts),
+            "raw_payload":  typed_text[:500] if typed_text else clipboard_str[:500],
+            "commands":     json.dumps({
+                "typed":       typed_text[:300],
+                "clipboard":   clipboard_str,
+                "fb_requests": session["fb_requests"],
+                "key_count":   len(session["key_events"]),
+                "encodings":   session["encodings"][:10],
+                "cves":        session["cve_hits"],
+                "duration_s":  duration,
+                "client":      session["client_tool"],
+                "rfb_version": session["client_version"],
+            }),
+            "scanner_tool": session["client_tool"],
+            "username":     session["client_version"],
         })
 
         if new_ip_alert:
