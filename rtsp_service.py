@@ -282,7 +282,10 @@ def handle_rtsp(
                 })
 
             # ── Authentication flow ───────────────────────────────────────
-            if method in ("DESCRIBE", "SETUP", "PLAY", "RECORD", "GET_PARAMETER", "PAUSE"):
+            # DESCRIBE is served without auth (real Hikvision cameras do this) so that
+            # automated scanners/tools proceed to SETUP where they supply credentials.
+            # Auth is required for SETUP and PLAY to capture actual credentials.
+            if method in ("SETUP", "PLAY", "RECORD", "GET_PARAMETER", "PAUSE"):
                 if not session["authenticated"]:
                     if not auth_hdr:
                         _log("rtsp_probe", "low", {

@@ -429,11 +429,13 @@ def api_service_stats():
     for r in rows:
         svc = (r["service"] or "").lower()
         seen.add(svc)
+        cred_count = r.get("cred_count", 0) or 0
         result.append({
             "service":    svc.upper(),
             "port":       r.get("dest_port") or KNOWN.get(svc,0),
             "hits":       r["cnt"],
             "unique_ips": r["unique_ips"],
+            "cred_count": cred_count,
             "is_botnet":  bool(r.get("bots",0)),
             "last_seen":  r.get("last_seen",""),
             "active":     True,

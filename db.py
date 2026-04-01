@@ -777,7 +777,8 @@ def get_service_breakdown(hours=24):
                COUNT(*) cnt,
                COUNT(DISTINCT source_ip) unique_ips,
                SUM(is_botnet)  bots,
-               MAX(timestamp)  last_seen
+               MAX(timestamp)  last_seen,
+               SUM(CASE WHEN username!='' THEN 1 ELSE 0 END) cred_count
         FROM attacks WHERE timestamp>?
         GROUP BY service ORDER BY cnt DESC
     """, (c,))

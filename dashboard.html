@@ -131,8 +131,8 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 .filter-bar input,.filter-bar select{background:var(--raised);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:4px;}
 .filter-bar input:focus,.filter-bar select:focus{outline:none;border-color:var(--green)}
 .svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}
-.svc-tile{background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px 10px;text-align:center;position:relative;transition:.2s;}
-.svc-tile:hover{border-color:var(--border2)}.svc-tile.active{border-color:rgba(0,255,136,0.2)}.svc-tile.attacked{border-color:rgba(255,48,84,0.2)}
+.svc-tile{background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:14px 10px;text-align:center;position:relative;transition:.2s;cursor:pointer;}
+.svc-tile:hover{border-color:var(--green);transform:translateY(-2px)}.svc-tile.active{border-color:rgba(0,255,136,0.2)}.svc-tile.attacked{border-color:rgba(255,48,84,0.2)}
 .svc-dot{width:7px;height:7px;border-radius:50%;background:var(--border2);margin:0 auto 8px;position:absolute;top:8px;right:8px}
 .svc-tile.active .svc-dot{background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2s infinite}
 .svc-tile.attacked .svc-dot{background:var(--red);box-shadow:0 0 6px var(--red)}
@@ -720,6 +720,35 @@ tr:hover td{background:rgba(255,255,255,0.02)}
   <div class="grid-2">
     <div class="card"><div class="card-title">Hits by Service</div><div class="chart-wrap" style="height:260px"><canvas id="svcBarChart"></canvas></div></div>
     <div class="card"><div class="card-title">Protocol Distribution</div><div class="chart-wrap" style="height:260px"><canvas id="protoChart"></canvas></div></div>
+  </div>
+
+  <!-- Service Drilldown — shown on tile click -->
+  <div class="card" id="svcDrillCard" style="display:none">
+    <div class="card-title">
+      <span id="svcDrillTitle">Service Drilldown</span>
+      <button class="btn-sm" onclick="document.getElementById('svcDrillCard').style.display='none'">✕ Close</button>
+    </div>
+    <div class="grid-3" id="svcDrillMetrics" style="margin-bottom:14px"></div>
+    <div class="grid-2">
+      <div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Attack Types</div>
+        <div id="svcDrillAtypes" class="rank-list" style="max-height:220px;overflow-y:auto"></div>
+      </div>
+      <div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Top Source Countries</div>
+        <div id="svcDrillCountries" class="rank-list" style="max-height:220px;overflow-y:auto"></div>
+      </div>
+    </div>
+    <div class="grid-2" style="margin-top:14px">
+      <div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Top Attacking IPs</div>
+        <div id="svcDrillIPs" class="rank-list" style="max-height:200px;overflow-y:auto"></div>
+      </div>
+      <div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Scanner Tools</div>
+        <div id="svcDrillScanners" class="rank-list" style="max-height:200px;overflow-y:auto"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1866,13 +1895,59 @@ async function loadServices(){
   const hours=document.getElementById('svcHours')?.value||24;
   const data=await api(`/api/service-stats?hours=${hours}`);if(!data)return;
   const svcs=data.services||[];
-  document.getElementById('svcGrid').innerHTML=svcs.map(s=>`<div class="svc-tile ${s.hits>0?'attacked':'active'}"><div class="svc-dot"></div><div class="svc-name">${s.service}</div><div class="svc-port">:${s.port}</div><div class="svc-hits ${s.hits===0?'none':s.hits<10?'few':''}">${fmt(s.hits)} hits</div></div>`).join('');
+  document.getElementById('svcGrid').innerHTML=svcs.map(s=>`<div class="svc-tile ${s.hits>0?'attacked':'active'}" onclick="loadServiceDrill('${s.service.toLowerCase()}',${hours})" title="Click for drilldown"><div class="svc-dot"></div><div class="svc-name">${s.service}</div><div class="svc-port">:${s.port}</div><div class="svc-hits ${s.hits===0?'none':s.hits<10?'few':''}">${fmt(s.hits)} hits</div>${s.unique_ips?`<div style="font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:2px">${s.unique_ips} IPs</div>`:''}${s.cred_count?`<div style="font-family:var(--mono);font-size:8px;color:var(--green);margin-top:2px">${fmt(s.cred_count)} creds</div>`:''}${s.last_seen?`<div style="font-family:var(--mono);font-size:7px;color:var(--dim);margin-top:2px">${s.last_seen.slice(11,19)}</div>`:''}</div>`).join('');
   const sorted=svcs.filter(s=>s.hits>0).sort((a,b)=>b.hits-a.hits).slice(0,12);
   const colors=['#ff3054','#ff8c00','#ffd60a','#0a84ff','#00ff88','#bf5af2','#ff6b35','#2496ed','#660066','#9b59b6','#e74c3c','#8b4513'];
   mkChart('svcBarChart','bar',{labels:sorted.map(s=>s.service),datasets:[{data:sorted.map(s=>s.hits),backgroundColor:colors.map(c=>c+'88'),borderColor:colors,borderWidth:1,borderRadius:3}]});
-  const cats={Camera:0,Network:0,Database:0,Industrial:0,Other:0};
-  svcs.forEach(s=>{const svc=s.service;if(['RTSP','ONVIF','HTTP','HTTPS','HTTP-ALT'].includes(svc))cats.Camera+=s.hits;else if(['SSH','TELNET','FTP','SMTP','VNC','RDP'].includes(svc))cats.Network+=s.hits;else if(['MYSQL','REDIS','MEMCACHED','DOCKER'].includes(svc))cats.Database+=s.hits;else if(['MODBUS','MQTT'].includes(svc))cats.Industrial+=s.hits;else cats.Other+=s.hits;});
-  mkChart('protoChart','doughnut',{labels:Object.keys(cats),datasets:[{data:Object.values(cats),backgroundColor:['#ff8c0088','#0a84ff88','#bf5af288','#ffd60a88','#00ff8844'],borderColor:['#ff8c00','#0a84ff','#bf5af2','#ffd60a','#00ff88'],borderWidth:1}]},{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9},boxWidth:10}}}});
+  const cats={'Camera/IoT':0,Network:0,Industrial:0,Other:0};
+  svcs.forEach(s=>{const svc=s.service;if(['RTSP','ONVIF','DAHUA','XMEYE','COAP'].includes(svc))cats['Camera/IoT']+=s.hits;else if(['SSH','TELNET','FTP','VNC','HTTP','HTTPS','HTTP_ALT'].includes(svc))cats.Network+=s.hits;else if(['MODBUS','MQTT','TR069','ADB','TFTP'].includes(svc))cats.Industrial+=s.hits;else cats.Other+=s.hits;});
+  mkChart('protoChart','doughnut',{labels:Object.keys(cats),datasets:[{data:Object.values(cats),backgroundColor:['#ff8c0088','#0a84ff88','#ffd60a88','#00ff8844'],borderColor:['#ff8c00','#0a84ff','#ffd60a','#00ff88'],borderWidth:1}]},{plugins:{legend:{display:true,position:'right',labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9},boxWidth:10}}}});
+}
+
+async function loadServiceDrill(svc,hours){
+  hours=hours||document.getElementById('svcHours')?.value||24;
+  const card=document.getElementById('svcDrillCard');
+  card.style.display='block';
+  card.scrollIntoView({behavior:'smooth',block:'start'});
+  document.getElementById('svcDrillTitle').textContent=`${svc.toUpperCase()} — Service Drilldown`;
+  document.getElementById('svcDrillAtypes').innerHTML='<div class="loading"><span class="spin">◌</span></div>';
+  document.getElementById('svcDrillCountries').innerHTML='<div class="loading"><span class="spin">◌</span></div>';
+  document.getElementById('svcDrillIPs').innerHTML='<div class="loading"><span class="spin">◌</span></div>';
+  document.getElementById('svcDrillScanners').innerHTML='<div class="loading"><span class="spin">◌</span></div>';
+  const d=await api(`/api/service-drill?service=${encodeURIComponent(svc)}&hours=${hours}`);
+  if(!d)return;
+  const threat={low:'var(--muted)',medium:'var(--orange)',high:'var(--red)',critical:'var(--red)'};
+  document.getElementById('svcDrillMetrics').innerHTML=`
+    <div class="metric-card"><div class="mc-label">Total Events</div><div class="mc-val" style="font-size:20px">${fmt(d.total)}</div></div>
+    <div class="metric-card"><div class="mc-label">Auth Failures</div><div class="mc-val" style="font-size:20px;color:var(--orange)">${fmt(d.auth_failures)}</div></div>
+    <div class="metric-card"><div class="mc-label">Auth Success</div><div class="mc-val" style="font-size:20px;color:var(--green)">${fmt(d.auth_successes)}</div></div>
+    <div class="metric-card"><div class="mc-label">CVE Exploits</div><div class="mc-val" style="font-size:20px;color:var(--red)">${fmt(d.cve_exploits)}</div></div>
+    <div class="metric-card"><div class="mc-label">Botnet Traffic</div><div class="mc-val" style="font-size:20px;color:var(--purple)">${fmt(d.botnet_hits)}</div></div>
+    <div class="metric-card"><div class="mc-label">via Tor/VPN</div><div class="mc-val" style="font-size:20px;color:var(--blue)">${fmt((d.tor_hits||0)+(d.vpn_hits||0))}</div></div>`;
+  const maxA=d.attack_types[0]?d.attack_types[0][1]:1;
+  document.getElementById('svcDrillAtypes').innerHTML=(d.attack_types||[]).map(([at,n])=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;font-family:var(--mono);font-size:10px;color:var(--text)">${at}</div>
+      <div style="width:80px;height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="width:${Math.round(n/maxA*100)}%;height:100%;background:var(--orange)"></div></div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);min-width:40px;text-align:right">${fmt(n)}</div>
+    </div>`).join('');
+  const maxC=d.top_countries[0]?d.top_countries[0][1]:1;
+  document.getElementById('svcDrillCountries').innerHTML=(d.top_countries||[]).map(([c,n])=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;font-family:var(--mono);font-size:10px;color:var(--text)">${c}</div>
+      <div style="width:60px;height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="width:${Math.round(n/maxC*100)}%;height:100%;background:var(--blue)"></div></div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);min-width:40px;text-align:right">${fmt(n)}</div>
+    </div>`).join('');
+  document.getElementById('svcDrillIPs').innerHTML=(d.top_ips||[]).map(([ip,n])=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;font-family:var(--mono);font-size:10px;color:var(--blue)">${ip}</div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted)">${fmt(n)}</div>
+    </div>`).join('');
+  document.getElementById('svcDrillScanners').innerHTML=(d.scanner_tools||[]).map(([sc,n])=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;font-family:var(--mono);font-size:10px;color:var(--purple)">${sc}</div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted)">${fmt(n)}</div>
+    </div>`).join('') || '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);padding:8px">None detected</div>';
 }
 
 // ── Report ─────────────────────────────────────────────────────────────────

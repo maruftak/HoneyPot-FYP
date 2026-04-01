@@ -762,14 +762,18 @@ def handle_mqtt(conn, addr,
                     retained[pub["topic"]] = lambda v=val: v
 
                 threat = "high" if pub["topic"] in HIGH_VALUE_TOPICS else "medium"
+                topic_str   = pub["topic"] or "(empty)"
+                payload_str = pub["payload"][:512] if pub["payload"] else "(empty)"
                 _log_event(log_attack, geoip_func, intel_fields_func,
                            client_ip, server_port, gdata, session,
                            "mqtt_publish",
                            extra={
-                               "topic":   pub["topic"],
-                               "payload": pub["payload"][:512],
-                               "qos":     qos,
-                               "retain":  pub["retain"],
+                               # Store topic+payload in the DB payload column so dashboard shows it
+                               "payload":     f"topic={topic_str} payload={payload_str}",
+                               "raw_payload": payload_str,
+                               "path":        topic_str,   # topic in path column for table display
+                               "qos":         qos,
+                               "retain":      pub["retain"],
                            },
                            threat_level=threat)
 

@@ -81,7 +81,14 @@ _ACTION_THREAT = {
     "SetRemoteUser":                  ("onvif_user_modify",  "critical"),
 }
 
-_NOAUTH_ACTIONS = {"GetSystemDateAndTime", "GetWsdlUrl", "GetCapabilities", "GetServices"}
+# Actions served without WS-Security — real cameras expose these unauthenticated.
+# Expanding this set makes auto-enumerate bots proceed to auth-required actions
+# (GetStreamUri, GetUsers) where we capture credentials.
+_NOAUTH_ACTIONS = {
+    "GetSystemDateAndTime", "GetWsdlUrl", "GetCapabilities", "GetServices",
+    "GetDeviceInformation", "GetHostname", "GetScopes", "GetNetworkInterfaces",
+    "GetProfiles", "GetVideoSources", "GetVideoEncoderConfigurations",
+}
 
 # ─── CVE patterns ─────────────────────────────────────────────────────────────
 
@@ -455,8 +462,12 @@ def handle_onvif(
                         conn.sendall(_http_resp(fault, status=401))
                         continue
                 else:
-                    # No credentials at all
-                    _log("onvif_no_auth", "low", {"action": action, "path": path})
+                    # No credentials at all — log with action name in payload so dashboard shows what was probed
+                    _log("onvif_no_auth", "low", {
+                        "action":  action,
+                        "path":    path,
+                        "payload": f"SOAP action={action or 'Unknown'} probed without credentials",
+                    })
                     fault = _soap_fault("Sender", "Authentication required")
                     conn.sendall(_http_resp(fault, status=401))
                     continue
