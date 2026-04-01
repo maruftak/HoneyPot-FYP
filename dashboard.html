@@ -1217,7 +1217,7 @@ function clearLog(){document.getElementById('logStream').innerHTML='';S.logSeen.
 async function loadSessions(){
   document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" class="loading"><span class="spin">◌</span> Loading…</td></tr>';
   const hours=document.getElementById('sessHours')?.value||168;
-  const limit=hours==0?2000:500;
+  const limit=hours==0?3000:1000;
   const url=hours==0?`/api/sessions?limit=${limit}`:`/api/sessions?limit=${limit}&hours=${hours}`;
   const data=await api(url);
   if(!data){document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px">No data</td></tr>';return;}

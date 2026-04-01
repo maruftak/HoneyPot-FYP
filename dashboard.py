@@ -206,10 +206,24 @@ def api_sessions():
         "to_ts":      request.args.get("to_ts",     ""),
     }
 
-    rows    = db.get_recent_attacks(hours, limit * 4, service or None, threat or None)
-    rows    = _apply_session_filters(rows, filters)
-    rows    = rows[:limit]
-    result  = [_build_session_row(r) for r in rows]
+    # When no service filter: query each service separately so high-volume services
+    # (VNC generates 2 rows/connection = 57k rows) don't crowd out all others.
+    if not service:
+        known_services = db.get_service_breakdown(hours)
+        svc_names      = [r["service"] for r in known_services if r.get("service")]
+        svc_count      = max(len(svc_names), 1)
+        per_limit      = max(50, limit // svc_count)
+        combined = []
+        for svc in svc_names:
+            svc_rows = db.get_recent_attacks(hours, per_limit, svc, threat or None)
+            combined.extend(svc_rows)
+        combined.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        rows = _apply_session_filters(combined, filters)[:limit]
+    else:
+        rows = db.get_recent_attacks(hours, limit * 4, service, threat or None)
+        rows = _apply_session_filters(rows, filters)[:limit]
+
+    result = [_build_session_row(r) for r in rows]
     return jsonify({"sessions": result, "total": len(result)})
 
 @app.route("/api/chart-data")
