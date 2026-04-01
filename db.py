@@ -569,7 +569,8 @@ def get_geo_data(hours=24):
 
 
 def get_recent_attacks(hours=24, limit=200, service=None, threat=None):
-    c      = _cutoff(hours)
+    # hours=0 means all time — use epoch as cutoff
+    c      = "2000-01-01T00:00:00" if hours == 0 else _cutoff(hours)
     sql    = "SELECT * FROM attacks WHERE timestamp>?"
     params = [c]
     if service:

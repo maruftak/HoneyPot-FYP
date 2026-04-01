@@ -414,7 +414,7 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     </div>
     <div class="filter-bar">
       <input type="text" id="sessSearch" placeholder="Search IP, country, path, CVE…" oninput="filterSessions()" style="flex:1;min-width:160px">
-      <select id="sessSvc" onchange="filterSessions()"><option value="">All Services</option></select>
+      <select id="sessSvc" onchange="loadSessions()"><option value="">All Services</option></select>
       <select id="sessThreat" onchange="filterSessions()">
         <option value="">All Threats</option><option value="critical">Critical</option>
         <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
@@ -443,11 +443,16 @@ tr:hover td{background:rgba(255,255,255,0.02)}
       <table>
         <thead><tr>
           <th>Time</th><th>IP</th><th>Country</th><th>Service</th>
-          <th>Username</th><th>Password</th><th>Path / Commands</th>
-          <th>CVE</th><th>Threat</th><th>Anonymization</th><th>Flags</th>
+          <th>Event</th><th>Username</th><th>Password</th><th>Detail</th>
+          <th>CVE</th><th>Threat</th><th>Flags</th>
         </tr></thead>
         <tbody id="sessionsBody"><tr><td colspan="11" class="loading"><span class="spin">◌</span> Loading…</td></tr></tbody>
       </table>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0 4px 0">
+      <span id="sessLoadedCount" style="font-family:var(--mono);font-size:11px;color:var(--muted)"></span>
+      <button id="sessLoadMoreBtn" class="btn-sm" style="display:none" onclick="loadMoreSessions()">Load More ↓</button>
+      <button class="btn-sm" onclick="loadAllSessions()">Load All ↓</button>
     </div>
   </div>
 </div>
@@ -1214,20 +1219,76 @@ function toggleLogPause(){S.logPaused=!S.logPaused;const btn=document.getElement
 function clearLog(){document.getElementById('logStream').innerHTML='';S.logSeen.clear();}
 
 // ── Sessions ───────────────────────────────────────────────────────────────
-async function loadSessions(){
-  document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" class="loading"><span class="spin">◌</span> Loading…</td></tr>';
-  const hours=document.getElementById('sessHours')?.value||168;
-  const limit=hours==0?3000:1000;
-  const url=hours==0?`/api/sessions?limit=${limit}`:`/api/sessions?limit=${limit}&hours=${hours}`;
+let _sessOffset=0;
+const _SESS_PAGE=200;
+
+async function loadSessions(append){
+  if(!append){
+    _sessOffset=0;
+    S.sessions_all=[];
+    document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" class="loading"><span class="spin">◌</span> Loading…</td></tr>';
+  }
+  const hours=document.getElementById('sessHours')?.value||0;
+  const svc=document.getElementById('sessSvc')?.value||'';
+  const url=`/api/sessions?limit=${_SESS_PAGE}&offset=${_sessOffset}&hours=${hours}`+(svc?`&service=${encodeURIComponent(svc)}`:'');
+  const data=await api(url);
+  if(!data){
+    if(!append) document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px">No data</td></tr>';
+    return;
+  }
+  const newRows=data.sessions||[];
+  S.sessions_all=[...S.sessions_all,...newRows];
+  S.sessions=[...S.sessions_all];
+
+  // Populate service dropdown on first load
+  if(!append){
+    const svcs=[...new Set(S.sessions_all.map(s=>s.service).filter(Boolean))].sort();
+    const sel=document.getElementById('sessSvc');
+    const cur=sel.value;
+    sel.innerHTML='<option value="">All Services</option>'+svcs.map(s=>`<option${s===cur?' selected':''}>${s}</option>`).join('');
+  }
+
+  const total=data.total||S.sessions_all.length;
+  document.getElementById('session-count').textContent=fmt(total);
+  document.getElementById('sn-sess').textContent=fmt(total);
+
+  const loaded=S.sessions_all.length;
+  const lc=document.getElementById('sessLoadedCount');
+  if(lc) lc.textContent=`Showing ${fmt(loaded)} of ${fmt(total)} events`;
+
+  const moreBtn=document.getElementById('sessLoadMoreBtn');
+  if(moreBtn) moreBtn.style.display=data.has_more?'inline-block':'none';
+
+  _sessOffset+=newRows.length;
+  filterSessions();
+}
+
+async function loadMoreSessions(){
+  await loadSessions(true);
+}
+
+async function loadAllSessions(){
+  // Load all data for current time range - resets and fetches everything
+  _sessOffset=0;
+  S.sessions_all=[];
+  document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" class="loading"><span class="spin">◌</span> Loading all…</td></tr>';
+  const hours=document.getElementById('sessHours')?.value||0;
+  const svc=document.getElementById('sessSvc')?.value||'';
+  // Use a very large limit to get everything at once
+  const url=`/api/sessions?limit=5000&offset=0&hours=${hours}`+(svc?`&service=${encodeURIComponent(svc)}`:'');
   const data=await api(url);
   if(!data){document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px">No data</td></tr>';return;}
-  S.sessions_all=data.sessions||[];S.sessions=[...S.sessions_all];
-  const svcs=[...new Set(S.sessions_all.map(s=>s.service).filter(Boolean))].sort();
-  const sel=document.getElementById('sessSvc');
-  sel.innerHTML='<option value="">All Services</option>'+svcs.map(s=>`<option>${s}</option>`).join('');
-  document.getElementById('session-count').textContent=fmt(data.total||S.sessions.length);
-  document.getElementById('sn-sess').textContent=fmt(data.total||S.sessions.length);
-  renderSessions(S.sessions);
+  S.sessions_all=data.sessions||[];
+  S.sessions=[...S.sessions_all];
+  const total=data.total||S.sessions_all.length;
+  document.getElementById('session-count').textContent=fmt(total);
+  document.getElementById('sn-sess').textContent=fmt(total);
+  const lc=document.getElementById('sessLoadedCount');
+  if(lc) lc.textContent=`Showing all ${fmt(S.sessions_all.length)} of ${fmt(total)} events`;
+  const moreBtn=document.getElementById('sessLoadMoreBtn');
+  if(moreBtn) moreBtn.style.display='none';
+  _sessOffset=S.sessions_all.length;
+  filterSessions();
 }
 
 function filterSessions(){
@@ -1265,22 +1326,33 @@ function renderSessions(rows){
   if(!rows.length){document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No sessions match filter</td></tr>';return;}
   document.getElementById('sessionsBody').innerHTML=rows.map((s,idx)=>{
     const cmdCount=s.cmd_count||s.commands?.length||0;
-    const cmdBadge=cmdCount>0?`<span class="cmd-count-badge">${cmdCount} cmd${cmdCount>1?'s':''}</span>`:'';
-    const firstCmd=s.commands&&s.commands.length>0?s.commands[0]:'';
-    const display=firstCmd?`<span style="color:var(--text)">${firstCmd}</span>${cmdBadge}`:(s.path?`<span style="color:var(--muted)">${s.path}</span>`:s.method||'—');
-    const hot=cmdCount>=10?'tr-hot':'';
+    const cmdBadge=cmdCount>0?`<span class="cmd-count-badge">${cmdCount}</span>`:'';
+    // Detail column: prefer detail field, then first command, then path, then method
+    const detailTxt=s.detail||(s.commands&&s.commands.length>0?s.commands[0]:'')||(s.path?s.path:s.method)||'';
+    const display=detailTxt?`<span style="color:var(--text)">${escHtml(detailTxt.slice(0,100))}</span>${cmdBadge}`:'<span style="color:var(--muted)">—</span>';
+    // Event type badge (attack_type shortened)
+    const evtRaw=(s.attack_type||'').replace(/^(vnc_|ssh_|ftp_|rtsp_|onvif_|mqtt_|telnet_|http_|modbus_|tr069_|coap_|dahua_|xmeye_|adb_|ssdp_)/i,'');
+    const evtColor=s.threat==='critical'?'var(--red)':s.threat==='high'?'var(--orange)':s.threat==='medium'?'var(--yellow)':'var(--muted)';
+    const evtBadge=evtRaw?`<span style="font-family:var(--mono);font-size:9px;color:${evtColor}">${escHtml(evtRaw)}</span>`:'—';
+    const hot=cmdCount>=5||s.threat==='critical'?'tr-hot':'';
+    const flags=[
+      s.is_botnet?'<span title="Botnet" style="color:var(--orange)">🤖</span>':'',
+      s.is_tor?'<span title="Tor" style="color:var(--purple)">🧅</span>':'',
+      s.is_vpn?'<span title="VPN" style="color:var(--blue)">🔒</span>':'',
+      s.scanner_tool?`<span class="badge b-blue" style="font-size:8px" title="${escHtml(s.scanner_tool)}">${escHtml(s.scanner_tool.split(' ')[0])}</span>`:'',
+    ].filter(Boolean).join(' ');
     return`<tr class="${hot}" style="cursor:pointer" onclick="openSessModal(${idx})">
       <td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(s.ts)}</td>
       <td class="mono" style="color:var(--blue)">${s.ip}</td>
-      <td>${s.country||'—'}${s.city?'<br><span style="color:var(--muted);font-size:10px">'+s.city+'</span>':''}</td>
+      <td style="font-size:11px">${s.country||'—'}${s.city?'<br><span style="color:var(--muted);font-size:10px">'+s.city+'</span>':''}</td>
       <td>${svcBadge(s.service)}</td>
-      <td class="mono">${s.username||'<span style="color:var(--muted)">—</span>'}</td>
-      <td class="mono">${s.password||'<span style="color:var(--muted)">—</span>'}</td>
-      <td class="mono truncate" style="font-size:10px;max-width:220px">${display}</td>
+      <td style="font-size:10px">${evtBadge}</td>
+      <td class="mono" style="font-size:11px">${s.username||'<span style="color:var(--muted)">—</span>'}</td>
+      <td class="mono" style="font-size:11px">${s.password||'<span style="color:var(--muted)">—</span>'}</td>
+      <td class="mono truncate" style="font-size:10px;max-width:200px">${display}</td>
       <td>${s.cve?`<span class="badge b-crit" style="font-size:9px">${s.cve}</span>`:'<span style="color:var(--muted)">—</span>'}</td>
       <td>${badge(s.threat)}</td>
-      <td>${anonBadge(s)}</td>
-      <td style="font-size:10px">${s.is_botnet?'<span style="color:var(--orange)">🤖</span> ':''}${s.scanner_tool?`<span class="badge b-blue" style="font-size:8px">${s.scanner_tool}</span>`:''}</td>
+      <td style="font-size:10px">${flags||'—'}</td>
     </tr>`;
   }).join('');
 }
@@ -1293,6 +1365,8 @@ function openSessModal(idx){
   const anonInfo=[s.is_tor?'Tor':null,s.is_vpn?`VPN (${s.vpn_provider||'?'})`:null,s.is_proxy?`Proxy (${s.proxy_type||'?'})`:null].filter(Boolean).join(', ')||'Direct';
   const cmds=s.commands||[];
   const payload=s.payload||'';
+  const rawPay=s.raw_payload||'';
+  const ua=s.user_agent||'';
   document.getElementById('modalBody').innerHTML=`
     <div class="modal-section">
       <div class="modal-section-title">Session Info</div>
@@ -1301,32 +1375,39 @@ function openSessModal(idx){
         <span class="modal-key">Source IP</span><span class="modal-val" style="color:var(--blue)">${s.ip}</span>
         <span class="modal-key">Country / City</span><span class="modal-val">${s.country||'—'} ${s.city?'/ '+s.city:''}</span>
         <span class="modal-key">Service</span><span class="modal-val">${svcBadge(s.service)} port ${s.port||'?'}</span>
-        <span class="modal-key">Attack Type</span><span class="modal-val">${s.attack_type||'—'}</span>
+        <span class="modal-key">Attack Type</span><span class="modal-val" style="color:var(--yellow)">${s.attack_type||'—'}</span>
         <span class="modal-key">Threat</span><span class="modal-val">${badge(s.threat)}</span>
         <span class="modal-key">ASN / Org</span><span class="modal-val">${s.asn?s.asn+' ':''}<span style="color:var(--muted)">${s.org||'—'}</span></span>
         <span class="modal-key">Anonymization</span><span class="modal-val">${anonInfo}</span>
-        ${s.scanner_tool?`<span class="modal-key">Scanner Tool</span><span class="modal-val"><span class="badge b-blue">${s.scanner_tool}</span></span>`:''}
+        ${s.scanner_tool?`<span class="modal-key">Scanner Tool</span><span class="modal-val"><span class="badge b-blue">${escHtml(s.scanner_tool)}</span></span>`:''}
         ${s.cve?`<span class="modal-key">CVE</span><span class="modal-val"><span class="badge b-crit">${s.cve}</span></span>`:''}
+        ${s.method||s.path?`<span class="modal-key">Request</span><span class="modal-val" style="font-family:var(--mono);font-size:11px">${escHtml(s.method||'')} ${escHtml(s.path||'')}</span>`:''}
+        ${ua?`<span class="modal-key">User-Agent</span><span class="modal-val" style="font-family:var(--mono);font-size:10px;color:var(--muted)">${escHtml(ua)}</span>`:''}
       </div>
     </div>
     ${(s.username||s.password)?`
     <div class="modal-section">
       <div class="modal-section-title">Credentials Used</div>
       <div class="modal-kv">
-        <span class="modal-key">Username</span><span class="modal-val" style="color:var(--orange)">${s.username||'(empty)'}</span>
-        <span class="modal-key">Password</span><span class="modal-val" style="color:var(--red)">${s.password||'(empty)'}</span>
+        <span class="modal-key">Username</span><span class="modal-val" style="color:var(--orange)">${escHtml(s.username||'(empty)')}</span>
+        <span class="modal-key">Password</span><span class="modal-val" style="color:var(--red)">${escHtml(s.password||'(empty)')}</span>
         <span class="modal-key">Botnet Cred</span><span class="modal-val">${s.is_botnet?'<span class="badge b-crit">Yes — known botnet credential</span>':'No'}</span>
       </div>
     </div>`:''}
     ${cmds.length?`
     <div class="modal-section">
-      <div class="modal-section-title">Shell Commands (${cmds.length})</div>
-      <ul class="modal-cmds">${cmds.map((c,i)=>`<li class="modal-cmd"><span style="color:var(--muted);margin-right:8px">${i+1}</span>${escHtml(c)}</li>`).join('')}</ul>
+      <div class="modal-section-title">Commands / Activity (${cmds.length})</div>
+      <ul class="modal-cmds">${cmds.map((c,i)=>`<li class="modal-cmd"><span style="color:var(--muted);margin-right:8px">${i+1}</span>${escHtml(String(c))}</li>`).join('')}</ul>
     </div>`:''}
     ${payload?`
     <div class="modal-section">
-      <div class="modal-section-title">Payload / Request</div>
-      <pre style="font-family:var(--mono);font-size:10px;color:var(--muted);white-space:pre-wrap;word-break:break-all;margin:0">${escHtml(payload)}</pre>
+      <div class="modal-section-title">Payload / Event Data</div>
+      <pre style="font-family:var(--mono);font-size:10px;color:var(--text);background:var(--raised);padding:10px;border-radius:6px;white-space:pre-wrap;word-break:break-all;margin:0;max-height:200px;overflow-y:auto">${escHtml(payload)}</pre>
+    </div>`:''}
+    ${rawPay&&rawPay!==payload?`
+    <div class="modal-section">
+      <div class="modal-section-title">Raw Data</div>
+      <pre style="font-family:var(--mono);font-size:10px;color:var(--muted);background:var(--raised);padding:10px;border-radius:6px;white-space:pre-wrap;word-break:break-all;margin:0;max-height:150px;overflow-y:auto">${escHtml(rawPay)}</pre>
     </div>`:''}
     <div class="modal-section">
       <div class="modal-section-title" style="display:flex;align-items:center;justify-content:space-between">

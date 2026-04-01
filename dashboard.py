@@ -117,10 +117,49 @@ def api_geo_data():
 
 def _build_session_row(r):
     cmds = []
+    raw_cmds = r.get("commands", "[]") or "[]"
     try:
-        cmds = json.loads(r.get("commands", "[]"))
+        parsed = json.loads(raw_cmds)
+        if isinstance(parsed, list):
+            cmds = parsed
+        elif isinstance(parsed, dict):
+            # VNC stores a dict in commands — extract typed text as a cmd
+            typed = parsed.get("typed", "")
+            if typed:
+                cmds = [f"[typed] {typed}"]
+            clipboard = parsed.get("clipboard", "")
+            if clipboard:
+                cmds.append(f"[clipboard] {clipboard}")
+            cves = parsed.get("cves", [])
+            if cves:
+                cmds.append(f"[CVEs] {', '.join(cves)}")
+            enc = parsed.get("encodings", [])
+            if enc:
+                cmds.append(f"[encodings] {enc}")
+            cmds.append(f"[fb_requests={parsed.get('fb_requests',0)} keys={parsed.get('key_count',0)} dur={parsed.get('duration_s',0)}s client={parsed.get('client','')}]")
     except Exception:
-        pass
+        if raw_cmds and raw_cmds != "[]":
+            cmds = [raw_cmds[:200]]
+
+    # Build a rich summary for the "Path / Commands" column
+    payload   = (r.get("payload") or "")
+    raw_pay   = (r.get("raw_payload") or "")
+    path      = (r.get("path") or "")
+    method    = (r.get("method") or "")
+    ua        = (r.get("user_agent") or "")
+    svc       = (r.get("service") or "").lower()
+
+    # Service-specific detail string shown in table and modal
+    detail = ""
+    if cmds:
+        detail = cmds[0]
+    elif payload:
+        detail = payload[:120]
+    elif path:
+        detail = f"{method} {path}".strip()
+    elif raw_pay:
+        detail = raw_pay[:120]
+
     return {
         "ts":                   r.get("timestamp",""),
         "ip":                   r.get("source_ip",""),
@@ -128,11 +167,11 @@ def _build_session_row(r):
         "city":                 r.get("city",""),
         "service":              (r.get("service","") or "").upper(),
         "port":                 r.get("dest_port",0),
-        "method":               r.get("method",""),
-        "path":                 (r.get("path","") or "")[:80],
+        "method":               method,
+        "path":                 path[:120],
         "username":             r.get("username",""),
         "password":             r.get("password",""),
-        "user_agent":           (r.get("user_agent","") or "")[:100],
+        "user_agent":           ua[:150],
         "cve":                  r.get("cve_id",""),
         "threat":               r.get("threat_level","low"),
         "is_botnet":            bool(r.get("is_botnet",0)),
@@ -151,9 +190,11 @@ def _build_session_row(r):
         "attack_patterns":      r.get("attack_patterns",""),
         "asn":                  r.get("asn",""),
         "org":                  r.get("org",""),
-        "commands":             cmds,          # full list — UI decides how many to show
+        "commands":             cmds,
         "cmd_count":            len(cmds),
-        "payload":              (r.get("payload") or "")[:500],
+        "payload":              payload[:1000],
+        "raw_payload":          raw_pay[:500],
+        "detail":               detail,
         "session_id":           r.get("session_id",""),
     }
 
@@ -189,8 +230,9 @@ def _apply_session_filters(rows, filters):
 @app.route("/api/sessions")
 @cached(2)
 def api_sessions():
-    hours    = request.args.get("hours",       24,  type=int)
-    limit    = request.args.get("limit",       500, type=int)
+    hours    = request.args.get("hours",       168, type=int)   # default 7d; use 0 or very large for all-time
+    limit    = request.args.get("limit",       200, type=int)
+    offset   = request.args.get("offset",      0,   type=int)
     service  = request.args.get("service",     "")
     threat   = request.args.get("threat",      "")
     filters  = {
@@ -207,24 +249,33 @@ def api_sessions():
     }
 
     # When no service filter: query each service separately so high-volume services
-    # (VNC generates 2 rows/connection = 57k rows) don't crowd out all others.
+    # (VNC: 59k rows) don't crowd out all others. With a service filter, query directly.
     if not service:
         known_services = db.get_service_breakdown(hours)
         svc_names      = [r["service"] for r in known_services if r.get("service")]
         svc_count      = max(len(svc_names), 1)
-        per_limit      = max(50, limit // svc_count)
+        # Fetch enough per service to cover offset+limit with room for filtering
+        per_fetch      = max(200, (offset + limit) // svc_count + 50)
         combined = []
         for svc in svc_names:
-            svc_rows = db.get_recent_attacks(hours, per_limit, svc, threat or None)
+            svc_rows = db.get_recent_attacks(hours, per_fetch, svc, threat or None)
             combined.extend(svc_rows)
         combined.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-        rows = _apply_session_filters(combined, filters)[:limit]
+        all_rows   = _apply_session_filters(combined, filters)
     else:
-        rows = db.get_recent_attacks(hours, limit * 4, service, threat or None)
-        rows = _apply_session_filters(rows, filters)[:limit]
+        all_rows = db.get_recent_attacks(hours, offset + limit + 500, service, threat or None)
+        all_rows = _apply_session_filters(all_rows, filters)
 
-    result = [_build_session_row(r) for r in rows]
-    return jsonify({"sessions": result, "total": len(result)})
+    total_count = len(all_rows)
+    page_rows   = all_rows[offset: offset + limit]
+    result      = [_build_session_row(r) for r in page_rows]
+    return jsonify({
+        "sessions":    result,
+        "total":       total_count,
+        "offset":      offset,
+        "limit":       limit,
+        "has_more":    (offset + limit) < total_count,
+    })
 
 @app.route("/api/chart-data")
 def api_chart_data():
