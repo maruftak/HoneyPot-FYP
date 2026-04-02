@@ -570,6 +570,18 @@ def get_geo_data(hours=24):
     """, (c,))
 
 
+def get_attack_count(hours=24, service=None, threat=None):
+    """Return the true total row count from DB for a query — used for accurate pagination totals."""
+    c      = "2000-01-01T00:00:00" if hours == 0 else _cutoff(hours)
+    sql    = "SELECT COUNT(*) FROM attacks WHERE timestamp>?"
+    params = [c]
+    if service:
+        sql += " AND service=?"; params.append(service.lower())
+    if threat:
+        sql += " AND threat_level=?"; params.append(threat)
+    return scalar(sql, params)
+
+
 def get_recent_attacks(hours=24, limit=200, service=None, threat=None):
     # hours=0 means all time — use epoch as cutoff
     c      = "2000-01-01T00:00:00" if hours == 0 else _cutoff(hours)

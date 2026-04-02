@@ -1368,13 +1368,19 @@ async function loadSessions(append){
     sel.innerHTML='<option value="">All Services</option>'+svcs.map(s=>`<option${s===cur?' selected':''}>${s}</option>`).join('');
   }
 
-  const total=data.total||S.sessions_all.length;
-  document.getElementById('session-count').textContent=fmt(total);
-  document.getElementById('sn-sess').textContent=fmt(total);
+  const dbTotal   = data.total   || S.sessions_all.length;  // true DB row count
+  const fetched   = data.fetched || S.sessions_all.length;  // rows loaded into memory (per-service cap)
+  const loaded    = S.sessions_all.length;                   // rows shown after filters
+  document.getElementById('session-count').textContent=fmt(dbTotal);
+  document.getElementById('sn-sess').textContent=fmt(dbTotal);
 
-  const loaded=S.sessions_all.length;
   const lc=document.getElementById('sessLoadedCount');
-  if(lc) lc.textContent=`Showing ${fmt(loaded)} of ${fmt(total)} events`;
+  if(lc){
+    if(loaded < dbTotal)
+      lc.textContent=`Showing ${fmt(loaded)} of ${fmt(fetched)} loaded · ${fmt(dbTotal)} total in DB`;
+    else
+      lc.textContent=`Showing ${fmt(loaded)} of ${fmt(dbTotal)} total in DB`;
+  }
 
   const moreBtn=document.getElementById('sessLoadMoreBtn');
   if(moreBtn) moreBtn.style.display=data.has_more?'inline-block':'none';
@@ -1400,11 +1406,11 @@ async function loadAllSessions(){
   if(!data){document.getElementById('sessionsBody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px">No data</td></tr>';return;}
   S.sessions_all=data.sessions||[];
   S.sessions=[...S.sessions_all];
-  const total=data.total||S.sessions_all.length;
-  document.getElementById('session-count').textContent=fmt(total);
-  document.getElementById('sn-sess').textContent=fmt(total);
+  const dbTotal=data.total||S.sessions_all.length;
+  document.getElementById('session-count').textContent=fmt(dbTotal);
+  document.getElementById('sn-sess').textContent=fmt(dbTotal);
   const lc=document.getElementById('sessLoadedCount');
-  if(lc) lc.textContent=`Showing all ${fmt(S.sessions_all.length)} of ${fmt(total)} events`;
+  if(lc) lc.textContent=`Showing all ${fmt(S.sessions_all.length)} loaded · ${fmt(dbTotal)} total in DB`;
   const moreBtn=document.getElementById('sessLoadMoreBtn');
   if(moreBtn) moreBtn.style.display='none';
   _sessOffset=S.sessions_all.length;

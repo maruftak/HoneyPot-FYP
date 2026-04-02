@@ -248,8 +248,12 @@ def api_sessions():
         "to_ts":      request.args.get("to_ts",     ""),
     }
 
+    # Get the true DB total for this query (shown as "X total events in DB")
+    true_total = db.get_attack_count(hours, service or None, threat or None)
+
     # When no service filter: query each service separately so high-volume services
-    # (VNC: 59k rows) don't crowd out all others. With a service filter, query directly.
+    # (VNC alone is 318k rows) don't crowd out all others.
+    # With a service filter, query directly.
     if not service:
         known_services = db.get_service_breakdown(hours)
         svc_names      = [r["service"] for r in known_services if r.get("service")]
@@ -261,20 +265,22 @@ def api_sessions():
             svc_rows = db.get_recent_attacks(hours, per_fetch, svc, threat or None)
             combined.extend(svc_rows)
         combined.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-        all_rows   = _apply_session_filters(combined, filters)
+        all_rows = _apply_session_filters(combined, filters)
     else:
         all_rows = db.get_recent_attacks(hours, offset + limit + 500, service, threat or None)
         all_rows = _apply_session_filters(all_rows, filters)
 
-    total_count = len(all_rows)
-    page_rows   = all_rows[offset: offset + limit]
-    result      = [_build_session_row(r) for r in page_rows]
+    page_rows = all_rows[offset: offset + limit]
+    result    = [_build_session_row(r) for r in page_rows]
     return jsonify({
         "sessions":    result,
-        "total":       total_count,
+        # true_total = real DB count; shown in UI as "showing X of TRUE_TOTAL"
+        "total":       true_total,
+        # fetched = how many rows were pulled into memory (per-service cap)
+        "fetched":     len(all_rows),
         "offset":      offset,
         "limit":       limit,
-        "has_more":    (offset + limit) < total_count,
+        "has_more":    (offset + limit) < len(all_rows),
     })
 
 @app.route("/api/chart-data")
