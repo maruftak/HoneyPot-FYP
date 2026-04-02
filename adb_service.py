@@ -175,7 +175,11 @@ def handle_adb(conn, addr, log_attack=None, geoip_func=None,
                 text = raw.decode(errors="ignore").strip()
                 if text:
                     commands_seen.append(text[:80])
-                    _log("adb_raw_cmd", "high", {"command": text[:200]})
+                    _log("adb_raw_cmd", "high", {
+                        "payload":     text[:200],
+                        "raw_payload": raw[:200].hex(),
+                        "command":     text[:200],
+                    })
                 continue
 
             command, arg0, arg1, data = parsed
@@ -251,7 +255,11 @@ def handle_adb(conn, addr, log_attack=None, geoip_func=None,
                     if fake_out:
                         conn.sendall(_build_packet(CMD_WRTE, local_id, remote_id, fake_out))
                         conn.sendall(_build_packet(CMD_OKAY, local_id, remote_id))
-                    _log("adb_shell_cmd", "critical", {"command": text[:200]})
+                    _log("adb_shell_cmd", "critical", {
+                        "payload":     text[:200],
+                        "raw_payload": text[:200],
+                        "command":     text[:200],
+                    })
 
             # ── CLSE (channel close) ──────────────────────────────────────
             elif command == CMD_CLSE:

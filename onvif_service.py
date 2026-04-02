@@ -298,9 +298,22 @@ def _resp_scopes():
 _ALL_ACTIONS = sorted(_ACTION_THREAT.keys(), key=len, reverse=True)  # longest first
 
 def _detect_action(text):
+    # 1. Match known actions by substring (most reliable)
     for action in _ALL_ACTIONS:
         if action in text:
             return action
+    # 2. Try SOAPAction HTTP header: SOAPAction: "http://.../GetXxx"
+    m = re.search(r'SOAPAction:\s*["\']?[^"\'#\s]*/([A-Za-z][A-Za-z0-9_]+)["\']?', text, re.I)
+    if m:
+        return m.group(1)
+    # 3. Extract first meaningful element in SOAP Body
+    m = re.search(r'<(?:[a-z0-9]+:)?Body[^>]*>\s*<(?:[a-z0-9]+:)?([A-Z][A-Za-z0-9_]+)', text)
+    if m:
+        return m.group(1)
+    # 4. Content-Type action parameter: action="http://.../GetXxx"
+    m = re.search(r'action=["\']?[^"\'#\s]*/([A-Za-z][A-Za-z0-9_]+)["\']?', text, re.I)
+    if m:
+        return m.group(1)
     return ""
 
 # ─── Main handler ─────────────────────────────────────────────────────────────

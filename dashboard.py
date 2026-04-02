@@ -545,6 +545,16 @@ def api_anonymization_stats():
         "timeline":      timeline_list[-48:],  # last 48 hourly buckets
     })
 
+@app.route("/api/notable-events")
+@cached(10)
+def api_notable_events():
+    """Returns the most dangerous/interesting sessions: cred captures, CVE exploits, commands run, firmware upgrades."""
+    hours = request.args.get("hours", 168, type=int)
+    limit = request.args.get("limit", 50,  type=int)
+    rows  = db.get_notable_events(hours, limit)
+    return jsonify({"events": [_build_session_row(r) for r in rows], "total": len(rows)})
+
+
 @app.route("/api/vpn-endpoint-changes")
 @cached(15)
 def api_vpn_endpoint_changes():

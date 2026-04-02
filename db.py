@@ -525,13 +525,15 @@ def get_stats(hours=24):
     return {
         "total_attacks":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>?", (c,)),
         "unique_ips":            scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?", (c,)),
+        "total_attacks_ex_vnc":  scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND service!='vnc'", (c,)),
+        "unique_ips_ex_vnc":     scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>? AND service!='vnc'", (c,)),
         "country_count":         scalar("SELECT COUNT(DISTINCT country) FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown','')", (c,)),
         "botnet_count":          scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_botnet=1", (c,)),
         "tor_count":             scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_tor=1", (c,)),
         "vpn_count":             scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_vpn=1", (c,)),
         "proxy_count":           scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_proxy=1", (c,)),
         "anonymized_count":      scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND anonymized=1", (c,)),
-        "scanner_count":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND scanner_tool!='' AND scanner_tool IS NOT NULL", (c,)),
+        "scanner_count":         scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>? AND scanner_tool!='' AND scanner_tool IS NOT NULL AND service!='vnc'", (c,)),
         "cve_exploits":          scalar("SELECT COUNT(*) FROM cve_attempts WHERE timestamp>?", (c,)),
         "malware_downloads":     scalar("SELECT COUNT(*) FROM malware_urls WHERE timestamp>?", (c,)),
         "honeytokens_triggered": scalar("SELECT COUNT(*) FROM honeytoken_triggers WHERE timestamp>?", (c,)),
@@ -768,6 +770,42 @@ def get_alerts(hours=24, limit=25):
 
     alerts.sort(key=lambda x: x["timestamp"], reverse=True)
     return alerts[:limit]
+
+
+def get_notable_events(hours=168, limit=50):
+    """Return the most interesting/dangerous sessions: cred captures, CVE exploits, commands run, critical non-HTTP threats."""
+    c = _cutoff(hours)
+    return query("""
+        SELECT * FROM attacks
+        WHERE timestamp > ?
+          AND service != 'vnc'
+          AND (
+            -- Credential captures on any service
+            (username != '' AND username IS NOT NULL AND username != 'None')
+            -- CVE exploits
+            OR (cve_id != '' AND cve_id IS NOT NULL AND cve_id != 'None')
+            -- Real command execution (exclude VNC metadata blobs)
+            OR (commands NOT IN ('[]','','None') AND commands IS NOT NULL
+                AND commands NOT LIKE '%fb_requests%'
+                AND commands NOT LIKE '%encodings%')
+            -- Protocol-level dangerous actions on IoT/non-HTTP services
+            OR attack_type LIKE '%upgrade%'
+            OR attack_type LIKE '%inject%'
+            OR attack_type LIKE '%exploit%'
+            OR attack_type LIKE '%shell%'
+            OR attack_type LIKE '%mirai%'
+            -- Critical threat on non-HTTP services (TFTP uploads, MQTT takeovers, etc.)
+            OR (threat_level = 'critical'
+                AND service NOT IN ('http','https','http_alt')
+                AND (username != '' OR commands NOT IN ('[]','') OR cve_id != ''
+                     OR attack_type LIKE '%rrq%' OR attack_type LIKE '%wrq%'
+                     OR attack_type LIKE '%tftp%' OR attack_type LIKE '%firmware%'))
+          )
+        ORDER BY
+            CASE threat_level WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+            timestamp DESC
+        LIMIT ?
+    """, (c, limit))
 
 
 def get_service_breakdown(hours=24):

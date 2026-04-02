@@ -177,6 +177,15 @@ def handle_xmeye(conn, addr, log_attack=None, geoip_func=None,
             first = None
         conn.settimeout(30)
         conn.sendall(_challenge)
+
+        # Log raw bytes if client spoke first — helps identify scanner tool
+        if first:
+            _log("xmeye_client_first", "medium", {
+                "raw_payload": first[:256].hex(),
+                "payload":     first[:128].decode(errors="replace"),
+                "notes":       f"Client sent {len(first)}b before challenge — tool fingerprint",
+            })
+
         pending = [first] if first else []
 
         while True:

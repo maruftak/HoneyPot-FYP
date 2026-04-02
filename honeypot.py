@@ -225,25 +225,29 @@ _VPN_SIGNATURES: dict = {
     "IVPN":                  ["ivpn"],
     "VyprVPN":               ["vyprvpn", "golden frog"],
     "Private VPN":           ["privatevpn", "privax"],
-    "AWS":                   ["amazon", "aws", "amazon.com", "amazon technologies"],
-    "DigitalOcean":          ["digitalocean"],
-    "Linode/Akamai":         ["linode", "akamai"],
-    "Vultr":                 ["vultr", "choopa"],
-    "Hetzner":               ["hetzner"],
-    "OVH":                   ["ovh", "ovhcloud", "ovh sas"],
-    "Contabo":               ["contabo"],
-    "Frantech/BuyVM":        ["frantech", "ponynet", "buyvm"],
-    "M247":                  ["m247"],
-    "Serverius":             ["serverius"],
-    "Psychz":                ["psychz"],
-    "HostWinds":             ["hostwinds"],
-    "Google Cloud":          ["google cloud", "gcp", "google llc"],
-    "Azure":                 ["microsoft azure", "azure"],
-    "Cloudflare":            ["cloudflare"],
-    "Leaseweb":              ["leaseweb"],
-    "Zenlayer":              ["zenlayer"],
-    "Sharktech":             ["sharktech"],
-    "DataPacket":            ["datapacket"],
+}
+
+# Cloud/datacenter providers — attackers from these are botnets, not VPN users
+_CLOUD_PROVIDERS: dict = {
+    "AWS":              ["amazon", "aws", "amazon.com", "amazon technologies"],
+    "DigitalOcean":     ["digitalocean"],
+    "Linode/Akamai":    ["linode", "akamai"],
+    "Vultr":            ["vultr", "choopa"],
+    "Hetzner":          ["hetzner"],
+    "OVH":              ["ovh", "ovhcloud", "ovh sas"],
+    "Contabo":          ["contabo"],
+    "Frantech/BuyVM":   ["frantech", "ponynet", "buyvm"],
+    "M247":             ["m247"],
+    "Serverius":        ["serverius"],
+    "Psychz":           ["psychz"],
+    "HostWinds":        ["hostwinds"],
+    "Google Cloud":     ["google cloud", "gcp", "google llc"],
+    "Azure":            ["microsoft azure", "azure"],
+    "Cloudflare":       ["cloudflare"],
+    "Leaseweb":         ["leaseweb"],
+    "Zenlayer":         ["zenlayer"],
+    "Sharktech":        ["sharktech"],
+    "DataPacket":       ["datapacket"],
 }
 
 _PROXY_TYPE_LABELS: dict = {
@@ -262,6 +266,16 @@ def _identify_vpn_provider(org: str, asn_org: str = "", isp: str = "") -> str | 
     if not combined.strip():
         return None
     for provider, keywords in _VPN_SIGNATURES.items():
+        if any(kw in combined for kw in keywords):
+            return provider
+    return None
+
+
+def _identify_cloud_provider(org: str, asn_org: str = "", isp: str = "") -> str | None:
+    combined = " ".join(filter(None, [org, asn_org, isp])).lower()
+    if not combined.strip():
+        return None
+    for provider, keywords in _CLOUD_PROVIDERS.items():
         if any(kw in combined for kw in keywords):
             return provider
     return None
@@ -325,19 +339,29 @@ def _geoip(ip: str) -> dict:
             g["tor_exit_node"] = True
             g["tor_exit_ip"]   = ip
 
-        # VPN provider matching against org/isp/asn strings (named providers)
+        # Cloud/datacenter provider matching — marks as botnet, NOT VPN
+        cloud_provider = _identify_cloud_provider(
+            g.get("org", "") or "",
+            g.get("asn_org", "") or "",
+            g.get("isp", "") or "",
+        )
+        if cloud_provider:
+            g["is_botnet"]    = True
+            g["org"]          = g.get("org") or cloud_provider
+
+        # VPN provider matching against org/isp/asn strings (named consumer VPNs only)
         vpn_provider = _identify_vpn_provider(
             g.get("org", "") or "",
             g.get("asn_org", "") or "",
             g.get("isp", "") or "",
         )
-        if vpn_provider:
+        if vpn_provider and not cloud_provider:
             g["is_vpn"]       = True
             g["vpn_provider"] = vpn_provider
 
         # ip-api.com proxy=true means the IP is a VPN exit / proxy node
         # Use the org name as the provider so the dashboard shows who it is
-        if geo_proxy and not g["is_tor"]:
+        if geo_proxy and not g["is_tor"] and not cloud_provider:
             g["is_vpn"]       = True
             org_label = g.get("org") or g.get("asn_org") or g.get("isp") or "Unknown VPN"
             if not g["vpn_provider"]:
@@ -345,7 +369,7 @@ def _geoip(ip: str) -> dict:
             g["vpn_exit_country"] = g.get("country")
 
         # hosting=true but proxy=false = pure datacenter server (not a VPN user)
-        if geo_hosting and not geo_proxy and not g["is_vpn"]:
+        if geo_hosting and not geo_proxy and not g["is_vpn"] and not cloud_provider:
             g["is_proxy"]   = True
             g["proxy_type"] = "datacenter"
 

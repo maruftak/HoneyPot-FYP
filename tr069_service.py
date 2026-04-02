@@ -325,7 +325,13 @@ def handle_tr069(conn, addr, log_attack=None, geoip_func=None,
             # Generic POST — return InformResponse to keep scanner engaged
             if method in ("GET", "POST"):
                 conn.sendall(_http_response("200 OK", _inform_response()))
-                _log("tr069_generic_probe", "low", {"path": path})
+                body = text[text.find("\r\n\r\n")+4:] if "\r\n\r\n" in text else text[text.find("\n\n")+2:]
+                _log("tr069_generic_probe", "low", {
+                    "path":        path,
+                    "method":      method,
+                    "payload":     body[:300] if body.strip() else text[:200],
+                    "raw_payload": raw[:200].hex(),
+                })
                 continue
 
             break

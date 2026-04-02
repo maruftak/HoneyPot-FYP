@@ -86,6 +86,13 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:9998;
 .btn-sm{font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;border:1px solid var(--border2);background:none;color:var(--muted);cursor:pointer;transition:.15s;}
 .btn-sm:hover{border-color:var(--green);color:var(--green)}
 .btn-sm.active{background:var(--green2);border-color:rgba(0,255,136,0.3);color:var(--green)}
+.vnc-badge{font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:3px;border:1px solid rgba(155,89,182,.4);background:rgba(155,89,182,.1);color:#9b59b6;cursor:pointer;vertical-align:middle;margin-left:5px;transition:.15s;white-space:nowrap;}
+.vnc-badge.active{background:rgba(155,89,182,.25);border-color:rgba(155,89,182,.7);color:#d4a0ff;}
+.notable-tag{display:inline-block;font-family:var(--mono);font-size:9px;padding:1px 5px;border-radius:3px;margin-right:3px;}
+.nt-cred{background:rgba(255,140,0,.15);color:#ff9f0a;border:1px solid rgba(255,140,0,.3);}
+.nt-cve{background:rgba(255,48,84,.15);color:#ff3054;border:1px solid rgba(255,48,84,.3);}
+.nt-cmd{background:rgba(10,132,255,.15);color:#0a84ff;border:1px solid rgba(10,132,255,.3);}
+.nt-crit{background:rgba(255,48,84,.2);color:#ff3054;border:1px solid rgba(255,48,84,.4);}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 .grid-60-40{display:grid;grid-template-columns:60fr 40fr;gap:16px}
@@ -292,8 +299,8 @@ tr:hover td{background:rgba(255,255,255,0.02)}
 <!-- ══ PANEL: OVERVIEW ══ -->
 <div class="panel active" id="panel-overview">
   <div class="metric-grid">
-    <div class="metric-card mc-red"><div class="mc-icon">💥</div><div class="mc-label">Total Attacks</div><div class="mc-val" id="m-total">—</div><div class="mc-sub">last 24 hours</div><div class="mc-bar"><div class="mc-bar-fill" id="m-total-bar" style="width:0%"></div></div></div>
-    <div class="metric-card mc-orange"><div class="mc-icon">🌍</div><div class="mc-label">Unique IPs</div><div class="mc-val" id="m-ips">—</div><div class="mc-sub">from <span id="m-countries">—</span> countries</div><div class="mc-bar"><div class="mc-bar-fill" id="m-ips-bar" style="width:0%"></div></div></div>
+    <div class="metric-card mc-red"><div class="mc-icon">💥</div><div class="mc-label">Total Attacks <span class="vnc-badge" id="vnc-toggle" onclick="toggleVNCExclude()" title="VNC scanner flood: toggle to exclude">−VNC</span></div><div class="mc-val" id="m-total">—</div><div class="mc-sub" id="m-total-sub">last 24 hours</div><div class="mc-bar"><div class="mc-bar-fill" id="m-total-bar" style="width:0%"></div></div></div>
+    <div class="metric-card mc-orange"><div class="mc-icon">🌍</div><div class="mc-label">Unique IPs</div><div class="mc-val" id="m-ips">—</div><div class="mc-sub">from <span id="m-countries">—</span> countries · <span id="m-ips-exvnc" style="color:var(--muted)"></span></div><div class="mc-bar"><div class="mc-bar-fill" id="m-ips-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-red"><div class="mc-icon">💀</div><div class="mc-label">CVE Exploits</div><div class="mc-val" id="m-cve">—</div><div class="mc-sub">known vulnerabilities</div><div class="mc-bar"><div class="mc-bar-fill" id="m-cve-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-orange"><div class="mc-icon">🤖</div><div class="mc-label">Botnets</div><div class="mc-val" id="m-botnet">—</div><div class="mc-sub">known botnet creds</div><div class="mc-bar"><div class="mc-bar-fill" id="m-botnet-bar" style="width:0%"></div></div></div>
     <div class="metric-card mc-yellow"><div class="mc-icon">☣️</div><div class="mc-label">Malware DLs</div><div class="mc-val" id="m-malware">—</div><div class="mc-sub">wget/curl captures</div><div class="mc-bar"><div class="mc-bar-fill" id="m-malware-bar" style="width:0%"></div></div></div>
@@ -359,6 +366,30 @@ tr:hover td{background:rgba(255,255,255,0.02)}
           <div id="botnet-sigs-list" style="display:flex;flex-direction:column;gap:5px"></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Notable Events card -->
+  <div class="card" id="card-notable" style="margin-top:16px">
+    <div class="card-title">Notable Events
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="notable-count" style="font-family:var(--mono);font-size:10px;color:var(--muted)"></span>
+        <button class="btn-sm" onclick="loadNotableEvents(168)">7D</button>
+        <button class="btn-sm active" onclick="loadNotableEvents(720)">30D</button>
+      </div>
+    </div>
+    <div id="notable-list" style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px">
+        <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border2)">
+          <th style="text-align:left;padding:6px 8px;font-weight:400">Time</th>
+          <th style="text-align:left;padding:6px 8px;font-weight:400">IP</th>
+          <th style="text-align:left;padding:6px 8px;font-weight:400">Service</th>
+          <th style="text-align:left;padding:6px 8px;font-weight:400">Type</th>
+          <th style="text-align:left;padding:6px 8px;font-weight:400">Detail</th>
+          <th style="text-align:left;padding:6px 8px;font-weight:400">Threat</th>
+        </tr></thead>
+        <tbody id="notable-tbody"><tr><td colspan="6" style="padding:12px 8px;color:var(--muted)"><span class="spin">◌</span> Loading…</td></tr></tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -933,6 +964,7 @@ const S = {
   panel:'overview', timeRange:'7d', stats:{},
   sessions:[], sessions_all:[], cves_all:[], creds_all:[], malware_all:[],
   charts:{}, map:null, mapMarkers:null, logPaused:false, logSeen:new Set(),
+  excludeVNC: false, notableEvents: [],
 };
 
 // ── Utils ──────────────────────────────────────────────────────────────────
@@ -1022,7 +1054,14 @@ async function loadOverview(){
   document.getElementById('sf-uptime').textContent=fmtUptime(s.uptime_seconds);
   document.getElementById('sn-total').textContent=fmt(s.total_attacks);
 
-  animCount('m-total',s.total_attacks); animCount('m-ips',s.unique_ips);
+  const totalVal = S.excludeVNC ? (s.total_attacks_ex_vnc||s.total_attacks) : s.total_attacks;
+  const ipsVal   = S.excludeVNC ? (s.unique_ips_ex_vnc||s.unique_ips)       : s.unique_ips;
+  animCount('m-total', totalVal); animCount('m-ips', ipsVal);
+  const subEl=document.getElementById('m-total-sub');
+  if(subEl) subEl.textContent = S.excludeVNC ? 'excl. VNC flood' : 'last period (all services)';
+  const exvncEl=document.getElementById('m-ips-exvnc');
+  if(exvncEl && s.unique_ips_ex_vnc!=null && s.unique_ips_ex_vnc !== s.unique_ips)
+    exvncEl.textContent=`excl. VNC: ${fmt(s.unique_ips_ex_vnc)}`;
   document.getElementById('m-countries').textContent=fmt(s.country_count);
   animCount('m-cve',s.cve_exploits); animCount('m-botnet',s.botnet_count);
   animCount('m-malware',s.malware_downloads); animCount('m-honey',s.honeytokens_triggered);
@@ -1097,6 +1136,9 @@ async function loadOverview(){
 
   // Load botnet names widget
   loadBotnetNames(h);
+
+  // Load notable events
+  loadNotableEvents(Math.max(h, 168));
 }
 
 async function loadBotnetNames(hours){
@@ -1246,6 +1288,55 @@ async function pollLog(){
 }
 function toggleLogPause(){S.logPaused=!S.logPaused;const btn=document.getElementById('logPauseBtn');btn.textContent=S.logPaused?'▶ Resume':'⏸ Pause';btn.classList.toggle('active',S.logPaused);}
 function clearLog(){document.getElementById('logStream').innerHTML='';S.logSeen.clear();}
+
+// ── VNC flood toggle ───────────────────────────────────────────────────────
+function toggleVNCExclude(){
+  S.excludeVNC=!S.excludeVNC;
+  const btn=document.getElementById('vnc-toggle');
+  if(btn) btn.classList.toggle('active', S.excludeVNC);
+  if(S.stats && S.stats.total_attacks){
+    const s=S.stats;
+    const totalVal = S.excludeVNC ? (s.total_attacks_ex_vnc||s.total_attacks) : s.total_attacks;
+    const ipsVal   = S.excludeVNC ? (s.unique_ips_ex_vnc||s.unique_ips)       : s.unique_ips;
+    document.getElementById('m-total').textContent=fmt(totalVal);
+    document.getElementById('m-ips').textContent=fmt(ipsVal);
+    const subEl=document.getElementById('m-total-sub');
+    if(subEl) subEl.textContent = S.excludeVNC ? 'excl. VNC flood' : 'last period (all services)';
+    const exvncEl=document.getElementById('m-ips-exvnc');
+    if(exvncEl) exvncEl.textContent = S.excludeVNC ? '' : (s.unique_ips_ex_vnc!=null && s.unique_ips_ex_vnc!==s.unique_ips ? `excl. VNC: ${fmt(s.unique_ips_ex_vnc)}` : '');
+  }
+}
+
+// ── Notable Events ─────────────────────────────────────────────────────────
+async function loadNotableEvents(hours){
+  hours = hours || 720;
+  document.querySelectorAll('#card-notable .btn-sm').forEach(b=>b.classList.toggle('active', b.textContent===(hours===168?'7D':'30D')));
+  const data = await api('/api/notable-events?hours='+hours+'&limit=100');
+  const tbody = document.getElementById('notable-tbody');
+  const countEl = document.getElementById('notable-count');
+  if(!data||!data.events){tbody.innerHTML='<tr><td colspan="6" style="color:var(--muted);padding:12px 8px">No data</td></tr>';return;}
+  const evs = data.events;
+  if(countEl) countEl.textContent = `${evs.length} events`;
+  const tLvlColor={critical:'#ff3054',high:'#ff9f0a',medium:'#ffd60a',low:'rgba(255,255,255,.4)'};
+  S.notableEvents = evs;
+  tbody.innerHTML = evs.length ? evs.map((e,i)=>{
+    const tags=[];
+    if(e.username) tags.push(`<span class="notable-tag nt-cred">${escHtml(e.username)}:${escHtml(e.password||'')}</span>`);
+    if(e.cve) tags.push(`<span class="notable-tag nt-cve">${escHtml(e.cve)}</span>`);
+    if(e.cmd_count>0) tags.push(`<span class="notable-tag nt-cmd">${e.cmd_count} cmd${e.cmd_count>1?'s':''}</span>`);
+    if(e.threat==='critical'&&!tags.length) tags.push(`<span class="notable-tag nt-crit">CRITICAL</span>`);
+    const ts=e.ts?e.ts.replace('T',' ').slice(0,16):'';
+    const detail=(e.detail||e.attack_type||'').slice(0,80);
+    return `<tr style="border-bottom:1px solid var(--border2);cursor:pointer" onclick="openNotableEvent(${i})">
+      <td style="padding:5px 8px;color:var(--muted);white-space:nowrap">${ts}</td>
+      <td style="padding:5px 8px;color:var(--blue)">${escHtml(e.ip)}</td>
+      <td style="padding:5px 8px">${escHtml(e.service)}</td>
+      <td style="padding:5px 8px">${tags.join('')}</td>
+      <td style="padding:5px 8px;color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(detail)}">${escHtml(detail)}</td>
+      <td style="padding:5px 8px;color:${tLvlColor[e.threat]||'rgba(255,255,255,.4)'}">${e.threat||'low'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" style="color:var(--muted);padding:12px 8px">No notable events in this period</td></tr>';
+}
 
 // ── Sessions ───────────────────────────────────────────────────────────────
 let _sessOffset=0;
@@ -1456,6 +1547,16 @@ function openSessModal(idx){
 function closeSessModal(){
   document.getElementById('sessModal').classList.add('hidden');
   document.body.style.overflow='';
+}
+// Opens a notable event by its index in S.notableEvents (avoids JSON-in-HTML-attr injection)
+function openNotableEvent(i){
+  const s=S.notableEvents[i];
+  if(!s)return;
+  // Temporarily inject into sessions so the existing modal renderer works unchanged
+  const prev=S.sessions;
+  S.sessions=[s,...prev];
+  openSessModal(0);
+  S.sessions=prev;
 }
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 async function loadIpProfile(ip){

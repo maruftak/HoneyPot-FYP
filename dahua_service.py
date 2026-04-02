@@ -169,6 +169,14 @@ def handle_dahua(conn, addr, log_attack=None, geoip_func=None,
         # Send greeting regardless — real devices also send it
         conn.sendall(greeting)
 
+        # Log raw bytes if the client spoke first (helps identify scanner tool)
+        if first:
+            _log("dahua_client_first", "medium", {
+                "raw_payload": first[:256].hex(),
+                "payload":     first[:128].decode(errors="replace"),
+                "notes":       f"Client sent {len(first)}b before greeting — tool fingerprint",
+            })
+
         # Re-inject the first frame if we got one so the main loop processes it
         pending = [first] if first else []
 
