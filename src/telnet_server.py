@@ -372,13 +372,24 @@ def handle_telnet_client(client, addr):
                     if len(parts) > 1:
                         sub = parts[1]
                         sub_up = sub.upper()
-                        # Mirai variant probe: busybox ECCHI / busybox SORA / etc.
-                        # Real BusyBox returns "<NAME>: applet not found" for unknown applets
+                        # Mirai variant probe: busybox ECCHI / UNSTABLE / TOASTER / SORA / etc.
+                        # Real BusyBox returns "<NAME>: applet not found" for unknown applets.
+                        # Seen in live data: ECCHI (classic), UNSTABLE (Moobot), TOASTER, SORA, LZRD etc.
                         std_applets = {"cat","ls","ps","sh","ash","echo","chmod","wget","cp",
                                        "mv","rm","hostname","id","kill","mkdir","touch","grep",
                                        "find","tar","mount","umount","dd","awk","sed","wc"}
                         if sub.lower() not in std_applets:
                             client.sendall(f"{sub}: applet not found\r\n".encode())
+                            # Track the Mirai variant name for the session log
+                            _MIRAI_VARIANTS = {
+                                "ECCHI","UNSTABLE","TOASTER","SORA","LZRD","MANGA","SYLVEON",
+                                "TBOT","YAKUZA","OWARI","CORONA","MOZI","KATANA","DARK","KURA",
+                                "MIORI","JOSHO","MILF","REAPER","SATORI","FBOT","HAJIME",
+                            }
+                            if sub.upper() in _MIRAI_VARIANTS:
+                                session_data["scanner_tool"] = f"Mirai/{sub.upper()}"
+                                session_data["attack_type"]  = "mirai_ecchi_confirmed"
+                                session_data["threat_level"] = "critical"
                         elif sub.lower() == "hostname":
                             if len(parts) > 2:
                                 pass  # busybox hostname NAME — silent set

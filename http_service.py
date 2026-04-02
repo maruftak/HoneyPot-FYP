@@ -2218,6 +2218,132 @@ def handle_http(conn, addr, https=False, *,
                 b"<body>Done</body></html>"))
             return
 
+        # ── CVE-2022-30525: Zyxel firewall (USG/ATP/VPN) — unauthenticated OS command injection
+        # Affects Zyxel ZyWALL/USG/ATP/VPN series. Attacker posts to /ztp/cgi-bin/handler
+        # with a crafted "command" key. Massively exploited by Mirai variants post-2022.
+        if "/ztp/cgi-bin/handler" in path:
+            _payload = post_body or query or ""
+            _at = "cve_CVE-2022-30525"
+            _tl = "critical"
+            attack_patterns.append(_at)
+            threat_level = _tl
+            inc_counter_func("cves")
+            if _has_botnet_dl(_payload):
+                attack_patterns.append("botnet_download")
+            _maybe_log_malware(_payload)
+            log_attack_func({
+                "timestamp":    ts_func(),
+                "source_ip":    ip,
+                "source_port":  port,
+                "dest_port":    dport,
+                "service":      svc,
+                "username":     "",
+                "password":     "",
+                "raw_payload":  _payload[:500],
+                "payload":      _payload[:500],
+                "country":      gdata["country"],
+                "city":         gdata["city"],
+                "latitude":     gdata["latitude"],
+                "longitude":    gdata["longitude"],
+                "attack_type":  _at,
+                "threat_level": _tl,
+                "cve_id":       "CVE-2022-30525",
+                "scanner_tool": scanner_tool,
+                "user_agent":   ua,
+                "path":         path,
+            })
+            # Zyxel returns 200 JSON on vulnerable firmware
+            conn.sendall(_http_resp(200, "application/json",
+                b'{"status":"success","message":"Configuration applied"}'))
+            return
+
+        # ── CVE-2023-28771: Zyxel ZyWALL/USG/ATP/VPN — pre-auth RCE in IKEv2
+        # Unauthenticated command injection via crafted IKEv2 packet or HTTP admin panel.
+        # Heavily scanned in 2023-2024. Probe path: /cgi-bin/dispatcher.cgi
+        if "/cgi-bin/dispatcher.cgi" in path or (
+            post_body and "zyxel" in (post_body or "").lower()
+        ):
+            _payload = post_body or query or ""
+            _at = "cve_CVE-2023-28771"
+            _tl = "critical"
+            attack_patterns.append(_at)
+            threat_level = _tl
+            inc_counter_func("cves")
+            if _has_botnet_dl(_payload):
+                attack_patterns.append("botnet_download")
+            _maybe_log_malware(_payload)
+            log_attack_func({
+                "timestamp":    ts_func(),
+                "source_ip":    ip,
+                "source_port":  port,
+                "dest_port":    dport,
+                "service":      svc,
+                "username":     "",
+                "password":     "",
+                "raw_payload":  _payload[:500],
+                "payload":      _payload[:500],
+                "country":      gdata["country"],
+                "city":         gdata["city"],
+                "latitude":     gdata["latitude"],
+                "longitude":    gdata["longitude"],
+                "attack_type":  _at,
+                "threat_level": _tl,
+                "cve_id":       "CVE-2023-28771",
+                "scanner_tool": scanner_tool,
+                "user_agent":   ua,
+                "path":         path,
+            })
+            conn.sendall(_http_resp(200, "application/json",
+                b'{"status":"success"}'))
+            return
+
+        # ── CVE-2022-27255: Realtek eCos SDK stack overflow — remote code execution
+        # Affects millions of routers/APs using Realtek RTL819x SDK (Asus, Belkin, etc.)
+        # Triggered by a crafted SIP packet or HTTP request to /goform/WAN_APPLY
+        # Also probed via /goform/setSysAdm, /goform/setWanIe, /goform/fast_setting_wifi_set
+        _REALTEK_PATHS = {
+            "/goform/WAN_APPLY", "/goform/setSysAdm", "/goform/setWanIe",
+            "/goform/fast_setting_wifi_set", "/goform/SysToolRestoreSet",
+            "/goform/WifiBasicSet", "/goform/addressNat",
+        }
+        if path in _REALTEK_PATHS or (
+            path.startswith("/goform/") and method == "POST" and post_body and
+            _has_cmd_injection(post_body or "")
+        ):
+            _payload = post_body or ""
+            _at = "cve_CVE-2022-27255"
+            _tl = "critical"
+            attack_patterns.append(_at)
+            threat_level = _tl
+            inc_counter_func("cves")
+            if _has_botnet_dl(_payload):
+                attack_patterns.append("botnet_download")
+            _maybe_log_malware(_payload)
+            log_attack_func({
+                "timestamp":    ts_func(),
+                "source_ip":    ip,
+                "source_port":  port,
+                "dest_port":    dport,
+                "service":      svc,
+                "username":     "",
+                "password":     "",
+                "raw_payload":  _payload[:500],
+                "payload":      _payload[:500],
+                "country":      gdata["country"],
+                "city":         gdata["city"],
+                "latitude":     gdata["latitude"],
+                "longitude":    gdata["longitude"],
+                "attack_type":  _at,
+                "threat_level": _tl,
+                "cve_id":       "CVE-2022-27255",
+                "scanner_tool": scanner_tool,
+                "user_agent":   ua,
+                "path":         path,
+            })
+            conn.sendall(_http_resp(200, "text/html",
+                b"<html><body>OK</body></html>"))
+            return
+
         # ── /boaform/admin/formLogin: Realtek/Boa router credential harvest + RCE
         # Widespread Mirai/Moobot target — captures credentials submitted to the
         # Boa web server login form and detects inline command injection attempts.

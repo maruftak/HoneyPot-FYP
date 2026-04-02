@@ -147,7 +147,10 @@ def handle_dahua(conn, addr, log_attack=None, geoip_func=None,
         conn.settimeout(30)
         authenticated = False
 
-        # Send server challenge / greeting first (Dahua devices speak first)
+        # Real Dahua scanners (dhscan, dahua-pwn, Satori) send the login frame
+        # immediately on connect WITHOUT waiting for a server greeting.
+        # Strategy: peek for an incoming frame within 2s; if nothing arrives,
+        # fall back to sending our greeting (for tools that do wait for server-first).
         greeting = _build_response(session, 0, {
             "Ret": 100,
             "SessionID": f"0x{session:08X}",
@@ -156,13 +159,27 @@ def handle_dahua(conn, addr, log_attack=None, geoip_func=None,
             "DeviceType ": _DEVICE_TYPE,
             "ExtraChannel": 0,
         })
+        conn.settimeout(2)
+        try:
+            first = conn.recv(8192)
+        except socket.timeout:
+            first = None
+        conn.settimeout(30)
+
+        # Send greeting regardless — real devices also send it
         conn.sendall(greeting)
 
+        # Re-inject the first frame if we got one so the main loop processes it
+        pending = [first] if first else []
+
         while True:
-            try:
-                raw = conn.recv(8192)
-            except socket.timeout:
-                break
+            if pending:
+                raw = pending.pop(0)
+            else:
+                try:
+                    raw = conn.recv(8192)
+                except socket.timeout:
+                    break
             if not raw:
                 break
 
@@ -194,18 +211,21 @@ def handle_dahua(conn, addr, log_attack=None, geoip_func=None,
                     _log("dahua_cve_2021_33044", "critical", {
                         "username": repr(username),
                         "password": repr(password),
-                        "notes": "CVE-2021-33044 NULL-byte auth bypass",
+                        "cve_id":   "CVE-2021-33044",
+                        "payload":  f"NULL-byte auth bypass user={repr(username)} enc={enc_type}",
                     })
                 elif (username, password) in _WEAK_CREDS or (username, "") in _WEAK_CREDS:
                     authenticated = True
                     _log("dahua_login_success", "high", {
                         "username": username,
                         "password": password,
+                        "payload":  f"login_ok user={username} pass={password} enc={enc_type}",
                     })
                 else:
                     _log("dahua_login_fail", "medium", {
                         "username": username,
                         "password": password,
+                        "payload":  f"login_fail user={username} pass={password} enc={enc_type}",
                     })
 
                 if authenticated:

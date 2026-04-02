@@ -161,11 +161,32 @@ def handle_xmeye(conn, addr, log_attack=None, geoip_func=None,
         authenticated = False
         seq = 0
 
+        # XMeye/Sofia scanners send MSG_LOGIN_REQ immediately on connect.
+        # Some tools wait for a server banner first — peek for 2s; if nothing
+        # arrives send a challenge frame so they respond with credentials.
+        _challenge = _build_frame(session, 0, MSG_LOGIN_REQ, {
+            "EncryptType": "MD5",
+            "LoginType":   "DVRIP-Web",
+            "PassWord":    "",
+            "UserName":    "",
+        })
+        conn.settimeout(2)
+        try:
+            first = conn.recv(8192)
+        except socket.timeout:
+            first = None
+        conn.settimeout(30)
+        conn.sendall(_challenge)
+        pending = [first] if first else []
+
         while True:
-            try:
-                raw = conn.recv(8192)
-            except socket.timeout:
-                break
+            if pending:
+                raw = pending.pop(0)
+            else:
+                try:
+                    raw = conn.recv(8192)
+                except socket.timeout:
+                    break
             if not raw:
                 break
 
@@ -181,6 +202,11 @@ def handle_xmeye(conn, addr, log_attack=None, geoip_func=None,
 
             parsed = _parse_frame(raw)
             if parsed is None:
+                # Log raw bytes for unknown/partial frames
+                _log("xmeye_raw_probe", "low", {
+                    "payload": raw[:200].hex(),
+                    "raw_payload": raw[:200].decode(errors="replace"),
+                })
                 break
 
             client_session, client_seq, msg_id, body = parsed
@@ -206,19 +232,20 @@ def handle_xmeye(conn, addr, log_attack=None, geoip_func=None,
                         "SessionID": f"0x{session:08X}",
                     }))
                     _log("xmeye_login_success", "high", {
-                        "username": username,
-                        "password": password,
-                        "login_type": login_type,
+                        "username":   username,
+                        "password":   password,
+                        "payload":    f"login_ok user={username} pass={password} type={login_type} enc={enc_type}",
                     })
                 else:
-                    # Log and reject
+                    # Log and reject — keep connection open for continued attempts
                     conn.sendall(_build_frame(session, client_seq, MSG_LOGIN_RESP, {
                         "Ret": 205,
                         "SessionID": "0x00000000",
                     }))
                     _log("xmeye_login_fail", "medium", {
-                        "username": username,
-                        "password": password,
+                        "username":   username,
+                        "password":   password,
+                        "payload":    f"login_fail user={username} pass={password} enc={enc_type}",
                     })
 
             # ── SYSTEM INFO ───────────────────────────────────────────────

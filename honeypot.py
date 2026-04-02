@@ -761,15 +761,29 @@ def handle_telnet(conn, addr):
                 db.log_cve(_ts(), ip, cve_id, cve["name"], cve["severity"],
                            "telnet", cmd, gdata["country"])
 
-            # ECCHI — definitive Mirai botnet confirmation marker
-            if "ECCHI" in cmd.upper():
+            # Mirai botnet variant probe — busybox <VARIANT_NAME>
+            # Each variant sends a unique applet name to confirm it's running on BusyBox.
+            # Seen in live data: ECCHI (classic Mirai), UNSTABLE (Costa Rica bot),
+            # TOASTER (Italian variant), SORA, LZRD, MANGA, SYLVEON, TBOT, YAKUZA, OWARI
+            _MIRAI_VARIANTS = {
+                "ECCHI","UNSTABLE","TOASTER","SORA","LZRD","MANGA","SYLVEON",
+                "TBOT","YAKUZA","OWARI","CORONA","MOZI","KATANA","DARK","KURA",
+                "MIORI","JOSHO","MILF","REAPER","SATORI","FBOT","HAJIME",
+            }
+            _cmd_upper = cmd.upper()
+            _matched_variant = next(
+                (v for v in _MIRAI_VARIANTS if v in _cmd_upper), None
+            )
+            if _matched_variant:
                 _inc("botnets")
                 alerts.mirai_confirmed(ip, gdata["country"], "telnet", cmd)
                 db.log_attack({
                     "timestamp":    _ts(), "source_ip": ip, "source_port": port,
                     "dest_port":    23,    "service": "telnet", "protocol": "TCP",
                     "attack_type":  "mirai_ecchi_confirmed", "threat_level": "critical",
-                    "payload":      cmd,   "country": gdata["country"],
+                    "payload":      cmd,
+                    "scanner_tool": f"Mirai/{_matched_variant}",
+                    "country": gdata["country"],
                     "city":         gdata["city"], "latitude": gdata["latitude"],
                     "longitude":    gdata["longitude"], "session_id": sid,
                     **_intel_fields(gdata),
