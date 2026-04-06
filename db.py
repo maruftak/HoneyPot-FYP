@@ -15,7 +15,8 @@ LOG_DIR = config.LOG_DIR
 
 _lock = Lock()
 _stats_cache: dict = {}   # {hours: (expires_at, result)}
-_STATS_TTL = 45           # seconds — stats are expensive, cache for 45s
+_STATS_TTL = 90           # seconds — stats are expensive; cached for 90s
+_query_cache: dict = {}   # generic {key: (expires_at, result)} for other heavy functions
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
 SCHEMA = """
@@ -146,9 +147,11 @@ CREATE INDEX IF NOT EXISTS idx_atk_svc     ON attacks(service);
 CREATE INDEX IF NOT EXISTS idx_atk_ctry    ON attacks(country);
 CREATE INDEX IF NOT EXISTS idx_atk_tor     ON attacks(is_tor);
 CREATE INDEX IF NOT EXISTS idx_atk_vpn     ON attacks(is_vpn);
-CREATE INDEX IF NOT EXISTS idx_atk_ts_svc  ON attacks(timestamp, service);
-CREATE INDEX IF NOT EXISTS idx_atk_ts_bot  ON attacks(timestamp, is_botnet);
-CREATE INDEX IF NOT EXISTS idx_atk_ts_prx  ON attacks(timestamp, is_proxy);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_svc       ON attacks(timestamp, service);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_bot       ON attacks(timestamp, is_botnet);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_prx       ON attacks(timestamp, is_proxy);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_ctry_ip   ON attacks(timestamp, country, source_ip);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_ip_svc    ON attacks(timestamp, source_ip, service, is_botnet, is_tor, is_vpn);
 CREATE INDEX IF NOT EXISTS idx_cve_ts      ON cve_attempts(timestamp);
 CREATE INDEX IF NOT EXISTS idx_mal_ts      ON malware_urls(timestamp);
 CREATE INDEX IF NOT EXISTS idx_ht_ts       ON honeytoken_triggers(timestamp);
@@ -231,8 +234,11 @@ def init():
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
 def _connect():
-    conn = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # Aggressive WAL checkpointing — keeps WAL file small so reads stay fast
+    conn.execute("PRAGMA wal_autocheckpoint=200")
+    conn.execute("PRAGMA busy_timeout=25000")
     return conn
 
 
@@ -501,6 +507,17 @@ def scalar(sql, params=()):
         return 0
 
 
+def _qcache(key, ttl, fn):
+    """Generic result cache. ttl in seconds. fn is a callable returning the result."""
+    now = time.monotonic()
+    hit = _query_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    result = fn()
+    _query_cache[key] = (now + ttl, result)
+    return result
+
+
 def get_stats(hours=24):
     # Return cached result if still fresh
     now = time.monotonic()
@@ -588,7 +605,7 @@ def get_stats(hours=24):
 
 def get_geo_data(hours=24):
     c = _cutoff(hours)
-    return query("""
+    return _qcache(f"geo:{hours}", 60, lambda: query("""
         SELECT latitude, longitude, country,
                COUNT(*)       cnt,
                SUM(is_botnet) bots,
@@ -598,7 +615,7 @@ def get_geo_data(hours=24):
         WHERE timestamp>? AND latitude IS NOT NULL AND longitude IS NOT NULL
         GROUP BY ROUND(latitude,1), ROUND(longitude,1), country
         ORDER BY cnt DESC
-    """, (c,))
+    """, (c,)))
 
 
 def get_attack_count(hours=24, service=None, threat=None):
@@ -628,63 +645,67 @@ def get_recent_attacks(hours=24, limit=200, service=None, threat=None):
 
 
 def get_timeline(hours=24):
-    c = _cutoff(hours)
-    if hours <= 24:
-        fmt   = "%Y-%m-%dT%H:00"
-        trunc = "strftime('%Y-%m-%dT%H:00', timestamp)"
-        step  = datetime.timedelta(hours=1)
-    else:
-        fmt   = "%Y-%m-%d"
-        trunc = "strftime('%Y-%m-%d', timestamp)"
-        step  = datetime.timedelta(days=1)
-
-    rows    = query(f"""
-        SELECT {trunc} bucket,
-               COUNT(*) total,
-               SUM(is_botnet) botnets,
-               SUM(CASE WHEN cve_id!='' THEN 1 ELSE 0 END) cves
-        FROM attacks WHERE timestamp>?
-        GROUP BY bucket ORDER BY bucket
-    """, (c,))
-    buckets = {r["bucket"]: r for r in rows}
-    filled  = []
-    cur     = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
-    while cur <= datetime.datetime.utcnow():
-        b = cur.strftime(fmt)
-        filled.append(buckets.get(
-            b, {"bucket": b, "total": 0, "botnets": 0, "cves": 0}
-        ))
-        cur += step
-    return filled
+    def _build():
+        c = _cutoff(hours)
+        if hours <= 24:
+            fmt   = "%Y-%m-%dT%H:00"
+            trunc = "strftime('%Y-%m-%dT%H:00', timestamp)"
+            step  = datetime.timedelta(hours=1)
+        else:
+            fmt   = "%Y-%m-%d"
+            trunc = "strftime('%Y-%m-%d', timestamp)"
+            step  = datetime.timedelta(days=1)
+        rows    = query(f"""
+            SELECT {trunc} bucket,
+                   COUNT(*) total,
+                   SUM(is_botnet) botnets,
+                   SUM(CASE WHEN cve_id!='' THEN 1 ELSE 0 END) cves
+            FROM attacks WHERE timestamp>?
+            GROUP BY bucket ORDER BY bucket
+        """, (c,))
+        buckets = {r["bucket"]: r for r in rows}
+        filled  = []
+        cur     = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
+        while cur <= datetime.datetime.utcnow():
+            b = cur.strftime(fmt)
+            filled.append(buckets.get(b, {"bucket": b, "total": 0, "botnets": 0, "cves": 0}))
+            cur += step
+        return filled
+    return _qcache(f"timeline:{hours}", 60, _build)
 
 
 def get_top_ips(hours=24, limit=20):
     c = _cutoff(hours)
-    return query("""
+    # INDEXED BY forces the covering index so SQLite doesn't pick idx_atk_ip
+    # (which ignores timestamp and causes a full scan).
+    # GROUP_CONCAT(DISTINCT) is dropped — it adds a temp B-TREE pass with no gain.
+    return _qcache(f"top_ips:{hours}:{limit}", 60, lambda: query("""
         SELECT source_ip,
                country,
-               COUNT(*)                       cnt,
-               SUM(is_botnet)                 bots,
-               SUM(is_tor)                    tors,
-               SUM(is_vpn)                    vpns,
-               MAX(timestamp)                 last_seen,
-               GROUP_CONCAT(DISTINCT service) services,
-               MAX(scanner_tool)              scanner_tool,
-               MAX(vpn_provider)              vpn_provider,
-               MAX(anonymization_method)      anonymization_method
-        FROM attacks WHERE timestamp>?
+               COUNT(*)                  cnt,
+               SUM(is_botnet)            bots,
+               SUM(is_tor)               tors,
+               SUM(is_vpn)               vpns,
+               MAX(timestamp)            last_seen,
+               MAX(scanner_tool)         scanner_tool,
+               MAX(vpn_provider)         vpn_provider,
+               MAX(anonymization_method) anonymization_method
+        FROM attacks INDEXED BY idx_atk_ts_ip_svc
+        WHERE timestamp>?
         GROUP BY source_ip ORDER BY cnt DESC LIMIT ?
-    """, (c, limit))
+    """, (c, limit)))
 
 
 def get_top_countries(hours=24, limit=20):
     c = _cutoff(hours)
-    return query("""
+    # Force covering index on (timestamp, country, source_ip) — SQLite would otherwise
+    # pick idx_atk_ctry which causes a full scan without the timestamp filter.
+    return _qcache(f"countries:{hours}:{limit}", 60, lambda: query("""
         SELECT country, COUNT(*) cnt, COUNT(DISTINCT source_ip) ips
-        FROM attacks
+        FROM attacks INDEXED BY idx_atk_ts_ctry_ip
         WHERE timestamp>? AND country NOT IN ('Unknown','')
         GROUP BY country ORDER BY cnt DESC LIMIT ?
-    """, (c, limit))
+    """, (c, limit)))
 
 
 def get_top_credentials(hours=168, limit=500, service=None):
@@ -853,7 +874,7 @@ def get_notable_events(hours=168, limit=50):
 
 def get_service_breakdown(hours=24):
     c = _cutoff(hours)
-    return query("""
+    return _qcache(f"svc_breakdown:{hours}", 60, lambda: query("""
         SELECT service, dest_port,
                COUNT(*) cnt,
                COUNT(DISTINCT source_ip) unique_ips,
@@ -862,67 +883,69 @@ def get_service_breakdown(hours=24):
                SUM(CASE WHEN username!='' THEN 1 ELSE 0 END) cred_count
         FROM attacks WHERE timestamp>?
         GROUP BY service ORDER BY cnt DESC
-    """, (c,))
+    """, (c,)))
 
 
 def get_hourly_heatmap():
     """24 attack counts (one per UTC hour-of-day) over last 7 days."""
-    rows = query("""
-        SELECT CAST(strftime('%H', timestamp) AS INTEGER) AS hour,
-               COUNT(*) cnt
-        FROM attacks
-        WHERE timestamp > datetime('now', '-7 days')
-        GROUP BY hour ORDER BY hour
-    """)
-    bucket = [0] * 24
-    for r in rows:
-        h = r["hour"]
-        if 0 <= h <= 23:
-            bucket[h] = r["cnt"]
-    return bucket
+    def _build():
+        rows = query("""
+            SELECT CAST(strftime('%H', timestamp) AS INTEGER) AS hour,
+                   COUNT(*) cnt
+            FROM attacks
+            WHERE timestamp > datetime('now', '-7 days')
+            GROUP BY hour ORDER BY hour
+        """)
+        bucket = [0] * 24
+        for r in rows:
+            h = r["hour"]
+            if 0 <= h <= 23:
+                bucket[h] = r["cnt"]
+        return bucket
+    return _qcache("heatmap", 120, _build)
 
 
 def get_botnet_distribution():
-    rows = query("""
-        SELECT commands FROM attacks
-        WHERE is_botnet=1 AND commands!='[]'
-        AND timestamp > datetime('now', '-7 days')
-    """)
-    import json as _json
-    families   = {"Mirai": 0, "Gafgyt": 0, "Sora": 0,
-                  "Muhstik": 0, "Mozi": 0, "Other": 0}
-    indicators = {
-        "Mirai":   ["busybox", "/bin/busybox", "cat /proc/mounts", "MIRAI"],
-        "Gafgyt":  ["HTTPFLOOD", "UDPFLOOD", "PING", "HOLD", "tftp -g"],
-        "Sora":    ["SORA", "/bin/busybox SORA"],
-        "Muhstik": ["muhstik", "JOIN #", "irc"],
-        "Mozi":    ["mozi", "nttpd", "dht"],
-    }
-    total = 0
-    for r in rows:
-        try:
-            cmds = _json.loads(r["commands"])
-        except Exception:
-            cmds = []
-        s       = " ".join(cmds).lower()
-        matched = False
-        for fam, kws in indicators.items():
-            if any(kw.lower() in s for kw in kws):
-                families[fam] += 1
-                matched = True
-                break
-        if not matched:
-            families["Other"] += 1
-        total += 1
-
-    if total == 0:
-        cnt = scalar(
-            "SELECT COUNT(*) FROM attacks"
-            " WHERE is_botnet=1 AND timestamp > datetime('now','-7 days')"
-        )
-        families["Other"] = cnt
-
-    return {"families": families, "total": sum(families.values())}
+    def _build():
+        rows = query("""
+            SELECT commands FROM attacks
+            WHERE is_botnet=1 AND commands!='[]'
+            AND timestamp > datetime('now', '-7 days')
+        """)
+        import json as _json
+        families   = {"Mirai": 0, "Gafgyt": 0, "Sora": 0,
+                      "Muhstik": 0, "Mozi": 0, "Other": 0}
+        indicators = {
+            "Mirai":   ["busybox", "/bin/busybox", "cat /proc/mounts", "MIRAI"],
+            "Gafgyt":  ["HTTPFLOOD", "UDPFLOOD", "PING", "HOLD", "tftp -g"],
+            "Sora":    ["SORA", "/bin/busybox SORA"],
+            "Muhstik": ["muhstik", "JOIN #", "irc"],
+            "Mozi":    ["mozi", "nttpd", "dht"],
+        }
+        total = 0
+        for r in rows:
+            try:
+                cmds = _json.loads(r["commands"])
+            except Exception:
+                cmds = []
+            s       = " ".join(cmds).lower()
+            matched = False
+            for fam, kws in indicators.items():
+                if any(kw.lower() in s for kw in kws):
+                    families[fam] += 1
+                    matched = True
+                    break
+            if not matched:
+                families["Other"] += 1
+            total += 1
+        if total == 0:
+            cnt = scalar(
+                "SELECT COUNT(*) FROM attacks"
+                " WHERE is_botnet=1 AND timestamp > datetime('now','-7 days')"
+            )
+            families["Other"] = cnt
+        return {"families": families, "total": sum(families.values())}
+    return _qcache("botnet_dist", 120, _build)
 
 
 def get_report_data(hours=24):
@@ -936,3 +959,109 @@ def get_report_data(hours=24):
         "timeline":      get_timeline(hours),
         "services":      get_service_breakdown(hours),
     }
+
+
+def get_iot_stats(hours=24):
+    """SQL-based IoT stats — replaces the 10K-row Python loop in dashboard.py."""
+    def _build():
+        c = _cutoff(hours)
+        row = query("""
+            SELECT
+                SUM(CASE WHEN service='rtsp' THEN 1 ELSE 0 END)                          AS rtsp_attempts,
+                SUM(CASE WHEN service='onvif' OR path LIKE '%/onvif/%' THEN 1 ELSE 0 END) AS onvif_probes,
+                SUM(CASE WHEN service='modbus' THEN 1 ELSE 0 END)                         AS modbus_hits,
+                SUM(CASE WHEN path LIKE '%/ISAPI/%' OR path LIKE '%/doc/page/login%'
+                          OR path LIKE '%/PSIA/%'   OR path LIKE '%/SDK/%'
+                          OR path LIKE '%/Streaming/%' OR path LIKE '%/onvif/%'
+                          OR path LIKE '%/cgi-bin/%' THEN 1 ELSE 0 END)                   AS hikvision_hits,
+                SUM(CASE WHEN path LIKE '%/streaming%' OR path LIKE '%/channels%'
+                         THEN 1 ELSE 0 END)                                               AS stream_requests,
+                SUM(CASE WHEN (username IN ('admin','root','') OR username IS NULL)
+                          AND (password IN ('admin','12345','password','root','')
+                               OR password IS NULL) THEN 1 ELSE 0 END)                    AS default_creds
+            FROM attacks WHERE timestamp>?
+        """, (c,))
+        r = row[0] if row else {}
+        # CVE breakdown (IoT-relevant)
+        cve_rows = query("""
+            SELECT cve_id, COUNT(*) cnt FROM attacks
+            WHERE timestamp>? AND cve_id!='' AND cve_id IS NOT NULL
+            GROUP BY cve_id ORDER BY cnt DESC LIMIT 10
+        """, (c,))
+        return {
+            "rtsp_attempts":    r.get("rtsp_attempts", 0) or 0,
+            "onvif_probes":     r.get("onvif_probes", 0) or 0,
+            "modbus_hits":      r.get("modbus_hits", 0) or 0,
+            "hikvision_hits":   r.get("hikvision_hits", 0) or 0,
+            "stream_requests":  r.get("stream_requests", 0) or 0,
+            "default_creds":    r.get("default_creds", 0) or 0,
+            "arch_targets":     {},
+            "iot_cves":         [(rv["cve_id"], rv["cnt"]) for rv in cve_rows],
+            "total_iot_events": (
+                (r.get("rtsp_attempts") or 0) + (r.get("onvif_probes") or 0) +
+                (r.get("modbus_hits") or 0) + (r.get("hikvision_hits") or 0)
+            ),
+        }
+    return _qcache(f"iot_stats:{hours}", 90, _build)
+
+
+def get_anonymization_stats(hours=168):
+    """SQL-based anonymization stats — replaces the 10K-row Python loop in dashboard.py."""
+    def _build():
+        c = _cutoff(hours)
+        # Totals
+        tot = query("""
+            SELECT
+                SUM(is_tor)   AS tor,
+                SUM(is_vpn)   AS vpn,
+                SUM(is_proxy) AS proxy,
+                SUM(CASE WHEN is_tor=0 AND is_vpn=0 AND is_proxy=0 THEN 1 ELSE 0 END) AS clean
+            FROM attacks WHERE timestamp>?
+        """, (c,))
+        totals = {k: (tot[0].get(k) or 0) for k in ("tor","vpn","proxy","clean")} if tot else {}
+
+        # VPN providers
+        vpn_rows = query("""
+            SELECT vpn_provider, COUNT(*) cnt, COUNT(DISTINCT source_ip) unique_ips,
+                   MAX(timestamp) last
+            FROM attacks WHERE timestamp>? AND is_vpn=1 AND vpn_provider!=''
+            GROUP BY vpn_provider ORDER BY cnt DESC LIMIT 20
+        """, (c,))
+        vpn_list = [{"provider": r["vpn_provider"], "count": r["cnt"],
+                     "unique_ips": r["unique_ips"], "last": r["last"],
+                     "ip_details": [], "exit_countries": []} for r in vpn_rows]
+
+        # Tor nodes
+        tor_rows = query("""
+            SELECT source_ip, tor_exit_ip, country, COUNT(*) cnt, MAX(timestamp) last
+            FROM attacks WHERE timestamp>? AND is_tor=1
+            GROUP BY source_ip ORDER BY cnt DESC LIMIT 50
+        """, (c,))
+        tor_list = [{"count": r["cnt"], "exit_ip": r["tor_exit_ip"] or r["source_ip"],
+                     "country": r["country"], "last": r["last"]} for r in tor_rows]
+
+        # Proxy types
+        proxy_rows = query("""
+            SELECT proxy_type, COUNT(*) cnt FROM attacks
+            WHERE timestamp>? AND is_proxy=1 AND proxy_type!=''
+            GROUP BY proxy_type ORDER BY cnt DESC
+        """, (c,))
+        proxy_list = [{"type": r["proxy_type"], "count": r["cnt"]} for r in proxy_rows]
+
+        # Hourly timeline (last 48 buckets)
+        tl_rows = query("""
+            SELECT strftime('%Y-%m-%dT%H:00', timestamp) bucket,
+                   SUM(is_tor)   tor,
+                   SUM(is_vpn)   vpn,
+                   SUM(is_proxy) proxy,
+                   SUM(CASE WHEN is_tor=0 AND is_vpn=0 AND is_proxy=0 THEN 1 ELSE 0 END) clean
+            FROM attacks WHERE timestamp>?
+            GROUP BY bucket ORDER BY bucket DESC LIMIT 48
+        """, (c,))
+        timeline = [{"bucket": r["bucket"], "tor": r["tor"] or 0, "vpn": r["vpn"] or 0,
+                     "proxy": r["proxy"] or 0, "clean": r["clean"] or 0}
+                    for r in reversed(tl_rows)]
+
+        return {"totals": totals, "tor_nodes": tor_list,
+                "vpn_providers": vpn_list, "proxy_types": proxy_list, "timeline": timeline}
+    return _qcache(f"anon_stats:{hours}", 90, _build)

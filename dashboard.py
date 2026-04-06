@@ -83,7 +83,7 @@ def api_health():
     })
 
 @app.route("/api/stats")
-@cached(2)
+@cached(60)
 def api_stats():
     hours = request.args.get("hours", 24, type=int)
     s = db.get_stats(hours)
@@ -91,7 +91,7 @@ def api_stats():
     return jsonify(s)
 
 @app.route("/api/geo-data")
-@cached(5)
+@cached(60)
 def api_geo_data():
     hours = request.args.get("hours", 24, type=int)
     rows  = db.get_geo_data(hours)
@@ -147,7 +147,6 @@ def _build_session_row(r):
     path      = (r.get("path") or "")
     method    = (r.get("method") or "")
     ua        = (r.get("user_agent") or "")
-    svc       = (r.get("service") or "").lower()
 
     # Service-specific detail string shown in table and modal
     detail = ""
@@ -228,7 +227,7 @@ def _apply_session_filters(rows, filters):
     return result
 
 @app.route("/api/sessions")
-@cached(2)
+@cached(30)
 def api_sessions():
     hours    = request.args.get("hours",       168, type=int)   # default 7d; use 0 or very large for all-time
     limit    = request.args.get("limit",       200, type=int)
@@ -297,7 +296,7 @@ def api_chart_data():
     return jsonify({"labels": labels, "datasets": datasets})
 
 @app.route("/api/top-ips")
-@cached(3)
+@cached(60)
 def api_top_ips():
     hours = request.args.get("hours", 24,  type=int)
     limit = request.args.get("limit", 20,  type=int)
@@ -316,7 +315,7 @@ def api_top_ips():
     })
 
 @app.route("/api/countries")
-@cached(10)
+@cached(60)
 def api_countries():
     hours = request.args.get("hours", 24, type=int)
     rows  = db.get_top_countries(hours)
@@ -456,100 +455,14 @@ def api_service_stats():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/anonymization-stats")
-@cached(10)
+@cached(90)
 def api_anonymization_stats():
     """
     Returns Tor exit node usage, VPN provider breakdown,
     proxy types, and endpoint change timeline.
     """
     hours = request.args.get("hours", 168, type=int)
-    rows  = db.get_recent_attacks(hours, limit=10000)
-
-    tor_ips      = {}   # ip -> {count, exit_ip, last}
-    vpn_providers= {}   # provider -> {count, ips, exit_countries, timeline}
-    proxy_types  = {}   # type -> count
-    anon_timeline= {}   # hour-bucket -> {tor, vpn, proxy, clean}
-
-    for r in rows:
-        ip  = r.get("source_ip","")
-        ts  = r.get("timestamp","")
-        bucket = ts[:13] if ts else ""   # "2026-03-20T14"
-
-        # Timeline bucket init
-        if bucket not in anon_timeline:
-            anon_timeline[bucket] = {"tor":0,"vpn":0,"proxy":0,"clean":0}
-
-        if r.get("is_tor"):
-            # Tor tracking
-            exit_ip = r.get("tor_exit_ip") or ip
-            if ip not in tor_ips:
-                tor_ips[ip] = {"count":0,"exit_ip":exit_ip,"last":ts,"country":r.get("country","")}
-            tor_ips[ip]["count"] += 1
-            tor_ips[ip]["last"]   = ts
-            anon_timeline[bucket]["tor"] += 1
-
-        elif r.get("is_vpn"):
-            provider = r.get("vpn_provider") or "Unknown VPN"
-            exit_c   = r.get("vpn_exit_country") or r.get("country","")
-            city     = r.get("city","") or ""
-            if provider not in vpn_providers:
-                vpn_providers[provider] = {"count":0,"ips":{},"exit_countries":{},"last":ts}
-            vpn_providers[provider]["count"]  += 1
-            if ip not in vpn_providers[provider]["ips"]:
-                vpn_providers[provider]["ips"][ip] = {"count":0,"country":exit_c,"city":city}
-            vpn_providers[provider]["ips"][ip]["count"] += 1
-            vpn_providers[provider]["last"]    = ts
-            vpn_providers[provider]["exit_countries"][exit_c] = \
-                vpn_providers[provider]["exit_countries"].get(exit_c, 0) + 1
-            anon_timeline[bucket]["vpn"] += 1
-
-        elif r.get("is_proxy"):
-            ptype = r.get("proxy_type") or "Unknown Proxy"
-            proxy_types[ptype] = proxy_types.get(ptype, 0) + 1
-            anon_timeline[bucket]["proxy"] += 1
-        else:
-            anon_timeline[bucket]["clean"] += 1
-
-    # Serialise (sets → sorted lists)
-    vpn_list = []
-    for provider, data in sorted(vpn_providers.items(), key=lambda x: -x[1]["count"]):
-        ip_details = sorted(
-            [{"ip": ip, "country": d["country"], "city": d["city"], "hits": d["count"]}
-             for ip, d in data["ips"].items()],
-            key=lambda x: -x["hits"]
-        )
-        vpn_list.append({
-            "provider":       provider,
-            "count":          data["count"],
-            "unique_ips":     len(data["ips"]),
-            "ip_details":     ip_details,
-            "exit_countries": sorted(data["exit_countries"].items(), key=lambda x: -x[1]),
-            "last":           data["last"],
-        })
-
-    tor_list = sorted(tor_ips.values(), key=lambda x: -x["count"])
-
-    proxy_list = [{"type":k,"count":v} for k,v in sorted(proxy_types.items(), key=lambda x: -x[1])]
-
-    timeline_list = [
-        {"bucket": k, **v}
-        for k, v in sorted(anon_timeline.items())
-    ]
-
-    totals = {
-        "tor":   sum(d["count"] for d in tor_ips.values()),
-        "vpn":   sum(d["count"] for d in vpn_providers.values()),
-        "proxy": sum(proxy_types.values()),
-        "clean": sum(v["clean"] for v in anon_timeline.values()),
-    }
-
-    return jsonify({
-        "totals":        totals,
-        "tor_nodes":     tor_list[:50],
-        "vpn_providers": vpn_list,
-        "proxy_types":   proxy_list,
-        "timeline":      timeline_list[-48:],  # last 48 hourly buckets
-    })
+    return jsonify(db.get_anonymization_stats(hours))
 
 @app.route("/api/notable-events")
 @cached(10)
@@ -611,73 +524,14 @@ def api_vpn_endpoint_changes():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/iot-stats")
-@cached(10)
+@cached(90)
 def api_iot_stats():
     """
     IoT-specific breakdown: RTSP stream attempts, ONVIF probes,
     Modbus/ICS hits, botnet family distribution, camera-specific CVEs.
     """
     hours = request.args.get("hours", 24, type=int)
-    rows  = db.get_recent_attacks(hours, limit=10000)
-
-    rtsp_attempts  = 0
-    onvif_probes   = 0
-    modbus_hits    = 0
-    hikvision_hits = 0
-    stream_requests= 0
-    default_creds  = 0
-    botnet_cmds    = []
-    arch_targets   = {}
-    iot_cves       = {}
-
-    HIKVISION_PATHS = ["/ISAPI/","/doc/page/login","/PSIA/","/SDK/","/Streaming/","/onvif/","/cgi-bin/"]
-
-    for r in rows:
-        svc  = (r.get("service","") or "").lower()
-        path = (r.get("path","") or "").lower()
-        ua   = (r.get("user_agent","") or "").lower()
-
-        if svc == "rtsp":
-            rtsp_attempts += 1
-        if svc == "onvif" or "onvif" in path:
-            onvif_probes += 1
-        if svc == "modbus":
-            modbus_hits += 1
-        if any(p in path for p in HIKVISION_PATHS):
-            hikvision_hits += 1
-        if "/streaming" in path or "/channels" in path:
-            stream_requests += 1
-
-        u = r.get("username","") or ""
-        p = r.get("password","") or ""
-        if u in ("admin","root","") and p in ("admin","12345","password","root",""):
-            default_creds += 1
-
-        cve = r.get("cve_id","")
-        if cve:
-            iot_cves[cve] = iot_cves.get(cve, 0) + 1
-
-        try:
-            cmds = json.loads(r.get("commands","[]"))
-            for cmd in cmds:
-                for arch in ["arm7","arm6","arm5","arm","mips","mipsel","x86","i686"]:
-                    if arch in cmd.lower():
-                        arch_targets[arch] = arch_targets.get(arch,0)+1
-                botnet_cmds.append(cmd[:80])
-        except Exception:
-            pass
-
-    return jsonify({
-        "rtsp_attempts":   rtsp_attempts,
-        "onvif_probes":    onvif_probes,
-        "modbus_hits":     modbus_hits,
-        "hikvision_hits":  hikvision_hits,
-        "stream_requests": stream_requests,
-        "default_creds":   default_creds,
-        "arch_targets":    arch_targets,
-        "iot_cves":        sorted(iot_cves.items(), key=lambda x: -x[1])[:10],
-        "total_iot_events": rtsp_attempts + onvif_probes + modbus_hits + hikvision_hits,
-    })
+    return jsonify(db.get_iot_stats(hours))
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  EXISTING ENDPOINTS (unchanged)
@@ -695,7 +549,7 @@ def api_hourly_heatmap():
     return jsonify({"buckets": db.get_hourly_heatmap()})
 
 @app.route("/api/botnet-distribution")
-@cached(30)
+@cached(120)
 def api_botnet_distribution():
     return jsonify(db.get_botnet_distribution())
 
@@ -1847,6 +1701,39 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     db.init()
+
+    import threading
+
+    # Background WAL checkpoint — runs every 5 minutes to keep WAL file small
+    def _wal_checkpoint():
+        import sqlite3
+        while True:
+            time.sleep(300)
+            try:
+                conn = sqlite3.connect(db.DB_PATH, timeout=10)
+                conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                conn.close()
+            except Exception:
+                pass
+    threading.Thread(target=_wal_checkpoint, daemon=True).start()
+
+    # Warm the cache in a background thread so the first page load is fast
+    def _warm():
+        try:
+            db.get_stats(24)
+            db.get_geo_data(24)
+            db.get_top_countries(24)
+            db.get_top_ips(24, 10)
+            db.get_timeline(24)
+            db.get_hourly_heatmap()
+            db.get_botnet_distribution()
+            db.get_service_breakdown(24)
+            db.get_iot_stats(24)
+            db.get_anonymization_stats(168)
+            db.get_notable_events(168, 100)
+        except Exception:
+            pass
+    threading.Thread(target=_warm, daemon=True).start()
 
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
