@@ -4,7 +4,7 @@ honeyPot — Database Layer
 SQLite backend for all attack logging and dashboard queries.
 """
 
-import sqlite3, json, datetime, os, logging, sys
+import sqlite3, json, datetime, os, logging, sys, time
 from pathlib import Path
 from threading import Lock
 import config
@@ -14,6 +14,8 @@ DB_PATH = config.DB_PATH
 LOG_DIR = config.LOG_DIR
 
 _lock = Lock()
+_stats_cache: dict = {}   # {hours: (expires_at, result)}
+_STATS_TTL = 45           # seconds — stats are expensive, cache for 45s
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
 SCHEMA = """
@@ -138,18 +140,21 @@ CREATE TABLE IF NOT EXISTS ip_profiles (
     attack_progression  TEXT DEFAULT '[]'
 );
 
-CREATE INDEX IF NOT EXISTS idx_atk_ts   ON attacks(timestamp);
-CREATE INDEX IF NOT EXISTS idx_atk_ip   ON attacks(source_ip);
-CREATE INDEX IF NOT EXISTS idx_atk_svc  ON attacks(service);
-CREATE INDEX IF NOT EXISTS idx_atk_ctry ON attacks(country);
-CREATE INDEX IF NOT EXISTS idx_atk_tor  ON attacks(is_tor);
-CREATE INDEX IF NOT EXISTS idx_atk_vpn  ON attacks(is_vpn);
-CREATE INDEX IF NOT EXISTS idx_cve_ts   ON cve_attempts(timestamp);
-CREATE INDEX IF NOT EXISTS idx_mal_ts   ON malware_urls(timestamp);
-CREATE INDEX IF NOT EXISTS idx_ht_ts    ON honeytoken_triggers(timestamp);
-CREATE INDEX IF NOT EXISTS idx_ts_ip    ON threat_scores(source_ip);
-CREATE INDEX IF NOT EXISTS idx_chain_ip ON attack_chains(source_ip);
-CREATE INDEX IF NOT EXISTS idx_fp_ip    ON device_fingerprints(source_ip);
+CREATE INDEX IF NOT EXISTS idx_atk_ts      ON attacks(timestamp);
+CREATE INDEX IF NOT EXISTS idx_atk_ip      ON attacks(source_ip);
+CREATE INDEX IF NOT EXISTS idx_atk_svc     ON attacks(service);
+CREATE INDEX IF NOT EXISTS idx_atk_ctry    ON attacks(country);
+CREATE INDEX IF NOT EXISTS idx_atk_tor     ON attacks(is_tor);
+CREATE INDEX IF NOT EXISTS idx_atk_vpn     ON attacks(is_vpn);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_svc  ON attacks(timestamp, service);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_bot  ON attacks(timestamp, is_botnet);
+CREATE INDEX IF NOT EXISTS idx_atk_ts_prx  ON attacks(timestamp, is_proxy);
+CREATE INDEX IF NOT EXISTS idx_cve_ts      ON cve_attempts(timestamp);
+CREATE INDEX IF NOT EXISTS idx_mal_ts      ON malware_urls(timestamp);
+CREATE INDEX IF NOT EXISTS idx_ht_ts       ON honeytoken_triggers(timestamp);
+CREATE INDEX IF NOT EXISTS idx_ts_ip       ON threat_scores(source_ip);
+CREATE INDEX IF NOT EXISTS idx_chain_ip    ON attack_chains(source_ip);
+CREATE INDEX IF NOT EXISTS idx_fp_ip       ON device_fingerprints(source_ip);
 """
 
 # Every column that may be absent from older DB files.
@@ -497,62 +502,88 @@ def scalar(sql, params=()):
 
 
 def get_stats(hours=24):
+    # Return cached result if still fresh
+    now = time.monotonic()
+    cached = _stats_cache.get(hours)
+    if cached and cached[0] > now:
+        return cached[1]
+
     c = _cutoff(hours)
-    svc_rows = query(
-        "SELECT service, COUNT(*) n FROM attacks"
-        " WHERE timestamp>? GROUP BY service", (c,)
-    )
-    svc = {r["service"]: r["n"] for r in svc_rows}
 
-    isapi_hits = scalar(
-        "SELECT COUNT(*) FROM attacks"
-        " WHERE timestamp>? AND path LIKE '%/ISAPI/%'", (c,)
+    # Single combined pass — replaces 14+ individual COUNT queries and the GROUP BY
+    _SVC_COLS = [
+        "telnet", "ssh", "ftp", "http", "https", "http_alt", "rtsp",
+        "onvif", "mqtt", "vnc", "modbus", "tftp", "ssdp", "coap",
+        "dahua", "xmeye", "adb", "tr069",
+    ]
+    svc_select = " ".join(
+        f", SUM(CASE WHEN service='{s}' THEN 1 ELSE 0 END) AS svc_{s}"
+        for s in _SVC_COLS
     )
-    decoy_interactions = scalar("""
-        SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?
-        AND (
-            path LIKE '%/ISAPI/%'                OR
-            path LIKE '%/doc/page/login%'        OR
-            path LIKE '%/PSIA/%'                 OR
-            path LIKE '%/onvif/%'                OR
-            path LIKE '%/SDK/%'                  OR
-            path LIKE '%/Streaming/channels%'    OR
-            path LIKE '%/Security/sessionLogin%' OR
-            path LIKE '%/System/deviceInfo%'
-        )
-    """, (c,))
+    rows = query(
+        "SELECT"
+        "  COUNT(*)                                                                   AS total_attacks,"
+        "  COUNT(DISTINCT source_ip)                                                  AS unique_ips,"
+        "  SUM(CASE WHEN service!='vnc' THEN 1 ELSE 0 END)                           AS total_ex_vnc,"
+        "  COUNT(DISTINCT CASE WHEN service!='vnc' THEN source_ip END)               AS unique_ips_ex_vnc,"
+        "  COUNT(DISTINCT CASE WHEN country NOT IN ('Unknown','') THEN country END)  AS country_count,"
+        "  COALESCE(SUM(is_botnet),0)                                                 AS botnet_count,"
+        "  COALESCE(SUM(is_tor),0)                                                    AS tor_count,"
+        "  COALESCE(SUM(is_vpn),0)                                                    AS vpn_count,"
+        "  COALESCE(SUM(is_proxy),0)                                                  AS proxy_count,"
+        "  COALESCE(SUM(anonymized),0)                                                AS anonymized_count,"
+        "  COUNT(DISTINCT CASE WHEN scanner_tool!='' AND scanner_tool IS NOT NULL"
+        "                       AND service!='vnc' THEN source_ip END)               AS scanner_count,"
+        "  SUM(CASE WHEN path LIKE '%/ISAPI/%' THEN 1 ELSE 0 END)                    AS isapi_hits,"
+        "  SUM(CASE WHEN attack_type='BRUTE_FORCE_BURST' THEN 1 ELSE 0 END)          AS brute_force_bursts,"
+        "  COUNT(DISTINCT CASE WHEN ("
+        "      path LIKE '%/ISAPI/%'                OR path LIKE '%/doc/page/login%' OR"
+        "      path LIKE '%/PSIA/%'                 OR path LIKE '%/onvif/%'         OR"
+        "      path LIKE '%/SDK/%'                  OR path LIKE '%/Streaming/channels%' OR"
+        "      path LIKE '%/Security/sessionLogin%' OR path LIKE '%/System/deviceInfo%'"
+        "  ) THEN source_ip END)                                                      AS decoy_interactions"
+        + svc_select +
+        " FROM attacks WHERE timestamp>?",
+        (c,),
+    )
+    r = rows[0] if rows else {}
 
-    return {
-        "total_attacks":         scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>?", (c,)),
-        "unique_ips":            scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>?", (c,)),
-        "total_attacks_ex_vnc":  scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND service!='vnc'", (c,)),
-        "unique_ips_ex_vnc":     scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>? AND service!='vnc'", (c,)),
-        "country_count":         scalar("SELECT COUNT(DISTINCT country) FROM attacks WHERE timestamp>? AND country NOT IN ('Unknown','')", (c,)),
-        "botnet_count":          scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_botnet=1", (c,)),
-        "tor_count":             scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_tor=1", (c,)),
-        "vpn_count":             scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_vpn=1", (c,)),
-        "proxy_count":           scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND is_proxy=1", (c,)),
-        "anonymized_count":      scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND anonymized=1", (c,)),
-        "scanner_count":         scalar("SELECT COUNT(DISTINCT source_ip) FROM attacks WHERE timestamp>? AND scanner_tool!='' AND scanner_tool IS NOT NULL AND service!='vnc'", (c,)),
+    svc = {s: r.get(f"svc_{s}", 0) for s in _SVC_COLS}
+
+    result = {
+        "total_attacks":         r.get("total_attacks", 0),
+        "unique_ips":            r.get("unique_ips", 0),
+        "total_attacks_ex_vnc":  r.get("total_ex_vnc", 0),
+        "unique_ips_ex_vnc":     r.get("unique_ips_ex_vnc", 0),
+        "country_count":         r.get("country_count", 0),
+        "botnet_count":          r.get("botnet_count", 0),
+        "tor_count":             r.get("tor_count", 0),
+        "vpn_count":             r.get("vpn_count", 0),
+        "proxy_count":           r.get("proxy_count", 0),
+        "anonymized_count":      r.get("anonymized_count", 0),
+        "scanner_count":         r.get("scanner_count", 0),
         "cve_exploits":          scalar("SELECT COUNT(*) FROM cve_attempts WHERE timestamp>?", (c,)),
         "malware_downloads":     scalar("SELECT COUNT(*) FROM malware_urls WHERE timestamp>?", (c,)),
         "honeytokens_triggered": scalar("SELECT COUNT(*) FROM honeytoken_triggers WHERE timestamp>?", (c,)),
         "http_attacks":          svc.get("http", 0) + svc.get("https", 0) + svc.get("http_alt", 0),
-        "telnet_attacks":        svc.get("telnet",    0),
-        "ssh_attacks":           svc.get("ssh",       0),
-        "ftp_attacks":           svc.get("ftp",       0),
-        "rtsp_attacks":          svc.get("rtsp",      0),
-        "onvif_attacks":         svc.get("onvif",     0),
-        "mqtt_attacks":          svc.get("mqtt",      0),
-        "vnc_attacks":           svc.get("vnc",       0),
-        "modbus_attacks":        svc.get("modbus",    0),
-        "tftp_attacks":          svc.get("tftp",      0),
-        "ssdp_attacks":          svc.get("ssdp",      0),
-        "isapi_hits":            isapi_hits,
-        "decoy_interactions":    decoy_interactions,
-        "brute_force_bursts":    scalar("SELECT COUNT(*) FROM attacks WHERE timestamp>? AND attack_type='BRUTE_FORCE_BURST'", (c,)),
+        "telnet_attacks":        svc.get("telnet",  0),
+        "ssh_attacks":           svc.get("ssh",     0),
+        "ftp_attacks":           svc.get("ftp",     0),
+        "rtsp_attacks":          svc.get("rtsp",    0),
+        "onvif_attacks":         svc.get("onvif",   0),
+        "mqtt_attacks":          svc.get("mqtt",    0),
+        "vnc_attacks":           svc.get("vnc",     0),
+        "modbus_attacks":        svc.get("modbus",  0),
+        "tftp_attacks":          svc.get("tftp",    0),
+        "ssdp_attacks":          svc.get("ssdp",    0),
+        "isapi_hits":            r.get("isapi_hits", 0),
+        "decoy_interactions":    r.get("decoy_interactions", 0),
+        "brute_force_bursts":    r.get("brute_force_bursts", 0),
         "services":              svc,
     }
+
+    _stats_cache[hours] = (now + _STATS_TTL, result)
+    return result
 
 
 def get_geo_data(hours=24):
