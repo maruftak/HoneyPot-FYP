@@ -1808,8 +1808,6 @@ def handle_http(conn, addr, https=False, *,
             threat_level = "critical"
             alert_funcs["cve_exploit"](ip, gdata["country"], cve_id, cve["name"],
                                        cve["severity"], svc, path)
-            log_cve_func(ts_func(), ip, cve_id, cve["name"], cve["severity"],
-                         svc, full_request[:1000], gdata["country"])
 
         # ── Honeytoken file detection ─────────────────────────────────────────
         # Skip paths that are clearly non-HTTP binary garbage (TLS handshakes,

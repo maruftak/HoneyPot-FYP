@@ -20,23 +20,37 @@ DASHBOARD_HTML = os.path.join(BASE_DIR, "dashboard.html")
 START_TIME     = time.time()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:5001", "http://localhost:3000"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+        "supports_credentials": True,
+    }
+})
 
 # ─── HTTP Basic Auth ───────────────────────────────────────────────────────────
 _NO_AUTH_PATHS = {"/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"}
 
+@app.after_request
+def _strip_server_header(resp):
+    """Hide Werkzeug/Python fingerprint from Shodan/Censys."""
+    resp.headers["Server"] = "App-webs/"
+    return resp
+
 @app.before_request
 def check_auth():
+    """Enforce HTTPS-only auth in production."""
     if request.path in _NO_AUTH_PATHS:
         return
+    
     auth = request.authorization
-    if (not auth
-            or auth.username != config.DASHBOARD_USERNAME
-            or auth.password != config.DASHBOARD_PASSWORD):
+    if (not auth or auth.username != config.DASHBOARD_USERNAME or 
+        auth.password != config.DASHBOARD_PASSWORD):
         return Response(
             "Authentication required",
             401,
-            {"WWW-Authenticate": 'Basic realm="honeyPot Dashboard"'},
+            {"WWW-Authenticate": 'Basic realm="IPCamera"'},
         )
 
 # ─── Simple in-memory cache ────────────────────────────────────────────────────
@@ -112,7 +126,7 @@ def api_geo_data():
     return jsonify({
         "markers": markers,
         "total":   len(markers),
-        "honeypot": {"lat": 32.65, "lon": 51.67, "label": "honeyPot Sensor (Isfahan)"},
+        "honeypot": {"lat": 19.08, "lon": 72.88, "label": "honeyPot Sensor (Mumbai)"},
     })
 
 def _build_session_row(r):
@@ -229,26 +243,29 @@ def _apply_session_filters(rows, filters):
 @app.route("/api/sessions")
 @cached(30)
 def api_sessions():
-    hours    = request.args.get("hours",       168, type=int)   # default 7d; use 0 or very large for all-time
+    hours    = request.args.get("hours",       168, type=int)
     limit    = request.args.get("limit",       200, type=int)
     offset   = request.args.get("offset",      0,   type=int)
     service  = request.args.get("service",     "")
     threat   = request.args.get("threat",      "")
     filters  = {
-        "is_tor":     request.args.get("is_tor",   ""),
-        "is_vpn":     request.args.get("is_vpn",   ""),
-        "is_proxy":   request.args.get("is_proxy", ""),
-        "is_botnet":  request.args.get("is_botnet",""),
-        "country":    request.args.get("country",  ""),
-        "attack_type":request.args.get("attack_type",""),
-        "cve_id":     request.args.get("cve_id",   ""),
-        "ip":         request.args.get("ip",        ""),
-        "from_ts":    request.args.get("from_ts",   ""),
-        "to_ts":      request.args.get("to_ts",     ""),
+        "is_tor":      request.args.get("is_tor"),
+        "is_vpn":      request.args.get("is_vpn"),
+        "is_proxy":    request.args.get("is_proxy"),
+        "is_botnet":   request.args.get("is_botnet"),
+        "country":     request.args.get("country"),
+        "attack_type": request.args.get("attack_type"),
+        "cve_id":      request.args.get("cve_id"),
+        "ip":          request.args.get("ip"),
+        "from_ts":     request.args.get("from_ts"),
+        "to_ts":       request.args.get("to_ts"),
     }
-
-    # Get the true DB total for this query (shown as "X total events in DB")
-    true_total = db.get_attack_count(hours, service or None, threat or None)
+    
+    # Get true DB count
+    true_total = db.query(
+        "SELECT COUNT(*) as c FROM attacks WHERE timestamp > ?",
+        (db._cutoff(hours),)
+    )[0]["c"] if db.query(f"SELECT COUNT(*) as c FROM attacks WHERE timestamp > ?", (db._cutoff(hours),)) else 0
 
     # When no service filter: query each service separately so high-volume services
     # (VNC alone is 318k rows) don't crowd out all others.
@@ -1686,16 +1703,18 @@ _load_persisted_abuseipdb_key()
 
 @app.after_request
 def after_request_headers(resp):
-    resp.headers["Access-Control-Allow-Origin"]  = "*"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    resp.headers["Cache-Control"]                = "no-cache, no-store"
+    resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "http://localhost:5001")
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
     return resp
 
 # ─── Entry ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--host",  default="0.0.0.0")
+    p.add_argument("--host",  default="127.0.0.1")
     p.add_argument("--port",  default=5001, type=int)
     p.add_argument("--debug", action="store_true")
     args = p.parse_args()

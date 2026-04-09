@@ -49,10 +49,9 @@ _FTP_BANNERS = [
     "220 Hikvision DVR FTP Server V1.0\r\n",
     "220 Hikvision DS-2CD2043G2-I FTP Service\r\n",
     "220 DVR FTP Server Ready.\r\n",
-    "220 (vsFTPd 2.3.4)\r\n",           # Famous backdoored version — heavily fingerprinted
-    "220 (vsFTPd 2.2.2)\r\n",           # Old vulnerable version
     "220 XMeye FTP server (1.0) ready.\r\n",
     "220 IP Camera FTP Service V1.2\r\n",
+    # vsFTPd banners removed — they reveal Linux and break IoT fingerprinting
 ]
 
 # ─── Weak Credentials (Expanded) ──────────────────────────────────────────

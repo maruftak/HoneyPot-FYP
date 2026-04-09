@@ -1,69 +1,61 @@
 #!/usr/bin/env python3
 """
-honeyPot — Central Configuration
-Edit this file to configure your deployment.
+honeyPot Configuration
+All settings centralized here. Override via environment variables.
 """
 
 import os
 
-# ─── Project ──────────────────────────────────────────────────────────────────
+# ─── Basic Settings ───────────────────────────────────────────────────────────
 PROJECT_NAME = "honeyPot"
-VERSION      = "1.0.0"
+VERSION = "1.0.0"
+ALERT_SPAM_COOLDOWN      = int(os.getenv("ALERT_SPAM_COOLDOWN", "30"))
+HONEYPOT_HOST            = os.getenv("HONEYPOT_HOST", "0.0.0.0")
+GEOIP_DB                 = os.getenv("GEOIP_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-City.mmdb"))
+VIRUSTOTAL_API_KEY       = os.getenv("VT_API_KEY", "")
+RATE_LIMIT_CONN_PER_MIN  = int(os.getenv("RATE_LIMIT_CONN_PER_MIN", "120"))
+RATE_LIMIT_BAN_SECONDS   = int(os.getenv("RATE_LIMIT_BAN_SECONDS", "1800"))
 
-# ─── Network ──────────────────────────────────────────────────────────────────
-HONEYPOT_HOST     = "0.0.0.0"
-DASHBOARD_HOST    = "0.0.0.0"
-DASHBOARD_PORT    = 5001
+# Database
+DB_PATH = os.getenv("HONEYPOT_DB_PATH", os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "honeypot.db"
+))
 
-# ─── Telegram Alerts ─────────────────────────────────────────────────────────
-DEFAULT_TELEGRAM_TOKEN   = "8138859391:AAFqswxB9pvW5bODElrMPS_C4SRZ2UKg7wA"
-DEFAULT_TELEGRAM_CHAT_ID = "8213069106"
+# ─── Dashboard Auth ───────────────────────────────────────────────────────────
+# CRITICAL: Change these before deploying to production
+DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME", "admin")
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "honeypot2024")
+DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "0.0.0.0")
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "5001"))
+DASHBOARD_ENABLE_HTTPS = os.getenv("DASHBOARD_ENABLE_HTTPS", "false").lower() == "true"
+DASHBOARD_SSL_CERT = os.getenv("DASHBOARD_SSL_CERT", "")
+DASHBOARD_SSL_KEY = os.getenv("DASHBOARD_SSL_KEY", "")
 
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", DEFAULT_TELEGRAM_TOKEN)
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", DEFAULT_TELEGRAM_CHAT_ID)
-TELEGRAM_ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
-
-# Alert thresholds — how many events before a Telegram message fires
-ALERT_NEW_IP_EVERY    = 1    # every new attacker IP
-ALERT_CVE_EVERY       = 1    # every CVE exploit attempt
-ALERT_BOTNET_EVERY    = 1    # every botnet credential attempt
-ALERT_HONEYTOKEN_EVERY= 1    # every honeytoken trigger
-ALERT_DOCKER_EVERY    = 1    # every Docker API hit
-ALERT_SPAM_COOLDOWN   = 30   # seconds between identical alerts from same IP
-
-# ─── Paths ────────────────────────────────────────────────────────────────────
-BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR        = os.path.join(BASE_DIR, "logs")
-DB_PATH        = os.path.join(LOG_DIR,  "honeypot.db")
-SESSION_LOG    = os.path.join(LOG_DIR,  "sessions.jsonl")
-HONEYTOKEN_LOG = os.path.join(LOG_DIR,  "honeytokens.jsonl")
-GEOIP_DB       = os.path.join(BASE_DIR, "GeoLite2-City.mmdb")
-
-# ─── VirusTotal ───────────────────────────────────────────────────────────────
-VIRUSTOTAL_API_KEY = os.getenv("VT_API_KEY", "")
-
-# ─── AbuseIPDB ────────────────────────────────────────────────────────────────
-# Free API key from https://www.abuseipdb.com/account/api
-# Set env var ABUSEIPDB_KEY or paste key here
-ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_KEY", "")
-
-# ─── Dashboard Authentication ────────────────────────────────────────────────
-DASHBOARD_USERNAME = os.getenv("DASHBOARD_USER", "admin")
-DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASS", "honeypot2024!")
-
-# ─── Rate Limiting ────────────────────────────────────────────────────────────
-RATE_LIMIT_CONN_PER_MIN = 120   # max connections per IP per minute
-RATE_LIMIT_BAN_SECONDS  = 1800  # 30 min ban after exceeding limit
-
-# ─── Device Profile (what we pretend to be) ──────────────────────────────────
-DEVICE_VENDOR   = "Hikvision"
-DEVICE_MODEL    = "DS-2CD2043G2-I"
+# ─── IoT Device Emulation ──────────────────────────────────────────────────────
+DEVICE_VENDOR = "Hikvision"
+DEVICE_MODEL = "DS-2CD2043G2-I"
 DEVICE_FIRMWARE = "V5.7.15 build 230313"
-DEVICE_MAC      = "44:19:B6:7A:2C:D9"
-DEVICE_IP       = "0.0.0.0"   # filled at startup
+DEVICE_SERIAL = os.getenv("DEVICE_SERIAL", "DS-XXXXXXXXXXXX")
+
+# Device network config (for responses)
+DEVICE_IP = os.getenv("DEVICE_IP", "192.168.1.108")
+DEVICE_GATEWAY = os.getenv("DEVICE_GATEWAY", "192.168.1.1")
+DEVICE_MAC = os.getenv("DEVICE_MAC", "00:11:22:33:44:55")
 
 # ─── Honeypot Services ────────────────────────────────────────────────────────
-# Set port to 0 to disable a service
+# Which services to enable
+ENABLE_SSH = os.getenv("ENABLE_SSH", "true").lower() == "true"
+ENABLE_TELNET = os.getenv("ENABLE_TELNET", "true").lower() == "true"
+ENABLE_FTP = os.getenv("ENABLE_FTP", "true").lower() == "true"
+ENABLE_HTTP = os.getenv("ENABLE_HTTP", "true").lower() == "true"
+ENABLE_HTTPS = os.getenv("ENABLE_HTTPS", "false").lower() == "true"
+ENABLE_RTSP = os.getenv("ENABLE_RTSP", "true").lower() == "true"
+ENABLE_ONVIF = os.getenv("ENABLE_ONVIF", "true").lower() == "true"
+ENABLE_VNC = os.getenv("ENABLE_VNC", "true").lower() == "true"
+ENABLE_MQTT = os.getenv("ENABLE_MQTT", "false").lower() == "true"
+ENABLE_MODBUS = os.getenv("ENABLE_MODBUS", "false").lower() == "true"
+ENABLE_REDIS = os.getenv("ENABLE_REDIS", "false").lower() == "true"
+
 SERVICE_PORTS = {
     # ── Core IoT attack surface ──────────────────────────────────────────────
     "telnet":     23,    # Mirai primary vector
@@ -98,6 +90,88 @@ SERVICE_PORTS = {
     "dvr_web":    9527,  # XiongMai/NetSurveillance cameras (millions on Shodan, Satori target)
     "nvr_web":    8888,  # Generic cheap NVR/DVR alternate web port
 }
+
+# Service ports
+SSH_PORT = int(os.getenv("SSH_PORT", "22"))
+TELNET_PORT = int(os.getenv("TELNET_PORT", "23"))
+FTP_PORT = int(os.getenv("FTP_PORT", "21"))
+HTTP_PORT = int(os.getenv("HTTP_PORT", "80"))
+HTTPS_PORT = int(os.getenv("HTTPS_PORT", "443"))
+RTSP_PORT = int(os.getenv("RTSP_PORT", "554"))
+ONVIF_PORT = int(os.getenv("ONVIF_PORT", "8000"))
+VNC_PORT = int(os.getenv("VNC_PORT", "5900"))
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MODBUS_PORT = int(os.getenv("MODBUS_PORT", "502"))
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+
+# ─── GeoIP & Threat Intelligence ──────────────────────────────────────────────
+GEOIP_DB_PATH = os.getenv("GEOIP_DB_PATH", os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "GeoLite2-City.mmdb"
+))
+
+# Tor exit node list (auto-downloaded)
+TOR_EXIT_NODES_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "tor_exits.json"
+)
+
+# VPN IP ranges (CIDR blocks — auto-downloaded or manual)
+VPN_RANGES_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "vpn_ranges.json"
+)
+
+# ─── AbuseIPDB Integration ────────────────────────────────────────────────────
+ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY", "")
+ABUSEIPDB_ENABLED = bool(ABUSEIPDB_API_KEY)
+ABUSEIPDB_AUTO_REPORT = os.getenv("ABUSEIPDB_AUTO_REPORT", "false").lower() == "true"
+ABUSEIPDB_AUTO_REPORT_THRESHOLD = int(os.getenv("ABUSEIPDB_AUTO_REPORT_THRESHOLD", "3"))
+
+# ─── Alerts & Notifications ───────────────────────────────────────────────────
+TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# Email alerts
+EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
+EMAIL_FROM = os.getenv("EMAIL_FROM", "honeypot@example.com")
+EMAIL_TO = os.getenv("EMAIL_TO", "admin@example.com")
+EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "localhost")
+EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))
+
+# ─── Honeytokens ──────────────────────────────────────────────────────────────
+HONEYTOKENS_ENABLED = os.getenv("HONEYTOKENS_ENABLED", "true").lower() == "true"
+HONEYTOKEN_PATHS = [
+    "/etc/passwd.bak", "/root/.ssh/id_rsa", "/.aws/credentials",
+    "/home/admin/notes.txt", "/backup/db_creds.sql", "/etc/shadow",
+]
+
+# ─── Performance & Logging ────────────────────────────────────────────────────
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "logs", "honeypot.log"
+)
+LOG_MAX_SIZE = int(os.getenv("LOG_MAX_SIZE", "52428800"))  # 50 MB
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "10"))
+
+# Database
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+DB_TIMEOUT = int(os.getenv("DB_TIMEOUT", "30"))
+DB_WAL_MODE = os.getenv("DB_WAL_MODE", "true").lower() == "true"
+
+# Cache
+CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
+CACHE_STATS_TTL = int(os.getenv("CACHE_STATS_TTL", "60"))
+
+# ─── Advanced ──────────────────────────────────────────────────────────────────
+SYSLOG_ENABLED = os.getenv("SYSLOG_ENABLED", "false").lower() == "true"
+SYSLOG_HOST = os.getenv("SYSLOG_HOST", "localhost")
+SYSLOG_PORT = int(os.getenv("SYSLOG_PORT", "514"))
+
+# Disable honeypot functionality for testing (logs without services)
+TESTING_MODE = os.getenv("TESTING_MODE", "false").lower() == "true"
+
+# Ensure data directory exists
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+os.makedirs(os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"), exist_ok=True)
 
 # ─── Threat Intelligence ──────────────────────────────────────────────────────
 # Known botnet credential pairs (username, password)

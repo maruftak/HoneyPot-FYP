@@ -782,8 +782,6 @@ def handle_telnet(conn, addr):
                 _inc("cves")
                 alerts.cve_exploit(ip, gdata["country"], cve_id, cve["name"],
                                    cve["severity"], "telnet", cmd[:80])
-                db.log_cve(_ts(), ip, cve_id, cve["name"], cve["severity"],
-                           "telnet", cmd, gdata["country"])
 
             # Mirai botnet variant probe — busybox <VARIANT_NAME>
             # Each variant sends a unique applet name to confirm it's running on BusyBox.

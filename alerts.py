@@ -6,7 +6,7 @@ Sends structured alerts to Telegram with cooldown to avoid spam.
 
 import time, threading
 from config import (
-    TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED,
+    TELEGRAM_BOT_TOKEN as TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED,
     ALERT_SPAM_COOLDOWN, PROJECT_NAME
 )
 
