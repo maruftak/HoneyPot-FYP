@@ -519,12 +519,18 @@ def get_malware_urls(hours: int = 168) -> List[Dict]:
                 SELECT
                     payload as url,
                     'Mirai/IoT' as family,
-                    architecture,
+                    architecture as arch,
                     COUNT(*) as cnt,
                     COUNT(DISTINCT source_ip) as unique_ips,
                     MAX(timestamp) as last_seen
                 FROM attacks
-                WHERE timestamp > ? AND payload LIKE 'http%' AND (attack_type LIKE '%download%' OR commands LIKE '%wget%')
+                WHERE timestamp > ? AND (
+                    (payload LIKE 'http%' OR payload LIKE 'ftp%') OR
+                    attack_type = 'malware_download' OR
+                    commands LIKE '%wget %' OR
+                    commands LIKE '%curl %' OR
+                    commands LIKE '%tftp %'
+                )
                 GROUP BY payload
                 ORDER BY cnt DESC
                 LIMIT 50
@@ -747,11 +753,10 @@ def get_notable_events(hours: int = 168, limit: int = 100) -> List[Dict]:
                 SELECT *
                 FROM attacks
                 WHERE timestamp > ? AND (
-                    cve_id IS NOT NULL OR
-                    is_botnet=1 OR
-                    threat_level='critical' OR
-                    commands IS NOT NULL OR
-                    clipboard_paste IS NOT NULL
+                    (cve_id IS NOT NULL AND cve_id != '') OR
+                    is_botnet = 1 OR
+                    threat_level IN ('critical', 'high') OR
+                    (commands IS NOT NULL AND commands NOT IN ('null', '[]', ''))
                 )
                 ORDER BY timestamp DESC
                 LIMIT ?

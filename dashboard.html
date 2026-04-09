@@ -1464,7 +1464,7 @@ function renderSessions(rows){
     const flags=[
       s.is_botnet?'<span title="Botnet" style="color:var(--orange)">🤖</span>':'',
       s.is_tor?'<span title="Tor" style="color:var(--purple)">🧅</span>':'',
-      s.is_vpn?'<span title="VPN" style="color:var(--blue)">🔒</span>':'',
+      s.is_vpn?`<span class="badge b-blue" style="font-size:9px">🔒 VPN${s.vpn_provider?' · '+s.vpn_provider:''}</span>`:'',
       s.scanner_tool?`<span class="badge b-blue" style="font-size:8px" title="${escHtml(s.scanner_tool)}">${escHtml(s.scanner_tool.split(' ')[0])}</span>`:'',
     ].filter(Boolean).join(' ');
     return`<tr class="${hot}" style="cursor:pointer" onclick="openSessModal(${idx})">

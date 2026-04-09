@@ -575,9 +575,10 @@ def api_botnet_distribution():
 def api_botnet_names():
     import re as _re
     hours = request.args.get("hours", 168, type=int)
+    cutoff = db._cutoff(hours)
     rows = db.query(
         "SELECT commands FROM attacks WHERE commands LIKE '%busybox%' AND timestamp > ?",
-        (db._cutoff(hours),)
+        (cutoff,)
     )
     names = {}   # name -> count
     sigs  = {}   # variant signature -> count
@@ -598,6 +599,19 @@ def api_botnet_names():
             if m2:
                 sig = m2.group(1)
                 sigs[sig] = sigs.get(sig, 0) + 1
+
+    # Fallback: pull botnet_family column directly from DB
+    fam_rows = db.query(
+        "SELECT botnet_family, COUNT(*) as cnt FROM attacks "
+        "WHERE botnet_family IS NOT NULL AND botnet_family != '' AND timestamp > ? "
+        "GROUP BY botnet_family ORDER BY cnt DESC LIMIT 20",
+        (cutoff,)
+    )
+    for r in fam_rows:
+        fam = r.get("botnet_family", "")
+        if fam and fam.upper() not in ("UNKNOWN", "NONE"):
+            names[fam] = names.get(fam, 0) + r.get("cnt", 0)
+
     names_sorted = sorted(names.items(), key=lambda x: -x[1])
     sigs_sorted  = sorted(sigs.items(),  key=lambda x: -x[1])
     return jsonify({
