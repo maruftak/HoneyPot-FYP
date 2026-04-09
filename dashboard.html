@@ -2285,7 +2285,7 @@ async function loadAbuseTopIPs(){
       <td class="mono" style="color:var(--blue)">${ip.ip}</td>
       <td style="font-size:11px">${ip.country||'—'}</td>
       <td class="mono" style="color:var(--red)">${ip.count||ip.cnt||0}</td>
-      <td style="font-size:10px">${(ip.services||[]).join(' ')}</td>
+      <td style="font-size:10px">${(()=>{const cnt={};(ip.services||[]).forEach(s=>{if(s)cnt[s]=(cnt[s]||0)+1;});return Object.entries(cnt).sort((a,b)=>b[1]-a[1]).map(([s,n])=>`${svcBadge(s.toUpperCase())}${n>1?`<span style="color:var(--muted);font-size:9px"> ×${n}</span>`:''}`).join(' ');})()}</td>
       <td id="score-cell-${ip.ip.replace(/\./g,'-')}">${scoreHtml}</td>
       <td id="rep-cell-${ip.ip.replace(/\./g,'-')}" style="font-size:10px;color:var(--muted)">${cached?cached.total_reports||0:'—'}</td>
       <td style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px">
