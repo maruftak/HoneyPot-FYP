@@ -11,7 +11,6 @@ PROJECT_NAME = "honeyPot"
 VERSION = "1.0.0"
 ALERT_SPAM_COOLDOWN      = int(os.getenv("ALERT_SPAM_COOLDOWN", "30"))
 HONEYPOT_HOST            = os.getenv("HONEYPOT_HOST", "0.0.0.0")
-GEOIP_DB                 = os.getenv("GEOIP_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-City.mmdb"))
 VIRUSTOTAL_API_KEY       = os.getenv("VT_API_KEY", "")
 RATE_LIMIT_CONN_PER_MIN  = int(os.getenv("RATE_LIMIT_CONN_PER_MIN", "120"))
 RATE_LIMIT_BAN_SECONDS   = int(os.getenv("RATE_LIMIT_BAN_SECONDS", "1800"))

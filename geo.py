@@ -109,7 +109,7 @@ def lookup(ip: str) -> dict:
         _cache[ip] = _LOCAL.copy()
         return _cache[ip]
 
-    if ip in _bad and time.time() - _bad_ts.get(ip, 0) < 600:
+    if ip in _bad and time.time() - _bad_ts.get(ip, 0) < 60:
         return _UNKNOWN.copy()
 
     result = {
@@ -156,7 +156,7 @@ def lookup(ip: str) -> dict:
     # 2. ip-api.com — enriches with org/ISP/proxy/hosting AND fills in geo
     #    when GeoLite2 missed (country still "Unknown" or lat/lon still 0).
     geo_missing = result.get("country") in ("Unknown", "", None) or not result.get("latitude")
-    recently_enriched = time.time() - _enrich_ts.get(ip, 0) < 1800
+    recently_enriched = time.time() - _enrich_ts.get(ip, 0) < 300
     if not recently_enriched or geo_missing:
         enriched = _ipapi_enrich(ip)
         if enriched:

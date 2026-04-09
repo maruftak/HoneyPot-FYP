@@ -1604,7 +1604,7 @@ def main():
 ║  Firmware: {config.DEVICE_FIRMWARE}                              ║
 ╠══════════════════════════════════════════════════════════════════════╣
 ║  Telegram: {'ENABLED ✓' if config.TELEGRAM_ENABLED else 'disabled (set TELEGRAM_TOKEN + TELEGRAM_CHAT_ID)'}                                   ║
-║  GeoIP:    {'ENABLED ✓' if os.path.exists(config.GEOIP_DB) else 'disabled (GeoLite2-City.mmdb missing)'}                                      ║
+║  GeoIP:    {'ENABLED ✓' if os.path.exists(config.GEOIP_DB_PATH) else 'disabled (GeoLite2-City.mmdb missing)'}                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝""")
 
     print("\n[*] Loading threat intelligence feeds:")

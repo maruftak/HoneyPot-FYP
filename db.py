@@ -180,6 +180,10 @@ def log_attack(data: Dict[str, Any]) -> int:
     if "timestamp" not in data or not data["timestamp"]:
         data["timestamp"] = datetime.datetime.utcnow().isoformat()
     
+    # Normalize service to lowercase for consistent storage
+    if data.get("service"):
+        data["service"] = str(data["service"]).lower()
+
     # Serialize complex fields
     if isinstance(data.get("commands"), (list, dict)):
         data["commands"] = json.dumps(data["commands"])
@@ -206,7 +210,7 @@ def log_attack(data: Dict[str, Any]) -> int:
     try:
         with _get_conn() as conn:
             cursor = conn.execute(
-                f"INSERT INTO attacks ({columns}) VALUES ({placeholders})",
+                f"INSERT OR IGNORE INTO attacks ({columns}) VALUES ({placeholders})",
                 values
             )
             conn.commit()
@@ -946,8 +950,13 @@ def get_alerts(hours: int = 24, limit: int = 50) -> List[Dict]:
 def log_honeytoken(timestamp: str, source_ip: str, token_type: str,
                    token_value: str, service: str,
                    country: str = "", city: str = "",
-                   commands: str = "[]") -> int:
+                   commands = "[]") -> int:
     """Log a honeytoken trigger to the honeytoken_triggers table."""
+    # Serialize commands if passed as list/dict
+    if isinstance(commands, (list, dict)):
+        commands = json.dumps(commands)
+    elif commands is None:
+        commands = "[]"
     try:
         with _get_conn() as conn:
             cursor = conn.execute(
@@ -955,7 +964,7 @@ def log_honeytoken(timestamp: str, source_ip: str, token_type: str,
                    (timestamp, source_ip, token_type, token_value, service, country, city, commands)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (timestamp, source_ip, token_type, str(token_value),
-                 service.upper(), country, city, commands)
+                 service.lower(), country, city, commands)
             )
             conn.commit()
             return cursor.lastrowid
