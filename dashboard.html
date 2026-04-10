@@ -1462,9 +1462,10 @@ function renderSessions(rows){
     const evtBadge=evtRaw?`<span style="font-family:var(--mono);font-size:9px;color:${evtColor}">${escHtml(evtRaw)}</span>`:'—';
     const hot=cmdCount>=5||s.threat==='critical'?'tr-hot':'';
     const flags=[
-      s.is_botnet?'<span title="Botnet" style="color:var(--orange)">🤖</span>':'',
-      s.is_tor?'<span title="Tor" style="color:var(--purple)">🧅</span>':'',
+      s.is_botnet?'<span class="badge" style="font-size:9px;background:rgba(255,140,0,.12);color:var(--orange);border-color:rgba(255,140,0,.3)">🤖 Botnet</span>':'',
+      s.is_tor?'<span class="badge b-purple" style="font-size:9px">🧅 Tor</span>':'',
       s.is_vpn?`<span class="badge b-blue" style="font-size:9px">🔒 VPN${s.vpn_provider?' · '+s.vpn_provider:''}</span>`:'',
+      s.is_proxy?`<span class="badge b-med" style="font-size:9px">🌐 Proxy${s.proxy_type?' · '+s.proxy_type:''}</span>`:'',
       s.scanner_tool?`<span class="badge b-blue" style="font-size:8px" title="${escHtml(s.scanner_tool)}">${escHtml(s.scanner_tool.split(' ')[0])}</span>`:'',
     ].filter(Boolean).join(' ');
     return`<tr class="${hot}" style="cursor:pointer" onclick="openSessModal(${idx})">
