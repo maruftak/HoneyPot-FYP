@@ -647,10 +647,47 @@ def get_anonymization_stats(hours: int = 168) -> Dict[str, Any]:
                         "ip_details":    ip_details_map.get(prov, [])[:20],
                     })
 
+                # Per-country VPN / Tor / Proxy breakdown
+                country_rows = conn.execute("""
+                    SELECT
+                        country,
+                        SUM(CASE WHEN is_vpn=1   THEN 1 ELSE 0 END) AS vpn,
+                        SUM(CASE WHEN is_tor=1   THEN 1 ELSE 0 END) AS tor,
+                        SUM(CASE WHEN is_proxy=1 THEN 1 ELSE 0 END) AS proxy,
+                        COUNT(DISTINCT source_ip) AS unique_ips
+                    FROM attacks
+                    WHERE timestamp > ?
+                      AND (is_vpn=1 OR is_tor=1 OR is_proxy=1)
+                      AND country IS NOT NULL AND country != '' AND country != 'Unknown'
+                    GROUP BY country
+                    ORDER BY (SUM(is_vpn)+SUM(is_tor)+SUM(is_proxy)) DESC
+                    LIMIT 20
+                """, (cutoff,)).fetchall()
+
+                anon_by_country = []
+                for r in country_rows:
+                    rd = dict(r)
+                    v = rd["vpn"] or 0
+                    t = rd["tor"] or 0
+                    p = rd["proxy"] or 0
+                    tot = v + t + p
+                    anon_by_country.append({
+                        "country":    rd["country"],
+                        "vpn":        v,
+                        "tor":        t,
+                        "proxy":      p,
+                        "total":      tot,
+                        "unique_ips": rd["unique_ips"],
+                        "vpn_pct":    round(v / tot * 100) if tot else 0,
+                        "tor_pct":    round(t / tot * 100) if tot else 0,
+                        "proxy_pct":  round(p / tot * 100) if tot else 0,
+                    })
+
                 return {
                     "totals": {"tor": tor_c, "vpn": vpn_c, "proxy": prx_c, "clean": cln_c},
                     "vpn_providers": vpn_providers_out,
                     "tor_exits":     [{"ip": dict(r)["tor_exit_ip"],       "count": dict(r)["count"]} for r in tor_exits],
+                    "anon_by_country": anon_by_country,
                     "percent_anonymous": round((tor_c + vpn_c + prx_c) / max(total, 1) * 100, 1),
                     "timeline": get_anonymization_timeline(hours),
                 }

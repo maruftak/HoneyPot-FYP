@@ -626,6 +626,27 @@ tr:hover td{background:rgba(255,255,255,0.02)}
     <div class="card"><div class="card-title">Anonymization Mix</div><div class="chart-wrap" style="height:220px"><canvas id="anonMixChart"></canvas></div></div>
   </div>
 
+  <!-- Anonymization by country -->
+  <div class="card">
+    <div class="card-title">Anonymization by Country
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted);font-weight:400">which countries use VPN / Tor / Proxy to attack</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Country</th>
+          <th>Unique IPs</th>
+          <th style="text-align:center;color:#0a84ff">🔒 VPN</th>
+          <th style="text-align:center;color:#bf5af2">🧅 Tor</th>
+          <th style="text-align:center;color:#ff8c00">🌐 Proxy</th>
+          <th style="text-align:center">Total</th>
+          <th>Mix</th>
+        </tr></thead>
+        <tbody id="anonByCountryBody"><tr><td colspan="7" class="loading"><span class="spin">◌</span></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Recent anonymous connections -->
   <div class="card">
     <div class="card-title">Recent Anonymous Connections
@@ -1821,6 +1842,33 @@ async function loadAnonPanel(){
     </div>`;
   }).join(''):
     '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px;text-align:center">No VPN provider data yet</div>';
+
+  // Anonymization by country table
+  const abc = anonData.anon_by_country||[];
+  const maxAbc = abc[0]?.total||1;
+  document.getElementById('anonByCountryBody').innerHTML = abc.length ? abc.map(r=>{
+    const vpnW  = r.vpn_pct;
+    const torW  = r.tor_pct;
+    const proxyW= r.proxy_pct;
+    const bar = `<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--border);width:100%;min-width:80px">
+      ${vpnW  ?`<div style="width:${vpnW}%;background:#0a84ff" title="VPN ${vpnW}%"></div>`:''}
+      ${torW  ?`<div style="width:${torW}%;background:#bf5af2" title="Tor ${torW}%"></div>`:''}
+      ${proxyW?`<div style="width:${proxyW}%;background:#ff8c00" title="Proxy ${proxyW}%"></div>`:''}
+    </div>`;
+    const vpnBadge   = r.vpn   ? `<span style="color:#0a84ff;font-family:var(--mono);font-size:11px">${r.vpn}</span>`   : '<span style="color:var(--border2)">—</span>';
+    const torBadge   = r.tor   ? `<span style="color:#bf5af2;font-family:var(--mono);font-size:11px">${r.tor}</span>`   : '<span style="color:var(--border2)">—</span>';
+    const proxyBadge = r.proxy ? `<span style="color:#ff8c00;font-family:var(--mono);font-size:11px">${r.proxy}</span>` : '<span style="color:var(--border2)">—</span>';
+    const totalW = Math.round(r.total/maxAbc*100);
+    return `<tr>
+      <td style="font-size:12px">${r.country}</td>
+      <td class="mono" style="color:var(--muted);font-size:10px">${r.unique_ips} IP${r.unique_ips!==1?'s':''}</td>
+      <td style="text-align:center">${vpnBadge}</td>
+      <td style="text-align:center">${torBadge}</td>
+      <td style="text-align:center">${proxyBadge}</td>
+      <td class="mono" style="color:var(--text);font-size:11px;text-align:center;font-weight:700">${r.total}</td>
+      <td style="min-width:90px">${bar}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:20px;font-family:var(--mono);font-size:11px">No anonymized attack data yet</td></tr>';
 
   // Recent anonymous connections table
   S._anonSessions = await api(`/api/sessions?limit=500&hours=${hours}`);
