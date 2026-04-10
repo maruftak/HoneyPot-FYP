@@ -535,6 +535,46 @@ def _detect_botnet_family(cmd_str):
     return "Unknown"
 
 
+# Credential-based botnet family inference.
+# Maps (username, password) patterns to known botnet families.
+# Ordered most-specific first so the first match wins.
+_CRED_FAMILY_MAP = [
+    ("root",      "xc3511",       "Mirai"),
+    ("root",      "vizxv",        "Mirai"),
+    ("root",      "7ujMko0vizxv", "Mirai"),
+    ("root",      "7ujMko0admin", "Mirai"),
+    ("root",      "anko",         "Mirai"),
+    ("root",      "klv123",       "Mirai"),
+    ("root",      "klv1234",      "Mirai"),
+    ("root",      "zlxx.",        "Mirai"),
+    ("root",      "hi3518",       "Mirai/Satori"),
+    ("root",      "xmhdipc",      "Mirai/Satori"),
+    ("root",      "juantech",     "Mirai/Okiru"),
+    ("root",      "realtek",      "Mirai/Okiru"),
+    ("root",      "ikwb",         "Mirai/Okiru"),
+    ("root",      "jvbzd",        "Mirai/Okiru"),
+    ("root",      "dreambox",     "Mirai"),
+    ("root",      "Zte521",       "Mirai/ZTE"),
+    ("ubnt",      "ubnt",         "Mirai/UBNT"),
+    ("666666",    "666666",       "Mirai/DVR"),
+    ("888888",    "888888",       "Mirai/DVR"),
+    ("root",      "000000",       "Mirai/DVR"),
+    ("root",      "888888",       "Mirai/DVR"),
+    ("pi",        "raspberry",    "Mirai/Raspberry"),
+    ("mother",    "fucker",       "Mirai"),
+    ("nproc",     "nproc",        "Mozi"),
+]
+
+def _cred_botnet_family(username: str, password: str) -> str:
+    """Infer botnet family from login credentials."""
+    u, p = username.strip(), password.strip()
+    for mu, mp, fam in _CRED_FAMILY_MAP:
+        if u == mu and p == mp:
+            return fam
+    # Generic Mirai catch-all — IoT default credentials
+    return "Mirai/Generic"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  TELNET (port 23)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -707,6 +747,7 @@ def handle_telnet(conn, addr):
                 "latitude":    gdata["latitude"], "longitude": gdata["longitude"],
                 "attack_type": "brute_force", "threat_level": threat,
                 "is_botnet":   is_bot, "session_id": sid,
+                "botnet_family": _cred_botnet_family(username, password) if is_bot else None,
                 **_intel_fields(gdata),
             })
             _new_ip_alert(ip, gdata["country"], gdata["city"], "telnet")
@@ -879,6 +920,12 @@ def handle_telnet(conn, addr):
         # no need for a second blank row in the dashboard.
         if all_commands:
             last = login_attempts[-1] if login_attempts else {}
+            _is_bot_sess = any(la["is_botnet"] for la in login_attempts)
+            # Prefer command-based family detection; fall back to credential inference
+            mal_urls = [u for u in (_detect_malware_url(c) for c in all_commands) if u]
+            family   = _detect_botnet_family(" ".join(all_commands))
+            if family == "Unknown" and _is_bot_sess:
+                family = _cred_botnet_family(last.get("username",""), last.get("password",""))
             db.log_attack({
                 "timestamp":    _ts(), "source_ip": ip, "source_port": port,
                 "dest_port":    23, "service": "telnet", "protocol": "TCP",
@@ -889,13 +936,12 @@ def handle_telnet(conn, addr):
                 "attack_type":  "session_complete",
                 "threat_level": "critical",
                 "session_id":   sid, "commands": all_commands,
-                "is_botnet":    any(la["is_botnet"] for la in login_attempts),
+                "is_botnet":    _is_bot_sess,
+                "botnet_family": family if family != "Unknown" else None,
                 **_intel_fields(gdata),
             })
 
             # Kill-chain alert — fire when attacker ran real commands including downloads
-            mal_urls = [u for u in (_detect_malware_url(c) for c in all_commands) if u]
-            family   = _detect_botnet_family(" ".join(all_commands))
             arch     = next((_detect_arch(c) for c in all_commands
                              if _detect_arch(c) != "unknown"), "unknown")
             if len(all_commands) >= 2 and (mal_urls or family != "Unknown"):

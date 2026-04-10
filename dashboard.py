@@ -570,37 +570,75 @@ def api_hourly_heatmap():
 def api_botnet_distribution():
     return jsonify(db.get_botnet_distribution())
 
+_CRED_FAMILY_MAP = [
+    ("root","xc3511","Mirai"),("root","vizxv","Mirai"),
+    ("root","7ujMko0vizxv","Mirai"),("root","7ujMko0admin","Mirai"),
+    ("root","anko","Mirai"),("root","klv123","Mirai"),
+    ("root","klv1234","Mirai"),("root","zlxx.","Mirai"),
+    ("root","dreambox","Mirai"),("mother","fucker","Mirai"),
+    ("root","hi3518","Mirai/Satori"),("root","xmhdipc","Mirai/Satori"),
+    ("root","juantech","Mirai/Okiru"),("root","realtek","Mirai/Okiru"),
+    ("root","ikwb","Mirai/Okiru"),("root","jvbzd","Mirai/Okiru"),
+    ("root","Zte521","Mirai/ZTE"),
+    ("ubnt","ubnt","Mirai/UBNT"),
+    ("666666","666666","Mirai/DVR"),("888888","888888","Mirai/DVR"),
+    ("root","000000","Mirai/DVR"),("root","888888","Mirai/DVR"),
+    ("pi","raspberry","Mirai/Raspberry"),
+    ("nproc","nproc","Mozi"),
+]
+
+def _infer_cred_family(username, password):
+    u, p = (username or "").strip(), (password or "").strip()
+    for mu, mp, fam in _CRED_FAMILY_MAP:
+        if u == mu and p == mp:
+            return fam
+    return "Mirai/Generic"
+
 @app.route("/api/botnet-names")
 @cached(60)
 def api_botnet_names():
     import re as _re
     hours = request.args.get("hours", 168, type=int)
     cutoff = db._cutoff(hours)
-    rows = db.query(
+
+    names = {}   # family/name -> count
+    sigs  = {}   # variant signature -> count
+
+    # 1. Commands-based: busybox hostname NAME and /bin/busybox VARIANT probes
+    cmd_rows = db.query(
         "SELECT commands FROM attacks WHERE commands LIKE '%busybox%' AND timestamp > ?",
         (cutoff,)
     )
-    names = {}   # name -> count
-    sigs  = {}   # variant signature -> count
-    for row in rows:
+    for row in cmd_rows:
         try:
             cmds = json.loads(row["commands"])
         except Exception:
             continue
         for cmd in cmds:
-            # Hostname-based botnet naming: busybox hostname NAME
             m = _re.search(r'busybox\s+hostname\s+([A-Za-z0-9_\-]{2,20})', cmd)
             if m:
                 name = m.group(1)
-                if name.upper() not in ("HOSTNAME", "DVR", "CAMERA", "ROUTER", "NVR", "NONE"):
+                if name.upper() not in ("HOSTNAME","DVR","CAMERA","ROUTER","NVR","NONE"):
                     names[name] = names.get(name, 0) + 1
-            # Variant signature probe: /bin/busybox WORD (expects "applet not found")
             m2 = _re.match(r'^/?bin/busybox\s+([A-Z][A-Za-z0-9]{3,15})$', cmd.strip())
             if m2:
                 sig = m2.group(1)
                 sigs[sig] = sigs.get(sig, 0) + 1
 
-    # Fallback: pull botnet_family column directly from DB
+    # 2. scanner_tool field: e.g. "Mirai/ECCHI" set by Mirai variant probe handler
+    tool_rows = db.query(
+        "SELECT scanner_tool, COUNT(*) as cnt FROM attacks "
+        "WHERE scanner_tool LIKE 'Mirai/%' AND timestamp > ? "
+        "GROUP BY scanner_tool ORDER BY cnt DESC LIMIT 20",
+        (cutoff,)
+    )
+    for r in tool_rows:
+        tool = r.get("scanner_tool","")
+        variant = tool.split("/",1)[-1] if "/" in tool else tool
+        if variant:
+            names[variant] = names.get(variant, 0) + r.get("cnt", 0)
+
+    # 3. botnet_family column (set by honeypot for new attacks)
     fam_rows = db.query(
         "SELECT botnet_family, COUNT(*) as cnt FROM attacks "
         "WHERE botnet_family IS NOT NULL AND botnet_family != '' AND timestamp > ? "
@@ -608,9 +646,20 @@ def api_botnet_names():
         (cutoff,)
     )
     for r in fam_rows:
-        fam = r.get("botnet_family", "")
-        if fam and fam.upper() not in ("UNKNOWN", "NONE"):
+        fam = r.get("botnet_family","")
+        if fam and fam.upper() not in ("UNKNOWN","NONE"):
             names[fam] = names.get(fam, 0) + r.get("cnt", 0)
+
+    # 4. Credential inference for existing data (botnet attacks without family set)
+    cred_rows = db.query(
+        "SELECT username, password, COUNT(*) as cnt FROM attacks "
+        "WHERE is_botnet=1 AND (botnet_family IS NULL OR botnet_family='') "
+        "AND timestamp > ? GROUP BY username, password",
+        (cutoff,)
+    )
+    for r in cred_rows:
+        fam = _infer_cred_family(r.get("username",""), r.get("password",""))
+        names[fam] = names.get(fam, 0) + r.get("cnt", 0)
 
     names_sorted = sorted(names.items(), key=lambda x: -x[1])
     sigs_sorted  = sorted(sigs.items(),  key=lambda x: -x[1])
