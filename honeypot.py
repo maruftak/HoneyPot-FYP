@@ -68,7 +68,7 @@ def _random_delay(min_ms=80, max_ms=220):
 
 # ─── Core helpers ─────────────────────────────────────────────────────────────
 def _ts():
-    return datetime.datetime.utcnow().isoformat()
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
 
 def _sid():
     global _session_n
