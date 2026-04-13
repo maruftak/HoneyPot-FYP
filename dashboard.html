@@ -1784,12 +1784,12 @@ async function loadCaptures(){
 async function loadHoneytokens(){
   const data=await api('/api/honeytokens?hours=168');if(!data)return;
   animCount('ht-total',data.total);animCount('ht-ips',data.unique_ips);
-  document.getElementById('ht-top').textContent=data.by_file?.[0]?.path||'—';
+  document.getElementById('ht-top').textContent=data.by_type?.[0]?.token_type||'—';
   const recent=data.recent||[];
   document.getElementById('htBody').innerHTML=recent.length?recent.map(r=>`<tr><td class="mono" style="color:var(--muted);font-size:10px">${fmtTime(r.timestamp)}</td><td class="mono" style="color:var(--blue)">${r.source_ip}</td><td>${r.country||'—'}</td><td><span class="badge b-crit">${r.token_type}</span></td><td class="mono truncate" style="font-size:10px;color:var(--red)">${r.token_value}</td><td>${svcBadge(r.service)}</td></tr>`).join(''):
     '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px;font-family:var(--mono)">No honeytokens triggered yet</td></tr>';
-  const files=data.by_file||[],max_f=files[0]?.count||1;
-  document.getElementById('htFileList').innerHTML=files.length?files.map((f,i)=>`<li class="rank-item"><span class="rank-num">${i+1}</span><div class="rank-info"><span class="rank-label" style="color:var(--red)">${f.path}</span><div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(f.count/max_f*100).toFixed(1)}%;background:var(--red)"></div></div></div><span class="rank-count" style="color:var(--red)">${f.count}</span></li>`).join(''):
+  const files=data.by_type||[],max_f=files[0]?.cnt||1;
+  document.getElementById('htFileList').innerHTML=files.length?files.map((f,i)=>`<li class="rank-item"><span class="rank-num">${i+1}</span><div class="rank-info"><span class="rank-label" style="color:var(--red)">${f.token_type}</span><div class="rank-bar-wrap"><div class="rank-bar-fill" style="width:${(f.cnt/max_f*100).toFixed(1)}%;background:var(--red)"></div></div></div><span class="rank-count" style="color:var(--red)">${f.cnt}</span></li>`).join(''):
     '<li style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:12px 0">No hits yet</li>';
 }
 
@@ -2256,9 +2256,9 @@ async function loadAttackTimeline(){
   if(!data?.buckets)return;
   const b=data.buckets;
   mkChart('reportTimelineChart','line',{labels:b.map(x=>x.bucket),datasets:[
-    {label:'Attacks',data:b.map(x=>x.count),borderColor:'#0a84ff',backgroundColor:'rgba(10,132,255,.1)',tension:.3,fill:true,pointRadius:2,borderWidth:2},
-    {label:'CVEs',data:b.map(x=>x.cve_count||0),borderColor:'#ff3054',backgroundColor:'rgba(255,48,84,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
-    {label:'Botnets',data:b.map(x=>x.botnet_count||0),borderColor:'#ff8c00',backgroundColor:'rgba(255,140,0,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
+    {label:'Attacks',data:b.map(x=>x.total||0),borderColor:'#0a84ff',backgroundColor:'rgba(10,132,255,.1)',tension:.3,fill:true,pointRadius:2,borderWidth:2},
+    {label:'CVEs',data:b.map(x=>x.cves||0),borderColor:'#ff3054',backgroundColor:'rgba(255,48,84,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
+    {label:'Botnets',data:b.map(x=>x.botnets||0),borderColor:'#ff8c00',backgroundColor:'rgba(255,140,0,.07)',tension:.3,fill:true,pointRadius:1,borderWidth:1.5},
   ]},{plugins:{legend:{display:true,labels:{color:'rgba(255,255,255,.5)',font:{family:"'JetBrains Mono'",size:9}}}}});
 }
 

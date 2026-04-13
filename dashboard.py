@@ -1157,7 +1157,8 @@ def api_attack_types():
             "top_service": top_svc,
             "top_threat":  top_thr,
             "services":    d["services"],
-            "last":        d["last"],
+            "last_seen":   d["last"],
+            "trend_pct":   0,
         })
 
     return jsonify({
@@ -1299,8 +1300,8 @@ def api_credential_analysis():
         "unique_usernames":        len(usernames),
         "unique_passwords":        len(passwords),
         "unique_combos":           len(combos),
-        "top_usernames":  sorted(usernames.items(), key=lambda x: -x[1])[:20],
-        "top_passwords":  sorted(passwords.items(), key=lambda x: -x[1])[:20],
+        "top_usernames":  [{"username": k, "count": v} for k, v in sorted(usernames.items(), key=lambda x: -x[1])[:20]],
+        "top_passwords":  [{"password": k, "count": v} for k, v in sorted(passwords.items(), key=lambda x: -x[1])[:20]],
         "top_combos":     [{"combo":k,"count":v} for k,v in sorted(combos.items(), key=lambda x: -x[1])[:20]],
         "by_service":     svc_list,
     })
