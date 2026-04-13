@@ -568,7 +568,7 @@ def api_hourly_heatmap():
 @app.route("/api/botnet-distribution")
 @cached(120)
 def api_botnet_distribution():
-    return jsonify(db.get_botnet_distribution())
+    return jsonify({"families": db.get_botnet_distribution()})
 
 _CRED_FAMILY_MAP = [
     ("root","xc3511","Mirai"),("root","vizxv","Mirai"),

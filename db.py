@@ -226,7 +226,7 @@ def get_stats(hours: int = 24) -> Dict[str, Any]:
         cutoff = _cutoff(hours)
         try:
             with _get_conn() as conn:
-                # Single combined pass — replaces 13 separate COUNT queries
+                # Single combined pass
                 row = conn.execute("""
                     SELECT
                         COUNT(*)                                                          AS total,
@@ -239,11 +239,21 @@ def get_stats(hours: int = 24) -> Dict[str, Any]:
                                    OR  attack_type LIKE '%malware%')
                                   THEN 1 ELSE 0 END)                                     AS malware,
                         SUM(CASE WHEN lower(service)='ssh'                       THEN 1 ELSE 0 END) AS ssh,
-                        SUM(CASE WHEN lower(service) IN ('http','https')         THEN 1 ELSE 0 END) AS http,
+                        SUM(CASE WHEN lower(service) IN ('http','https','http_alt') THEN 1 ELSE 0 END) AS http,
                         SUM(CASE WHEN lower(service)='rtsp'                      THEN 1 ELSE 0 END) AS rtsp,
                         SUM(CASE WHEN lower(service)='onvif'                     THEN 1 ELSE 0 END) AS onvif,
+                        SUM(CASE WHEN lower(service)='telnet'                    THEN 1 ELSE 0 END) AS telnet,
+                        SUM(CASE WHEN lower(service)='vnc'                       THEN 1 ELSE 0 END) AS vnc,
+                        SUM(CASE WHEN lower(service)='ftp'                       THEN 1 ELSE 0 END) AS ftp,
+                        SUM(CASE WHEN lower(service)='mqtt'                      THEN 1 ELSE 0 END) AS mqtt,
+                        SUM(CASE WHEN lower(service) IN ('rdp','ms-rdp')         THEN 1 ELSE 0 END) AS rdp,
+                        SUM(CASE WHEN lower(service) IN ('modbus','modbus_tcp')  THEN 1 ELSE 0 END) AS modbus,
+                        SUM(CASE WHEN lower(service)='mysql'                     THEN 1 ELSE 0 END) AS mysql,
+                        SUM(CASE WHEN lower(service)='redis'                     THEN 1 ELSE 0 END) AS redis,
+                        SUM(CASE WHEN lower(service)='docker'                    THEN 1 ELSE 0 END) AS docker,
                         SUM(CASE WHEN is_tor=1                     THEN 1 ELSE 0 END)   AS tor,
-                        SUM(CASE WHEN is_vpn=1                     THEN 1 ELSE 0 END)   AS vpn
+                        SUM(CASE WHEN is_vpn=1                     THEN 1 ELSE 0 END)   AS vpn,
+                        COUNT(DISTINCT CASE WHEN lower(service)!='vnc' THEN source_ip END) AS unique_ips_ex_vnc
                     FROM attacks WHERE timestamp > ?
                 """, (cutoff,)).fetchone()
 
@@ -253,22 +263,34 @@ def get_stats(hours: int = 24) -> Dict[str, Any]:
                 ).fetchone()["c"]
 
                 d = dict(row)
+                total_ex_vnc = (d["total"] or 0) - (d["vnc"] or 0)
                 return {
-                    "total_attacks":       d["total"]       or 0,
-                    "unique_ips":          d["unique_ips"]  or 0,
-                    "country_count":       d["countries"]   or 0,
-                    "cve_exploits":        d["cve_exploits"] or 0,
-                    "botnet_count":        d["botnet"]      or 0,
-                    "malware_downloads":   d["malware"]     or 0,
+                    "total_attacks":         d["total"]       or 0,
+                    "total_attacks_ex_vnc":  max(total_ex_vnc, 0),
+                    "unique_ips":            d["unique_ips"]  or 0,
+                    "unique_ips_ex_vnc":     d["unique_ips_ex_vnc"] or 0,
+                    "country_count":         d["countries"]   or 0,
+                    "cve_exploits":          d["cve_exploits"] or 0,
+                    "botnet_count":          d["botnet"]      or 0,
+                    "malware_downloads":     d["malware"]     or 0,
                     "honeytokens_triggered": honeytokens,
-                    "ssh_attacks":         d["ssh"]         or 0,
-                    "http_attacks":        d["http"]        or 0,
-                    "rtsp_attacks":        d["rtsp"]        or 0,
-                    "onvif_attacks":       d["onvif"]       or 0,
-                    "tor_attackers":       d["tor"]         or 0,
-                    "vpn_attackers":       d["vpn"]         or 0,
-                    "brute_force_bursts":  0,
-                    "uptime_seconds":      0,
+                    "ssh_attacks":           d["ssh"]         or 0,
+                    "http_attacks":          d["http"]        or 0,
+                    "rtsp_attacks":          d["rtsp"]        or 0,
+                    "onvif_attacks":         d["onvif"]       or 0,
+                    "telnet_attacks":        d["telnet"]      or 0,
+                    "vnc_attacks":           d["vnc"]         or 0,
+                    "ftp_attacks":           d["ftp"]         or 0,
+                    "mqtt_attacks":          d["mqtt"]        or 0,
+                    "rdp_attacks":           d["rdp"]         or 0,
+                    "modbus_attacks":        d["modbus"]      or 0,
+                    "mysql_attacks":         d["mysql"]       or 0,
+                    "redis_attacks":         d["redis"]       or 0,
+                    "docker_attacks":        d["docker"]      or 0,
+                    "tor_attackers":         d["tor"]         or 0,
+                    "vpn_attackers":         d["vpn"]         or 0,
+                    "brute_force_bursts":    0,
+                    "uptime_seconds":        0,
                 }
         except Exception as e:
             logger.error(f"Error getting stats: {e}", exc_info=True)
