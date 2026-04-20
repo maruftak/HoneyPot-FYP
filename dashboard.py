@@ -1778,7 +1778,7 @@ def after_request_headers(resp):
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--host",  default="127.0.0.1")
+    p.add_argument("--host",  default="0.0.0.0")
     p.add_argument("--port",  default=5001, type=int)
     p.add_argument("--debug", action="store_true")
     args = p.parse_args()

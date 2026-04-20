@@ -9,6 +9,7 @@ import os
 # ─── Basic Settings ───────────────────────────────────────────────────────────
 PROJECT_NAME = "honeyPot"
 VERSION = "1.0.0"
+SENSOR_NAME              = os.getenv("SENSOR_NAME", "honeyPot")
 ALERT_SPAM_COOLDOWN      = int(os.getenv("ALERT_SPAM_COOLDOWN", "30"))
 HONEYPOT_HOST            = os.getenv("HONEYPOT_HOST", "0.0.0.0")
 VIRUSTOTAL_API_KEY       = os.getenv("VT_API_KEY", "")
@@ -134,7 +135,9 @@ EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
 EMAIL_FROM = os.getenv("EMAIL_FROM", "honeypot@example.com")
 EMAIL_TO = os.getenv("EMAIL_TO", "admin@example.com")
 EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "localhost")
-EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "25"))
+EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+EMAIL_SMTP_USERNAME = os.getenv("EMAIL_SMTP_USERNAME", "")
+EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")
 
 # ─── Honeytokens ──────────────────────────────────────────────────────────────
 HONEYTOKENS_ENABLED = os.getenv("HONEYTOKENS_ENABLED", "true").lower() == "true"

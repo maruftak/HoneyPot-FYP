@@ -1113,6 +1113,29 @@ def log_cve(timestamp: str, source_ip: str, cve_id: str, cve_name: str,
     })
 
 
+def log_attack_chain(timestamp: str, source_ip: str, chain_id: str, stages: list) -> int:
+    """Log a multi-stage attack chain as an attack row."""
+    return log_attack({
+        "timestamp":   timestamp,
+        "source_ip":   source_ip,
+        "attack_type": "attack_chain",
+        "payload":     json.dumps(stages)[:2000],
+        "service":     "multi",
+    })
+
+
+def log_device_fingerprint(timestamp: str, source_ip: str, model: str,
+                            vendor: str, device: str, firmware: str) -> int:
+    """Log a device fingerprint probe as an attack row."""
+    return log_attack({
+        "timestamp":   timestamp,
+        "source_ip":   source_ip,
+        "attack_type": "device_fingerprint",
+        "payload":     json.dumps({"model": model, "vendor": vendor, "device": device, "firmware": firmware}),
+        "service":     "HTTP",
+    })
+
+
 def get_report_data(hours: int = 24) -> Dict[str, Any]:
     """Aggregate all stats for the report/export endpoints."""
     return {

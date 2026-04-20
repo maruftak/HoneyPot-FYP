@@ -7,7 +7,7 @@ Sends structured alerts to Telegram with cooldown to avoid spam.
 import time, threading
 from config import (
     TELEGRAM_BOT_TOKEN as TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED,
-    ALERT_SPAM_COOLDOWN, PROJECT_NAME
+    ALERT_SPAM_COOLDOWN, PROJECT_NAME, SENSOR_NAME
 )
 
 _lock     = threading.Lock()
@@ -75,7 +75,7 @@ def _fmt(icon, title, fields: list):
     lines = [f"{icon} <b>{title}</b>", ""]
     for label, value in fields:
         lines.append(f"<b>{label}:</b> <code>{value}</code>")
-    lines.append(f"\n<i>— {PROJECT_NAME}</i>")
+    lines.append(f"\n<i>— {PROJECT_NAME} · 📡 {SENSOR_NAME}</i>")
     return "\n".join(lines)
 
 # ─── Public alert functions ────────────────────────────────────────────────────
